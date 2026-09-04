@@ -38,6 +38,7 @@ from .segment_runtime import (
 from .plan import (
     DirectorPlan,
     plan_summary,
+    prepend_lora_trigger_words,
     prepare_segment_clip,
     resolve_ref_image_size,
     resolve_segment_pass_mode,
@@ -688,7 +689,9 @@ def execute_director_plan_core(
             phase="prepare", phase_value=1, phase_max=1, **meta,
         )
 
-        positive_prompt = seg.prompt
+        positive_prompt = prepend_lora_trigger_words(
+            seg.prompt, getattr(plan, "lora_trigger_words", ""),
+        )
 
         if seg.task_key == "fl2v":
             from .fl2v_timeline import reinforce_fl2v_prompt
@@ -1031,6 +1034,35 @@ def execute_director_plan_core(
                 f"Segment {ui_idx + 1}/{timeline_seg_total}: 命中一采缓存 "
                 f"(seed={int(getattr(plan, 'sample_seed', seed) or seed)})，{skip_note}"
             )
+            if live_tae_preview:
+                cached_frames = pre_cache.get("frames")
+                if isinstance(cached_frames, torch.Tensor) and cached_frames.numel() > 0:
+                    try:
+                        from .tae_preview import LIVE_PREVIEW_FPS, LIVE_PREVIEW_MAX_FRAMES
+
+                        n = int(cached_frames.shape[0])
+                        k = max(1, min(int(LIVE_PREVIEW_MAX_FRAMES), n))
+                        picks = (
+                            list(range(n))
+                            if k >= n
+                            else torch.linspace(0, n - 1, k).round().long().tolist()
+                        )
+                        frames_b64 = [tensor_frame_to_jpeg_b64(cached_frames[i]) for i in picks]
+                        report_director_segment_preview(
+                            node_id,
+                            segment_index=ui_idx,
+                            image_b64=frames_b64[0],
+                            width=int(cached_frames.shape[2]),
+                            height=int(cached_frames.shape[1]),
+                            frames=frames_b64,
+                            fps=float(LIVE_PREVIEW_FPS),
+                            live=True,
+                        )
+                    except Exception as exc:
+                        log.debug("Cached first-pass preview skipped: %s", exc)
+                else:
+                    x0 = samples.get("samples") if isinstance(samples, dict) else samples
+                    _report_step_preview(0, 1, x0)
         else:
             samples = sample_single_stage(
                 model=seg_model,

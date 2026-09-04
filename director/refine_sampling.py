@@ -772,7 +772,7 @@ def apply_segment_refine(
                 denoise=1.0,
                 on_phase=None,
                 on_step_preview=on_step_preview,
-                preview_every=-1,
+                preview_every=1,
                 phase_name="refine",
                 sigmas=sigma_list,
                 apply_shift=True,

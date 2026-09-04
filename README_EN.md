@@ -15,24 +15,35 @@ Incremental changes versus [`main`](https://github.com/AIMixer/ComfyUI_MiniMaxH3
 
 New `task_type=mixed`. After adding a group, each group can switch type (`t2v` / `i2v` / `fl2v` / `r2v`); behavior matches the original mode. `t2v` / `i2v` / `fl2v` groups use Director `model` (fl2va). `r2v` groups should wire optional `model_r2v` (ref2va); unwired falls back to `model`.
 
+`fl2v` groups accept start-only, end-only, both, or neither (text-to-video). Filling one end does **not** copy that picture onto the other.
+
 ### Built-in second pass
 
-Director now has an in-node **Second pass** group; an external Refine node is no longer required:
+Director has in-node second pass; an external Refine node is no longer required. First-pass / second-pass / preview knobs move from native Comfy widgets into the output bar. The three panels are exclusive (only one open at a time):
 
-- **Enable second pass** off = first pass only; on = groups default to second pass
+- **First-pass settings**: seed, steps, sampler, scheduler, `shift_video` / `shift_audio`
+- **Second pass**: **Enable second pass** lives inside the panel (off = first pass only; on = groups default to second pass), plus mode / upscale / tiles. In `upscale` / `latent_upscale`, **Upscale megapixels** sits next to the button
+- **Preview**: enable, speed, and preview VAE
+- Run status shows first- and second-pass canvas plus tiling (e.g. `1st 864×480 · 24fps` / `2nd 1280×720 · upscale · h3_latent`)
 - Modes are still `refine` (same-resolution), `upscale` (enlarge then sample), `latent_upscale` (H3 latent enlarge only)
 - Built-in defaults: `euler` + `simple`, 3 steps, denoise **0.35**; optional low-sigma extra steps (default +1, cosine, start sigma 0.70)
 - Optional ports: `refine_model` (second-pass UNET), `upscale_model` (`upscale` + `lanczos` only), `refine_sigmas` (overrides steps / scheduler / denoise / extra steps when wired)
 - **MiniMax H3 Director Refine** still works: a wired pack overrides the in-node widgets (old workflows unchanged)
 
+### LoRA trigger words
+
+Optional `lora_trigger_words` input is prepended to every group prompt (e.g. `mh3turbo, <user prompt>`). Common LoRA nodes can feed this socket. The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (common prompt + trigger). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
+
 ### Per-group first / second pass
 
-With second pass enabled (in-node group or wired Refine), each group card can pick **pass 1** / **pass 2** (replaces the old global `confirm_first_pass`):
+With second pass enabled (in-node panel or wired Refine), each group card can pick **pass 1** / **pass 2** (replaces the old global `confirm_first_pass`):
 
 - **Pass 1**: first sample only; skipped on an exact first-pass cache hit
 - **Pass 2**: first then second sample; skips to second if a first-pass cache matches
 - Click the status dot for per-group match / diff
 - **Clear** deletes that group's first-pass cache only
+- Group 1 never pins a previous tail, so adding later groups or toggling segment continuity does not bust group 1's first-pass cache
+- A first-pass cache hit still pushes a live preview
 
 The Refine panel shows cache status across the full timeline. With segment continuity on, a missing previous segment skips the handoff and continues sampling instead of aborting.
 
@@ -50,9 +61,11 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 
 ### Preview
 
-- Unified preview format on the timeline and group cards; preview can be switched
-- Live-sample speed slider (0–1): 0 hides preview, 1 is native 16 fps
+- Output-bar **Preview** opens its own panel: enable, speed (0–1; 0 hides, 1 is native 16 fps), preview VAE
+- Unified preview on the timeline and group cards; the card preview column can switch **Sample preview** / **Prompt preview**
 - Video thumbs lazy-load a first-frame poster
+- Second pass previews every step; HD latents are downsampled before TAE so second-pass preview is not more expensive than first pass
+- In solo-card layout the preview column grows with the card
 
 ### Audio and frame rate
 
@@ -64,8 +77,9 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 
 - Segment export releases pixels after each clip is written, lowering memory on long jobs
 - Refine target resolution auto-aligns (×32)
-- Tail-frame continuity handoff fix
+- Tail-frame continuity handoff fix; end-only fl2v no longer locks the same picture as the first frame
 - New widgets are saved by name so old graphs keep widget values after the Second pass group is inserted
+- Between-segment VRAM clear is always on (the old toggle is gone)
 
 ## Features
 

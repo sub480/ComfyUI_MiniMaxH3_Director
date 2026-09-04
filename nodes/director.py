@@ -107,6 +107,18 @@ class MiniMaxH3Director:
                         ),
                     },
                 ),
+                "lora_trigger_words": (
+                    "STRING",
+                    {
+                        "forceInput": True,
+                        "default": "",
+                        "tooltip": (
+                            "可选。LoRA 触发词，自动拼到每组提示词最前面。"
+                            "例如 mh3turbo, 会变成 mh3turbo, <原提示词>。"
+                            "不接或为空则不改提示词。"
+                        ),
+                    },
+                ),
                 "r2v_groups": (
                     "MMX_DIR_GROUP",
                     {
@@ -290,6 +302,7 @@ class MiniMaxH3Director:
         model_r2v=None,
         i2v_groups=None,
         r2v_groups=None,
+        lora_trigger_words="",
         refine=None,
         refine_model=None,
         upscale_model=None,
@@ -302,7 +315,6 @@ class MiniMaxH3Director:
         seed=0,
         shift_video=12.0,
         shift_audio=3.0,
-        clear_vram_between_segments=True,
         export_source_images=False,
         live_tae_vae="auto",
         **kwargs,
@@ -330,6 +342,7 @@ class MiniMaxH3Director:
             i2v_groups=i2v_groups,
             r2v_groups=r2v_groups,
             refine=refine,
+            lora_trigger_words=lora_trigger_words,
         )
         raw = getattr(plan, "raw", None)
         if isinstance(raw, dict):
@@ -354,7 +367,7 @@ class MiniMaxH3Director:
                     sigmas=sigmas,
                     shift_video=shift_video,
                     shift_audio=shift_audio,
-                    clear_vram_between_segments=clear_vram_between_segments,
+                    clear_vram_between_segments=True,
                 )
             )
 

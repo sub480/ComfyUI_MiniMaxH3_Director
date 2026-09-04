@@ -84,6 +84,7 @@ import {
     wireBatchRunSelectControls,
     wireMediaDuration,
 } from "./minimax_image_batch.js";
+import { closePassPanels, mountDirectorRefinePanel, mountDirectorSamplePanel } from "./minimax_refine.js";
 import {
     extractReferenceAudioFromExistingVideo,
     hasDuplicateReferenceAudio,
@@ -453,6 +454,47 @@ const HIDDEN_WIDGETS = [
     "timeline_data", "total_frames", "width", "height", "ref_max_size",
     "task_type", "global_prompt", "frame_rate", "cfg",
     "export_source_images",
+    "lora_trigger_words",
+    "bd_grp_sample",
+    "seed",
+    "control_after_generate",
+    "control after generate",
+    "bd_grp_advanced",
+    "steps",
+    "sampler",
+    "scheduler",
+    "shift_video",
+    "shift_audio",
+    "live_tae_vae",
+    "bd_grp_perf",
+    "clear_vram_between_segments",
+    "bd_grp_refine",
+    "refine_enable",
+    "refine_mode",
+    "refine_upscale_method",
+    "refine_latent_upscale_model",
+    "refine_sampler",
+    "refine_passes",
+    "refine_sample_steps",
+    "refine_scheduler",
+    "refine_denoise",
+    "refine_extra_steps",
+    "refine_start_at_sigma",
+    "refine_end_at_sigma",
+    "refine_spacing",
+    "refine_seed_mode",
+    "refine_aspect_ratio",
+    "refine_megapixels",
+    "refine_width",
+    "refine_height",
+    "refine_skip_fl2v",
+    "refine_tile",
+    "refine_n_tiles",
+    "refine_tile_axis",
+    "refine_tile_overlap",
+    "refine_max_size_for_no_tile",
+    "refine_seams",
+    "refine_seam_steps",
     // seed stays visible under 采样设置 (with control_after_generate)
 ];
 
@@ -720,6 +762,7 @@ function hideDirectorNamedSigmasWidget(node, name) {
 function setDirectorWidgetVisible(node, name, visible) {
     const w = widgetByName(node, name);
     if (!w) return;
+    if (visible && (HIDDEN_WIDGETS.includes(name) || w._mmxForceHidden)) return;
     if (typeof w.computeSize === "function"
         && w.computeSize !== hiddenWidgetSize
         && !w._mmxOrigComputeSize) {
@@ -753,16 +796,23 @@ function directorHasSigmasLink(node) {
     return Array.isArray(inp.links) && inp.links.length > 0;
 }
 
+function hideDirectorHiddenWidgets(node) {
+    if (!node) return;
+    for (const w of node.widgets || []) {
+        if (!HIDDEN_WIDGETS.includes(w.name) && !w._mmxForceHidden) continue;
+        hideWidget(w);
+        for (const linked of w.linkedWidgets || []) hideWidget(linked);
+    }
+}
+
 function syncDirectorSchedulerWidgets(node, { restore = false } = {}) {
     if (!node) return;
     hookDirectorSampleWidgetSnapshots(node);
     lockDirectorSigmasInput(node);
     hideDirectorSigmasWidget(node);
+    hideDirectorHiddenWidgets(node);
     if (restore) restoreDirectorSampleWidgets(node);
-    const wired = directorHasSigmasLink(node);
-    setDirectorWidgetVisible(node, "steps", !wired);
-    setDirectorWidgetVisible(node, "scheduler", !wired);
-    if (restore) restoreDirectorSampleWidgets(node);
+    hideDirectorHiddenWidgets(node);
     node.setDirtyCanvas?.(true, true);
 }
 
@@ -943,8 +993,12 @@ const STYLES = `
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-plain .bd-batch-prompts,
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-source .bd-batch-prompts,
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-fl2v .bd-batch-prompts,
-.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts{
-  height:100%;min-height:0;max-height:100%;overflow:hidden;align-self:stretch
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts,
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-plain .bd-preview-col,
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-source .bd-preview-col,
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-fl2v .bd-preview-col,
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-refs:not(.bd-batch-r2v) .bd-preview-col{
+  height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch
 }
 .bd-modal-overlay{position:absolute;inset:0;z-index:200;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:10px;box-sizing:border-box;border-radius:6px}
 .bd-modal{background:#1e1e1e;border:1px solid #333;border-radius:6px;padding:12px;width:100%;max-width:460px;max-height:calc(100% - 8px);display:flex;flex-direction:column;gap:10px;box-shadow:0 10px 28px rgba(0,0,0,.5)}
@@ -1038,7 +1092,27 @@ const STYLES = `
 .bd-canvas{display:block;width:100%;min-width:100%;height:auto;cursor:pointer;box-sizing:border-box;flex-shrink:0;object-fit:fill}
 .bd-canvas.bd-grab{cursor:grab}
 .bd-canvas.bd-grabbing{cursor:grabbing}
-.bd-output{width:100%;box-sizing:border-box;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:#1e1e1e;border:1px solid #333;border-radius:6px}
+ .bd-output{width:100%;box-sizing:border-box;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;background:#1e1e1e;border:1px solid #333;border-radius:6px}
+.bd-out-live-vae-wrap{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
+.bd-out-live-vae-wrap label{color:#888;font-size:10px;white-space:nowrap}
+.bd-out-live-vae-wrap .bd-select{max-width:180px}
+.bd-out-refine-wrap{display:inline-flex;align-items:center;gap:8px;flex-shrink:0}
+.bd-out-refine-wrap label{display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#ccc;font-size:11px;white-space:nowrap}
+.bd-out-refine-wrap .bd-btn{height:29px;min-height:29px;white-space:nowrap}
+.bd-out-refine-wrap .bd-btn.active{background:#1a3a2a;color:#4fff8f;border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.35)}
+.bd-refine-mp-inline{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
+.bd-refine-mp-inline.hidden{display:none!important}
+.bd-refine-mp-inline>span{color:#888;font-size:10px;white-space:nowrap}
+.bd-refine-mp-inline input{width:52px;box-sizing:border-box;background:#111;color:#ddd;border:1px solid #333;border-radius:4px;height:26px;padding:0 6px;font-size:11px}
+.bd-out-refine-wrap.linked{opacity:.7}
+.bd-refine-panel{width:100%;box-sizing:border-box;margin:6px 0 0;padding:10px 12px;background:#161616;border:1px solid #333;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:8px 12px}
+.bd-refine-panel.hidden{display:none!important}
+.bd-refine-panel .bd-refine-field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.bd-refine-panel .bd-refine-field.hidden{display:none!important}
+.bd-refine-panel .bd-refine-field.row{flex-direction:row;align-items:center;gap:6px}
+.bd-refine-panel .bd-refine-field>span{color:#888;font-size:10px;white-space:nowrap}
+.bd-refine-panel select,.bd-refine-panel input[type=number]{width:100%;box-sizing:border-box;background:#111;color:#ddd;border:1px solid #333;border-radius:4px;height:26px;padding:0 6px;font-size:11px}
+.bd-refine-panel input[type=checkbox]{width:14px;height:14px;accent-color:#4fff8f;margin:0;flex-shrink:0}
 .bd-out-audio-wrap,.bd-out-source-wrap{display:inline-flex;align-items:center;gap:6px}
 .bd-out-source-wrap.hidden{display:none}
 .bd-output .bd-out-source-wrap label{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
@@ -1079,7 +1153,9 @@ const STYLES = `
 .bd-btn-run-select.active{background:#1a3a2a;color:#4fff8f;border-color:#4fff8f}
 .bd-output .bd-live-preview-tools{margin-left:auto;display:inline-flex;align-items:center;gap:8px;flex-shrink:0}
 .bd-live-preview-speed{display:inline-flex;align-items:center;gap:6px;color:#aaa}
-.bd-live-preview-speed.hidden,.bd-wrap:not(.bd-live-preview-on) .bd-live-preview-speed{display:none!important}
+.bd-live-preview-speed.hidden{display:none!important}
+.bd-preview-panel .bd-live-preview-speed{display:flex;width:100%}
+.bd-preview-panel .bd-live-preview-speed-slider{flex:1 1 auto;width:auto;min-width:80px}
 .bd-live-preview-speed-slider{width:96px;height:18px;margin:0;accent-color:#4fff8f;cursor:pointer;flex-shrink:0;touch-action:none}
 .bd-live-preview-speed-val{min-width:28px;font-variant-numeric:tabular-nums;color:#ccc;font-size:11px}
 .bd-wrap.bd-live-preview-speed-off img.bd-live-preview,
@@ -1208,7 +1284,8 @@ const STYLES = `
 .bd-output .bd-out-fixed{display:flex;gap:4px;align-items:center}
 .bd-output .bd-out-fixed.hidden{display:none}
 /* Do not use margin-top:auto — with an oversized min-height it creates a huge empty gap above the status bar. */
-.bd-run-status{width:100%;box-sizing:border-box;padding:8px 10px;background:#151515;border:1px solid #333;border-radius:6px;display:flex;flex-direction:column;gap:5px;margin-top:6px;margin-bottom:0;flex-shrink:0}
+ .bd-run-status{width:100%;box-sizing:border-box;padding:8px 10px;background:#151515;border:1px solid #333;border-radius:6px;display:flex;flex-direction:column;gap:5px;margin-top:6px;margin-bottom:0;flex-shrink:0}
+ .bd-run-io{color:#bbb;font-size:11px;line-height:1.45;word-break:break-word;white-space:pre-line}
 .bd-run-status.idle .bd-run-title{color:#888}
 .bd-run-status.active .bd-run-title{color:#4fff8f}
 .bd-run-status.done .bd-run-title{color:#7a9cff}
@@ -1967,9 +2044,17 @@ function hideWidget(w) {
     // Group headers in HIDDEN_WIDGETS duplicate timeline panel sections — hide them too.
     if (w._bdGroupHeader && !HIDDEN_WIDGETS.includes(w.name)) return;
     w.hidden = true;
+    w._mmxForceHidden = true;
     if (!w.options) w.options = {};
     w.options.hidden = true;
-    w.computeSize = () => [0, 0];
+    if (!w._mmxOrigComputeSize && typeof w.computeSize === "function" && w.computeSize !== hiddenWidgetSize) {
+        w._mmxOrigComputeSize = w.computeSize.bind(w);
+    }
+    if (!w._mmxOrigDraw && typeof w.draw === "function" && w.draw !== hiddenWidgetDraw) {
+        w._mmxOrigDraw = w.draw;
+    }
+    w.computeSize = hiddenWidgetSize;
+    w.draw = hiddenWidgetDraw;
     if (w.element) w.element.style.display = "none";
 }
 
@@ -2984,7 +3069,7 @@ class MiniMaxH3DirectorEditor {
                 <option value="long_edge" data-i18n="output.mode.longEdge">最长边缩放</option>
                 <option value="fixed" data-i18n="output.mode.fixed">固定宽高</option>
             </select>
-            <span class="bd-meta" data-i18n-title="tooltip.fps">24 fps</span>
+            <span class="bd-meta hidden" data-r="out-fps" hidden aria-hidden="true">24 fps</span>
             <span class="bd-out-audio-wrap hidden" data-r="out-audio-wrap" data-i18n-title="tooltip.audioMode">
                 <label data-i18n="output.audio.label">声音</label>
                 <select class="bd-select" data-r="out-audio-mode" style="max-width:120px">
@@ -2999,7 +3084,7 @@ class MiniMaxH3DirectorEditor {
                     <span data-i18n="output.exportSourceImages">输出原片</span>
                 </label>
             </span>
-            <span class="bd-meta" data-r="out-preview">—</span>
+            <span class="bd-meta hidden" data-r="out-preview" hidden aria-hidden="true">—</span>
             <span class="bd-meta hidden" data-r="out-hint"></span>
             <label data-i18n="output.exportMode.label" data-i18n-title="tooltip.exportMode">导出方式</label>
             <select class="bd-select" data-r="out-export-mode" data-i18n-title="tooltip.exportMode">
@@ -3021,15 +3106,35 @@ class MiniMaxH3DirectorEditor {
                 </select>
             </span>
             <span class="bd-live-preview-tools">
-                <span class="bd-live-preview-speed hidden" data-r="live-preview-speed-wrap" data-i18n-title="tooltip.livePreviewSpeed">
-                    <label data-i18n="liveSample.speed">预览速度</label>
-                    <input type="range" class="bd-live-preview-speed-slider" data-r="live-preview-speed" min="${LIVE_PREVIEW_SPEED_MIN}" max="${LIVE_PREVIEW_SPEED_MAX}" step="${LIVE_PREVIEW_SPEED_STEP}" value="${LIVE_PREVIEW_SPEED_DEFAULT}" data-i18n-title="tooltip.livePreviewSpeed">
-                    <span class="bd-meta bd-live-preview-speed-val" data-r="live-preview-speed-val">1</span>
-                </span>
-                <button type="button" class="bd-btn bd-btn-live-preview" data-a="live-tae-preview" data-i18n="toolbar.liveTaePreview" data-i18n-title="tooltip.liveTaePreview">实时预览</button>
+                <button type="button" class="bd-btn bd-btn-live-preview" data-a="live-tae-preview" data-i18n="toolbar.liveTaePreview" data-i18n-title="tooltip.liveTaePreview">预览</button>
             </span>`;
         this.mainBody.appendChild(outputBar);
         this.outputBarEl = outputBar;
+        mountDirectorSamplePanel(this);
+        mountDirectorRefinePanel(this);
+        const previewPanel = document.createElement("div");
+        previewPanel.className = "bd-refine-panel bd-preview-panel hidden";
+        previewPanel.setAttribute("data-r", "preview-panel");
+        previewPanel.innerHTML = `
+            <label class="bd-refine-field row">
+                <input type="checkbox" data-r="live-preview-enable">
+                <span data-i18n="toolbar.liveTaePreviewEnable">启用预览</span>
+            </label>
+            <label class="bd-refine-field" data-i18n-title="tooltip.livePreviewSpeed">
+                <span data-i18n="liveSample.speed">预览速度</span>
+                <span class="bd-live-preview-speed" data-r="live-preview-speed-wrap">
+                    <input type="range" class="bd-live-preview-speed-slider" data-r="live-preview-speed" min="${LIVE_PREVIEW_SPEED_MIN}" max="${LIVE_PREVIEW_SPEED_MAX}" step="${LIVE_PREVIEW_SPEED_STEP}" value="${LIVE_PREVIEW_SPEED_DEFAULT}" data-i18n-title="tooltip.livePreviewSpeed">
+                    <span class="bd-meta bd-live-preview-speed-val" data-r="live-preview-speed-val">1</span>
+                </span>
+            </label>
+            <label class="bd-refine-field" data-r="live-tae-vae-wrap" data-i18n-title="tooltip.liveTaeVae">
+                <span data-i18n="widget.liveTaeVae">预览 VAE</span>
+                <select class="bd-select" data-r="live-tae-vae"></select>
+            </label>`;
+        outputBar.after(previewPanel);
+        previewPanel.addEventListener("keydown", (e) => e.stopPropagation());
+        this.previewPanelEl = previewPanel;
+        this.livePreviewEnableCb = previewPanel.querySelector('[data-r="live-preview-enable"]');
 
         const liveSample = document.createElement("div");
         liveSample.className = "bd-live-sample hidden";
@@ -3217,6 +3322,7 @@ class MiniMaxH3DirectorEditor {
         runStatus.className = "bd-run-status idle";
         runStatus.dataset.r = "run-status";
         runStatus.innerHTML = `
+            <div class="bd-run-io" data-r="run-io">—</div>
             <div class="bd-run-title" data-r="run-title" data-i18n="run.titleIdle">运行状态：待命</div>
             <div class="bd-run-detail" data-r="run-detail" data-i18n="run.detailIdle">队列执行时将显示当前片段与阶段进度</div>
             <div class="bd-run-select-bar hidden" data-r="run-select-bar">
@@ -3352,6 +3458,7 @@ class MiniMaxH3DirectorEditor {
         this.segmentContinuityCb = this.root.querySelector('[data-r="segment-continuity-cb"]');
         this.segmentContinuityOverlap = this.root.querySelector('[data-r="segment-continuity-overlap"]');
         this.outPreview = this.root.querySelector('[data-r="out-preview"]');
+        this.runIoEl = this.root.querySelector('[data-r="run-io"]');
         this.livePreviewSpeedWrap = this.root.querySelector('[data-r="live-preview-speed-wrap"]');
         this.livePreviewSpeedSlider = this.root.querySelector('[data-r="live-preview-speed"]');
         this.livePreviewSpeedVal = this.root.querySelector('[data-r="live-preview-speed-val"]');
@@ -3410,7 +3517,12 @@ class MiniMaxH3DirectorEditor {
         bindPackActions(this);
         bind('[data-a="play"]', () => this.togglePlay());
         bind('[data-a="loop"]', () => this.toggleLoop());
-        bind('[data-a="live-tae-preview"]', () => this.toggleLiveTaePreview());
+        bind('[data-a="live-tae-preview"]', () => this.togglePreviewPanel());
+        if (this.livePreviewEnableCb) {
+            this.livePreviewEnableCb.addEventListener("change", () => {
+                this.setLiveTaePreview(!!this.livePreviewEnableCb.checked);
+            });
+        }
         this.liveTaeVaeSelect = null;
         hookLiveTaeVaeWidget(this.node, this);
         this.populateLiveTaeVaeSelect();
@@ -6442,8 +6554,7 @@ class MiniMaxH3DirectorEditor {
         if (this.outFixedWrap) this.outFixedWrap.classList.toggle("hidden", !isFixed);
     }
 
-    updateOutputPreview() {
-        if (!this.outPreview) return;
+    _firstPassSize() {
         if (this.isImageBatch() && (this.getTaskKey() === "i2i" || this.getTaskKey() === "i2v")) {
             const out = this.timeline.output || {};
             if ((out.mode || "long_edge") === "long_edge") {
@@ -6451,22 +6562,18 @@ class MiniMaxH3DirectorEditor {
                 const resolved = resolveOutputDimensions(src.width, src.height, out, {
                     refMaxSize: this.refMaxWidget?.value,
                 });
-                const note = src.width > 0 ? "" : t("output.preview.needSourceForLongEdge");
-                this.outPreview.textContent = `→ ${resolved.width}×${resolved.height}${note}${this._exportPreviewSuffix()}`;
-            } else {
-                const w = snapDim(+(out.width ?? this.outW?.value ?? 864));
-                const h = snapDim(+(out.height ?? this.outH?.value ?? 480));
-                this.outPreview.textContent = `→ ${w}×${h}${this._exportPreviewSuffix()}`;
+                return { width: resolved.width, height: resolved.height, label: `${resolved.width}×${resolved.height}` };
             }
-            return;
+            const w = snapDim(+(out.width ?? this.outW?.value ?? 864));
+            const h = snapDim(+(out.height ?? this.outH?.value ?? 480));
+            return { width: w, height: h, label: `${w}×${h}` };
         }
         if (this.isGenBlank() || this.isImageBatch() || this.isFl2vMode()) {
             const out = this.timeline.output || {};
             if (isCustomAspectRatio(out.aspectRatio)) {
                 const w = snapResolutionDim(out.width ?? this.outW?.value ?? 864, out.multiple ?? MINIMAX_CANVAS_MULTIPLE);
                 const h = snapResolutionDim(out.height ?? this.outH?.value ?? 480, out.multiple ?? MINIMAX_CANVAS_MULTIPLE);
-                this.outPreview.textContent = t("output.preview.custom", { w, h }) + this._exportPreviewSuffix();
-                return;
+                return { width: w, height: h, label: `${w}×${h}` };
             }
             const resolved = resolutionFromSelector(
                 out.aspectRatio || DEFAULT_ASPECT_RATIO,
@@ -6476,14 +6583,14 @@ class MiniMaxH3DirectorEditor {
             if (!resolved) {
                 const w = snapResolutionDim(out.width ?? 864);
                 const h = snapResolutionDim(out.height ?? 480);
-                this.outPreview.textContent = `→ ${w}×${h}${this._exportPreviewSuffix()}`;
-                return;
+                return { width: w, height: h, label: `${w}×${h}` };
             }
-            const w = resolved.width;
-            const h = resolved.height;
-            const ar = resolved.aspectRatio.split(" ")[0];
-            this.outPreview.textContent = `→ ${w}×${h} · ${ar} · ${resolved.megapixels}MP${this._exportPreviewSuffix()}`;
-            return;
+            const ar = String(resolved.aspectRatio || "").split(" ")[0];
+            return {
+                width: resolved.width,
+                height: resolved.height,
+                label: `${resolved.width}×${resolved.height} · ${ar} · ${resolved.megapixels}MP`,
+            };
         }
         const src = this.getSourceDimensions();
         const out = this.timeline.output || {};
@@ -6492,15 +6599,150 @@ class MiniMaxH3DirectorEditor {
             height: this.heightWidget?.value,
             refMaxSize: this.refMaxWidget?.value,
         });
-        if (src.width > 0 && src.height > 0) {
-            const mode = (out.mode || "long_edge").toLowerCase();
-            const note = mode === "long_edge"
-                ? t("output.preview.scaleKeepAspect")
-                : t("output.preview.fixedCrop");
-            this.outPreview.textContent = `${src.width}×${src.height} → ${resolved.width}×${resolved.height}${note}${this._exportPreviewSuffix()}`;
-        } else {
-            this.outPreview.textContent = `→ ${resolved.width}×${resolved.height}${t("output.preview.needSourceForLongEdge")}${this._exportPreviewSuffix()}`;
+        return { width: resolved.width, height: resolved.height, label: `${resolved.width}×${resolved.height}` };
+    }
+
+    _linkedRefineNode() {
+        const inp = this.node?.inputs?.find((item) => item?.name === "refine");
+        const linkId = inp?.link;
+        if (linkId == null) return null;
+        const link = this.node?.graph?.links?.[linkId];
+        const originId = link?.origin_id ?? link?.[1];
+        if (originId == null) return null;
+        return this.node.graph.getNodeById?.(originId) || null;
+    }
+
+    _refineWidgetValue(name, fallback) {
+        const linked = this._linkedRefineNode();
+        const aliases = {
+            refine_mode: "mode",
+            refine_upscale_method: "upscale_method",
+            refine_aspect_ratio: "aspect_ratio",
+            refine_megapixels: "megapixels",
+            refine_width: "width",
+            refine_height: "height",
+            refine_n_tiles: "n_tiles",
+            refine_tile_axis: "tile_axis",
+            refine_tile_overlap: "tile_overlap",
+            refine_max_size_for_no_tile: "max_size_for_no_tile",
+            refine_seams: "refine_seams",
+            refine_seam_steps: "refine_steps",
+            refine_tile: "n_tiles",
+        };
+        const node = linked || this.node;
+        const widgetName = linked ? (aliases[name] || String(name).replace(/^refine_/, "")) : name;
+        const w = node?.widgets?.find((item) => item.name === widgetName);
+        if (w == null || w.value == null || w.value === "") return fallback;
+        if (linked && name === "refine_tile") {
+            const n = Math.round(Number(w.value) || 1);
+            return n > 1;
         }
+        return w.value;
+    }
+
+    _refineBool(name, fallback = false) {
+        const value = this._refineWidgetValue(name, fallback);
+        if (value === true || value === 1) return true;
+        if (value === false || value === 0) return false;
+        const text = String(value).trim().toLowerCase();
+        if (text === "true" || text === "yes" || text === "on") return true;
+        if (text === "false" || text === "no" || text === "off") return false;
+        return fallback;
+    }
+
+    _refineMode() {
+        const raw = String(this._refineWidgetValue("refine_mode", "refine") || "refine").toLowerCase();
+        if (raw.includes("latent")) return "latent_upscale";
+        if (raw.includes("upscale")) return "upscale";
+        return "refine";
+    }
+
+    _refineEnabled() {
+        if (this._linkedRefineNode() || this._inputLinkConnected?.("refine")) return true;
+        return this._refineBool("refine_enable", false);
+    }
+
+    _h3LatentDim(px) {
+        return Math.max(1, Math.round(Number(px) / 16));
+    }
+
+    _refineTargetSize(baseW, baseH) {
+        if (!this._refineEnabled()) return { off: true };
+        const mode = this._refineMode();
+        const method = String(this._refineWidgetValue("refine_upscale_method", "h3_latent") || "h3_latent").trim() || "h3_latent";
+        if (mode === "refine") {
+            return { width: baseW, height: baseH, same: true, mode, method };
+        }
+        const aspect = String(this._refineWidgetValue("refine_aspect_ratio", "跟随导演台") || "跟随导演台").trim();
+        const mp = Number(this._refineWidgetValue("refine_megapixels", 0.8) ?? 0.8);
+        if (aspect.startsWith("自定义") || aspect.toLowerCase() === "custom") {
+            const w = snapResolutionDim(this._refineWidgetValue("refine_width", 1280) || 1280);
+            const h = snapResolutionDim(this._refineWidgetValue("refine_height", 720) || 720);
+            return { width: w, height: h, mode, method };
+        }
+        if (aspect === "跟随导演台" || aspect.toLowerCase() === "follow director") {
+            const resolved = resolutionFromSelector(
+                this.timeline.output?.aspectRatio || DEFAULT_ASPECT_RATIO,
+                Number.isFinite(mp) && mp > 0 ? mp : 0.8,
+            );
+            if (resolved) return { width: resolved.width, height: resolved.height, mode, method };
+            if (baseW > 0 && baseH > 0) {
+                if (baseW >= baseH) {
+                    const nh = 720;
+                    const nw = Math.max(32, Math.round(baseW * nh / baseH));
+                    return { width: snapResolutionDim(nw), height: snapResolutionDim(nh), mode, method };
+                }
+                const nw = 720;
+                const nh = Math.max(32, Math.round(baseH * nw / baseW));
+                return { width: snapResolutionDim(nw), height: snapResolutionDim(nh), mode, method };
+            }
+            return { width: 1280, height: 720, mode, method };
+        }
+        const resolved = resolutionFromSelector(aspect, Number.isFinite(mp) && mp > 0 ? mp : 0.8);
+        if (resolved) return { width: resolved.width, height: resolved.height, mode, method };
+        return { width: baseW, height: baseH, same: true, mode, method };
+    }
+
+    _refineTileStatusText(refine) {
+        const mode = refine?.mode || this._refineMode();
+        if (mode === "latent_upscale") return t("status.tileNA");
+        const nTiles = Math.max(1, Math.min(8, Math.round(Number(this._refineWidgetValue("refine_n_tiles", 2)) || 2)));
+        const tileOn = this._refineBool("refine_tile", true) && nTiles > 1;
+        if (!tileOn) return t("status.tileOff");
+        let axis = String(this._refineWidgetValue("refine_tile_axis", "auto") || "auto").trim();
+        if (axis !== "H" && axis !== "W" && axis !== "auto") axis = "auto";
+        const overlap = Math.max(0, Math.min(32, Math.round(Number(this._refineWidgetValue("refine_tile_overlap", 8)) || 0)));
+        const maxSize = Math.max(8, Math.min(256, Math.round(Number(this._refineWidgetValue("refine_max_size_for_no_tile", 64)) || 64)));
+        const lh = this._h3LatentDim(refine.height);
+        const lw = this._h3LatentDim(refine.width);
+        const resolved = axis === "auto" ? (lh >= lw ? "H" : "W") : axis;
+        const axisSize = resolved === "H" ? lh : lw;
+        const axisLabel = axis === "auto" ? `auto→${resolved}` : resolved;
+        if (axisSize <= maxSize) {
+            return t("status.tileAutoFull", { axis: axisLabel, size: axisSize, max: maxSize });
+        }
+        const seams = this._refineBool("refine_seams", true);
+        const seamSteps = Math.max(1, Math.min(25, Math.round(Number(this._refineWidgetValue("refine_seam_steps", 8)) || 8)));
+        const seam = seams ? t("status.tileSeamOn", { steps: seamSteps }) : t("status.tileSeamOff");
+        return t("status.tileOn", { n: nTiles, axis: axisLabel, overlap, seam });
+    }
+
+    updateOutputPreview() {
+        const first = this._firstPassSize();
+        const fps = formatProbeFps(this.getFrameRate());
+        const firstText = t("status.firstPass", { size: `${first.label} · ${fps}fps${this._exportPreviewSuffix()}` });
+        const refine = this._refineTargetSize(first.width, first.height);
+        let secondText = t("status.refineOff");
+        if (!refine.off) {
+            const size = `${refine.width}×${refine.height}`;
+            const kind = refine.mode === "upscale"
+                ? t("status.refineKind.upscale", { method: refine.method || "h3_latent" })
+                : t(`status.refineKind.${refine.mode || "refine"}`);
+            secondText = `${t("status.refinePass", { size, kind })}    ${this._refineTileStatusText(refine)}`;
+        }
+        const text = `${firstText}\n${secondText}`;
+        if (this.runIoEl) this.runIoEl.textContent = text;
+        if (this.outPreview) this.outPreview.textContent = text;
     }
 
     _exportPreviewSuffix() {
@@ -9782,7 +10024,7 @@ class MiniMaxH3DirectorEditor {
     }
 
     drawSegmentThumbnails(ctx, seg, startX, pxWidth, y0, h, index = -1) {
-        if (this.isFl2vMode()) {
+        if (this.isFl2vMode() || (this.isMixedMode() && resolveMixedGroupKey(seg) === "fl2v")) {
             drawFl2vSegmentThumbnails(this, ctx, seg, startX, pxWidth, y0, h);
             return;
         }
@@ -9877,12 +10119,10 @@ class MiniMaxH3DirectorEditor {
             return;
         }
 
-        if (thumbKey === "i2v" || thumbKey === "fl2v") {
+        if (thumbKey === "i2v") {
             ctx.fillStyle = "#0d0d0d";
             ctx.fillRect(startX, y0 + 1, pxWidth, h - 2);
-            const imgFile = thumbKey === "fl2v"
-                ? (seg.startImage?.imageFile || seg.endImage?.imageFile || seg.genImage?.imageFile || "")
-                : (seg.genImage?.imageFile || seg.imageFile || "");
+            const imgFile = seg.genImage?.imageFile || seg.imageFile || "";
             const previewB64 = seg.previewB64 || (Array.isArray(seg.previewFrames) ? seg.previewFrames[0] : "");
             const cacheKey = imgFile
                 ? `i2v:${imgFile}`
@@ -11528,7 +11768,6 @@ class MiniMaxH3DirectorEditor {
             this.root.dataset.livePreviewSpeed = String(speed);
             this.root.classList.toggle("bd-live-preview-speed-off", on && speed <= 0);
         }
-        this.livePreviewSpeedWrap?.classList.toggle("hidden", !on);
         if (this.livePreviewSpeedSlider) this.livePreviewSpeedSlider.value = String(speed);
         if (this.livePreviewSpeedVal) this.livePreviewSpeedVal.textContent = formatLivePreviewSpeed(speed);
     }
@@ -11568,8 +11807,16 @@ class MiniMaxH3DirectorEditor {
         return false;
     }
 
-    toggleLiveTaePreview() {
-        this.timeline.liveTaePreview = !this.isLiveTaePreviewEnabled();
+    togglePreviewPanel() {
+        const next = !this._mmxPreviewPanelOpen;
+        closePassPanels(this, next ? "preview" : "");
+        this._mmxPreviewPanelOpen = next;
+        this.previewPanelEl?.classList.toggle("hidden", !next);
+        this.updateDomWidgetHeight?.();
+    }
+
+    setLiveTaePreview(on) {
+        this.timeline.liveTaePreview = !!on;
         this.refreshLiveTaePreviewButton();
         this.updateLiveSamplePanel();
         this.syncLivePreviewSpeedUI();
@@ -11578,15 +11825,21 @@ class MiniMaxH3DirectorEditor {
         syncDirectorNodeSize(this.node, this);
     }
 
+    toggleLiveTaePreview() {
+        this.setLiveTaePreview(!this.isLiveTaePreviewEnabled());
+    }
+
     refreshLiveTaePreviewButton() {
         const btn = this.root?.querySelector('[data-a="live-tae-preview"]');
-        if (!btn) return;
         const on = this.isLiveTaePreviewEnabled();
-        btn.classList.toggle("active", on);
-        btn.textContent = t("toolbar.liveTaePreview");
-        btn.title = on ? t("tooltip.liveTaePreviewOn") : t("tooltip.liveTaePreviewOff");
-        btn.setAttribute("data-i18n", "toolbar.liveTaePreview");
-        btn.removeAttribute("data-i18n-title");
+        if (btn) {
+            btn.classList.toggle("active", on);
+            btn.textContent = t("toolbar.liveTaePreview");
+            btn.title = on ? t("tooltip.liveTaePreviewOn") : t("tooltip.liveTaePreviewOff");
+            btn.setAttribute("data-i18n", "toolbar.liveTaePreview");
+            btn.removeAttribute("data-i18n-title");
+        }
+        if (this.livePreviewEnableCb) this.livePreviewEnableCb.checked = on;
         const w = this.node?.widgets?.find((x) => x.name === "live_tae_vae");
         if (w) {
             const want = String(this.timeline?.liveTaeVae || "").trim() || "auto";
@@ -11597,8 +11850,8 @@ class MiniMaxH3DirectorEditor {
 
     async populateLiveTaeVaeSelect() {
         const w = this.node?.widgets?.find((x) => x.name === "live_tae_vae");
-        if (!w) return;
-        const current = String(this.timeline?.liveTaeVae || "").trim() || "auto";
+        const sel = this.root?.querySelector('[data-r="live-tae-vae"]');
+        const current = String(this.timeline?.liveTaeVae || w?.value || "").trim() || "auto";
         let items = [];
         try {
             const resp = await api.fetchApi("/minimax/director/list_vae_approx");
@@ -11606,10 +11859,27 @@ class MiniMaxH3DirectorEditor {
             items = Array.isArray(data?.items) ? data.items : [];
         } catch { /* Latent2RGB fallback still works */ }
         const values = ["auto", ...items.filter((n) => n && n !== "auto")];
-        if (w.options) w.options.values = values;
-        w.value = values.includes(current) ? current : "auto";
-        if (w.options) w.options.tooltip = t("tooltip.liveTaeVae");
-        w.label = t("widget.liveTaeVae");
+        const chosen = values.includes(current) ? current : "auto";
+        if (w) {
+            if (w.options) w.options.values = values;
+            w.value = chosen;
+            if (w.options) w.options.tooltip = t("tooltip.liveTaeVae");
+            w.label = t("widget.liveTaeVae");
+        }
+        if (sel) {
+            const label = (name) => name === "auto" ? t("liveTaeVae.auto") : name === "none" ? t("liveTaeVae.none") : name;
+            sel.innerHTML = values.map((name) => {
+                const safe = String(name).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+                return `<option value="${safe}"${name === chosen ? " selected" : ""}>${label(name)}</option>`;
+            }).join("");
+            sel.value = chosen;
+            sel.onchange = () => {
+                const val = String(sel.value || "auto").trim() || "auto";
+                if (w) w.value = val;
+                if (this.timeline) this.timeline.liveTaeVae = !val || val === "auto" ? "" : val;
+                this.scheduleTimelineSync?.();
+            };
+        }
         this.refreshLiveTaePreviewButton();
     }
 

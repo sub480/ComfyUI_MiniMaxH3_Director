@@ -16,7 +16,13 @@ from ..director.audio_export import (
 )
 from ..director.frame_align import H3_FPS, pad_or_trim_frames
 from ..director.gen_timeline import is_prompt_batch_timeline, is_video_batch_task_key
-from ..director.plan import build_director_plan, count_all_timeline_segments, count_timeline_segments, plan_summary
+from ..director.plan import (
+    apply_lora_trigger_words,
+    build_director_plan,
+    count_all_timeline_segments,
+    count_timeline_segments,
+    plan_summary,
+)
 from ..director.progress import report_director_planning
 from ..lib.image_prep import fit_canvas, fit_video_long_edge
 from ..lib.video_io import load_timeline_segment
@@ -83,16 +89,8 @@ def timeline_required_inputs() -> dict:
 
 
 def director_perf_inputs() -> dict:
-    """Performance widgets shared by Director nodes."""
+    """Hidden Director extras. Segment VRAM clear is always on."""
     return {
-        "bd_grp_perf": ("BDGROUP", {"default": "性能"}),
-        "clear_vram_between_segments": (
-            "BOOLEAN",
-            {
-                "default": True,
-                "tooltip": "段间清理显存：每段结束后卸载模型并清空 CUDA 缓存。",
-            },
-        ),
         "export_source_images": (
             "BOOLEAN",
             {
@@ -176,6 +174,7 @@ def prepare_director_plan(
     i2v_groups=None,
     r2v_groups=None,
     refine=None,
+    lora_trigger_words=None,
 ):
     from ..director.external_groups import (
         build_plan_from_external_groups,
@@ -219,6 +218,7 @@ def prepare_director_plan(
             ref_max_size=ref_max_size,
         )
         plan = _attach_refine(plan, refine)
+        plan = apply_lora_trigger_words(plan, lora_trigger_words)
         log.info(
             "MiniMax H3 Director: external %s groups × %d (task=%s) | %s",
             family,
@@ -245,6 +245,7 @@ def prepare_director_plan(
         ref_max_size=ref_max_size,
     )
     plan = _attach_refine(plan, refine)
+    plan = apply_lora_trigger_words(plan, lora_trigger_words)
     log.info(plan_summary(plan).replace("\n", " | "))
     return plan
 

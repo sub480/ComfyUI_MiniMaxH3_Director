@@ -473,9 +473,18 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-fl2v-slots .bd-batch-src .tag.start{left:4px;background:rgba(79,255,143,.92);color:#111}
 .bd-batch-fl2v-slots .bd-batch-src .tag.end{right:4px;left:auto;background:rgba(240,160,48,.92);color:#111}
 .bd-batch-fl2v-media .bd-r2v-pick-existing{align-self:stretch;text-align:center}
-.bd-preview-col{display:flex;flex-direction:column;gap:6px;min-width:0;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;box-sizing:border-box}
+.bd-preview-col{display:flex;flex-direction:column;gap:6px;min-width:0;height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;box-sizing:border-box}
+.bd-preview-col-head{display:flex;align-items:center;justify-content:flex-start;gap:6px;flex-shrink:0}
+.bd-preview-tab{background:#222;color:#bbb;border:1px solid #333;border-radius:4px;padding:2px 8px;font-size:10px;line-height:1.4;cursor:pointer;white-space:nowrap;flex-shrink:0}
+.bd-preview-tab:hover{border-color:#555;color:#eee}
+.bd-preview-tab.active{background:#1a3a2a;color:#4fff8f;border-color:#4fff8f}
 .bd-preview-col>.bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.02em;flex-shrink:0}
-.bd-preview-col .bd-batch-preview{flex:1 1 auto;width:100%;max-width:none;min-height:160px;justify-self:stretch;border:0;background:transparent;padding:0;border-radius:0}
+.bd-preview-col .bd-batch-preview{flex:1 1 auto;width:100%;max-width:none;min-height:0;justify-self:stretch;border:0;background:transparent;padding:0;border-radius:0;overflow:hidden}
+.bd-preview-col.exec-open .bd-batch-preview{display:none}
+.bd-exec-prompt-wrap{display:none;flex:1 1 auto;min-height:0;flex-direction:column;gap:4px;min-width:0}
+.bd-preview-col.exec-open .bd-exec-prompt-wrap{display:flex}
+.bd-exec-prompt{flex:1 1 auto;min-height:0;overflow:auto;background:#101010;border:1px solid #2e2e2e;border-radius:8px;padding:8px 10px;color:#c8c8c8;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+.bd-exec-prompt:empty::before{content:attr(data-empty);color:#555}
 .bd-wrap:not(.bd-live-preview-on) .bd-preview-col{display:none!important}
 .bd-batch-plain .bd-batch-head,.bd-batch-source .bd-batch-head,.bd-batch-fl2v .bd-batch-head,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px}
 .bd-batch-plain .bd-batch-head b,.bd-batch-source .bd-batch-head b,.bd-batch-fl2v .bd-batch-head b,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
@@ -529,6 +538,7 @@ export const IMAGE_BATCH_STYLES = `
 /* Left = 参考素材 · Middle = 提示词 · Right = 预览 */
 .bd-batch-r2v-body{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(0,1.4fr);gap:12px;width:100%;align-items:stretch;min-height:420px;flex:1 1 auto}
 .bd-wrap.bd-live-preview-on .bd-batch-r2v-body{grid-template-columns:minmax(220px,.8fr) minmax(0,1.3fr) minmax(200px,.7fr)}
+.bd-wrap.bd-live-preview-on .bd-batch-r2v-body>.bd-preview-col{height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch}
 .bd-batch-r2v-assets{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
 .bd-batch-r2v-main{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:380px;flex:1 1 auto}
 .bd-r2v-section{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0;box-sizing:border-box}
@@ -611,26 +621,36 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-prompts textarea,.bd-batch-prompts .bd-token-wrap{width:100%;min-height:88px;box-sizing:border-box}
 .bd-batch-prompts textarea{background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:6px;resize:none;overflow-y:auto;font-size:11px;font-family:inherit;line-height:1.35}
 .bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,
-.bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;resize:none;overflow-y:auto}
+.bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;resize:vertical;overflow-y:auto}
 .bd-batch-r2v .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{min-height:120px;height:auto;flex:1 1 auto;resize:none;overflow:auto}
 .bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-preview{background:#0d0d0d;border:1px solid #333;border-radius:4px;min-height:100px;display:flex;flex-direction:column;align-items:stretch;justify-content:center;overflow:hidden;color:#555;font-size:10px;text-align:center;padding:4px;box-sizing:border-box}
-.bd-batch-plain .bd-preview-col .bd-batch-preview,.bd-batch-source .bd-preview-col .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-preview-col .bd-batch-preview{width:100%;max-width:none;min-height:160px;justify-self:stretch}
-.bd-batch-r2v .bd-preview-col .bd-batch-preview{min-height:220px;max-height:none;height:auto}
+.bd-batch-plain .bd-preview-col .bd-batch-preview,.bd-batch-source .bd-preview-col .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-preview-col .bd-batch-preview{width:100%;max-width:none;min-height:0;justify-self:stretch}
+.bd-batch-r2v .bd-preview-col .bd-batch-preview{min-height:0;max-height:none;height:auto;flex:1 1 auto}
 .bd-batch-preview img{width:100%;max-width:100%;max-height:200px;object-fit:contain;display:block;margin:0 auto}
+.bd-preview-col .bd-batch-preview img,.bd-preview-col .bd-batch-live-preview img{max-height:100%;height:100%}
 .bd-batch-plain .bd-batch-preview img,.bd-batch-source .bd-batch-preview img{max-height:180px}
+.bd-preview-col .bd-batch-preview img,.bd-preview-col .bd-batch-live-preview img{max-height:100%!important;height:100%;width:auto;margin:0 auto}
 .bd-batch-r2v .bd-batch-preview img{width:100%;max-height:280px}
 .bd-batch-vpreview{width:100%;height:100%;display:flex;flex-direction:column;align-items:stretch;gap:4px;min-height:0}
 .bd-batch-vpreview canvas{width:100%;flex:1 1 auto;min-height:96px;max-height:200px;background:#000;border-radius:3px;display:block;object-fit:contain}
 .bd-batch-r2v .bd-batch-vpreview canvas{border-radius:8px;max-height:280px;min-height:160px}
+.bd-preview-col .bd-batch-vpreview{flex:1 1 auto;min-height:0;height:100%}
 .bd-batch-plain .bd-batch-vpreview canvas,.bd-batch-source .bd-batch-vpreview canvas{max-height:180px;min-height:96px}
+.bd-preview-col .bd-batch-vpreview canvas,
+.bd-batch-plain .bd-preview-col .bd-batch-vpreview canvas,
+.bd-batch-source .bd-preview-col .bd-batch-vpreview canvas,
+.bd-batch-r2v .bd-preview-col .bd-batch-vpreview canvas{max-height:none;min-height:0;flex:1 1 auto;height:100%}
+.bd-preview-col .bd-batch-preview,
+.bd-preview-col .bd-batch-vpreview,
+.bd-preview-col .bd-batch-live-preview{min-height:0}
 .bd-batch-vpreview-ctrl{display:flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0}
 .bd-batch-vpreview-ctrl button{font-size:10px;padding:2px 8px}
 .bd-batch-vpreview-meta{color:#666;font-size:9px;text-align:center;flex-shrink:0}
-.bd-batch-live-preview{position:relative;width:100%;min-height:160px;flex:1 1 auto;display:flex;align-items:center;justify-content:center;box-sizing:border-box}
-.bd-batch-r2v .bd-batch-live-preview{min-height:200px}
-.bd-batch-live-preview img{width:100%;height:auto;max-width:100%;max-height:280px;object-fit:contain;display:block;border-radius:6px}
-.bd-batch-r2v .bd-batch-live-preview img{max-height:280px}
+.bd-batch-live-preview{position:relative;width:100%;height:100%;min-height:0;flex:1 1 auto;display:flex;align-items:center;justify-content:center;box-sizing:border-box}
+.bd-batch-r2v .bd-batch-live-preview{min-height:0}
+.bd-batch-live-preview img{width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;display:block;border-radius:6px}
+.bd-batch-r2v .bd-batch-live-preview img{max-height:100%}
 .bd-batch-live-badge{position:absolute;left:8px;bottom:8px;padding:2px 7px;border-radius:999px;background:rgba(0,0,0,.72);color:#cfcfcf;font-size:10px;pointer-events:none}
 @media(max-width:860px){
 .bd-batch-r2v-body,.bd-batch-r2v-foot,.bd-wrap.bd-live-preview-on .bd-batch-r2v-body{grid-template-columns:1fr}
@@ -1155,8 +1175,15 @@ async function pickExistingSegFl2v(editor, index, kind) {
 function clearSegFl2vImage(editor, index, kind) {
     const seg = editor.timeline.segments[index];
     if (!seg) return;
-    if (kind === "end") seg.endImage = null;
-    else seg.startImage = null;
+    if (kind === "end") {
+        seg.endImage = null;
+    } else {
+        seg.startImage = null;
+        // genImage is the i2v/legacy mirror of the first frame. Drop it so
+        // last-only groups cannot resurrect the same picture as image0.
+        if (seg.genImage) seg.genImage = { imageFile: "" };
+        seg.imageFile = "";
+    }
     editor.renderImageBatchGroups();
     editor.commit(false, { syncTimeline: true });
     editor.scheduleRender?.();
@@ -2489,14 +2516,149 @@ function renderPreview(el, seg, running, isVideo, fps, editor) {
     else renderImagePreview(el, seg, running, editor);
 }
 
-function wrapPreviewColumn(preview) {
+const LORA_TRIGGER_WIDGET_NAMES = new Set([
+    "filtered_trigger_words",
+    "trigger_words",
+    "toggle_trigger_words",
+    "orinalmessage",
+    "originalmessage",
+    "text",
+    "string",
+    "value",
+    "prompt",
+]);
+
+function textFromLoraTriggerValue(value) {
+    if (value == null || typeof value === "boolean" || typeof value === "number") return "";
+    if (typeof value === "string") return value.trim();
+    if (Array.isArray(value)) {
+        const parts = [];
+        for (const item of value) {
+            if (typeof item === "string") {
+                const s = item.trim();
+                if (s) parts.push(s);
+                continue;
+            }
+            if (!item || typeof item !== "object" || item.active === false) continue;
+            if (Array.isArray(item.items)) {
+                const kids = item.items
+                    .filter((child) => child && child.active !== false)
+                    .map((child) => String(child.text || "").trim())
+                    .filter(Boolean);
+                if (kids.length) parts.push(kids.join(", "));
+                continue;
+            }
+            const s = String(item.text || "").trim();
+            if (s) parts.push(s);
+        }
+        return parts.join(", ");
+    }
+    if (typeof value === "object" && value.__value__ != null) {
+        return textFromLoraTriggerValue(value.__value__);
+    }
+    return "";
+}
+
+function readLinkedLoraTrigger(origin) {
+    if (!origin) return "";
+    const widgets = origin.widgets || [];
+    for (const item of widgets) {
+        if (!LORA_TRIGGER_WIDGET_NAMES.has(String(item?.name || "").toLowerCase())) continue;
+        const text = textFromLoraTriggerValue(item?.value);
+        if (text) return text;
+    }
+    const fromTag = textFromLoraTriggerValue(origin.tagWidget?.value);
+    if (fromTag) return fromTag;
+    for (const item of widgets) {
+        const type = String(item?.type || "").toLowerCase();
+        if (type === "toggle" || type === "boolean" || type === "number" || type === "combo") continue;
+        if (typeof item?.value === "boolean" || typeof item?.value === "number") continue;
+        const text = textFromLoraTriggerValue(item?.value);
+        if (text) return text;
+    }
+    return "";
+}
+
+function readLoraTriggerWords(editor) {
+    const node = editor?.node;
+    const w = node?.widgets?.find((item) => item?.name === "lora_trigger_words");
+    const local = textFromLoraTriggerValue(w?.value);
+    if (local) return local;
+    const inp = (node?.inputs || []).find((item) => item?.name === "lora_trigger_words");
+    const linkId = inp?.link;
+    if (linkId == null) return "";
+    const link = node.graph?.links?.[linkId];
+    const origin = node.graph?.getNodeById?.(link?.origin_id);
+    return readLinkedLoraTrigger(origin);
+}
+
+function executedPromptText(editor, seg) {
+    let body = String(seg?.prompt || "").trim();
+    const g = editor?.timeline?.global || {};
+    const commonOn = !!(g.commonEnabled ?? g.common_enabled);
+    const common = commonOn ? String(g.prompt || "").trim() : "";
+    if (common && body) body = `${common}\n\n${body}`;
+    else body = common || body;
+    const lora = readLoraTriggerWords(editor);
+    if (!lora) return body;
+    if (!body) return lora;
+    if (body === lora || body.startsWith(`${lora},`) || body.startsWith(`${lora}\n`)) return body;
+    return lora.endsWith(",") ? `${lora} ${body}`.trim() : `${lora}, ${body}`;
+}
+
+function fillExecPrompt(el, editor, seg) {
+    if (!el) return;
+    const text = executedPromptText(editor, seg);
+    el.textContent = text;
+    el.dataset.empty = t("batch.execPromptEmpty");
+}
+
+function wrapPreviewColumn(preview, editor, seg) {
     const col = document.createElement("div");
     col.className = "bd-preview-col";
-    const label = document.createElement("span");
-    label.className = "bd-label";
-    label.textContent = t("liveSample.title");
-    col.appendChild(label);
+    const promptOpen = !!seg?.execPromptOpen;
+    if (promptOpen) col.classList.add("exec-open");
+    const head = document.createElement("div");
+    head.className = "bd-preview-col-head";
+    const sampleBtn = document.createElement("button");
+    sampleBtn.type = "button";
+    sampleBtn.className = "bd-preview-tab" + (promptOpen ? "" : " active");
+    sampleBtn.setAttribute("data-r", "preview-tab-sample");
+    sampleBtn.setAttribute("data-i18n", "liveSample.title");
+    sampleBtn.textContent = t("liveSample.title");
+    const promptBtn = document.createElement("button");
+    promptBtn.type = "button";
+    promptBtn.className = "bd-preview-tab" + (promptOpen ? " active" : "");
+    promptBtn.setAttribute("data-r", "preview-tab-prompt");
+    promptBtn.setAttribute("data-i18n", "batch.promptPreview");
+    promptBtn.textContent = t("batch.promptPreview");
+    const setPane = (nextPrompt) => {
+        const live = (editor.timeline?.segments || []).find((s) => s?.id && s.id === seg?.id) || seg;
+        if (live) live.execPromptOpen = nextPrompt;
+        col.classList.toggle("exec-open", nextPrompt);
+        sampleBtn.classList.toggle("active", !nextPrompt);
+        promptBtn.classList.toggle("active", nextPrompt);
+    };
+    sampleBtn.onclick = (e) => {
+        e.stopPropagation();
+        setPane(false);
+    };
+    promptBtn.onclick = (e) => {
+        e.stopPropagation();
+        setPane(true);
+    };
+    head.appendChild(sampleBtn);
+    head.appendChild(promptBtn);
+    col.appendChild(head);
     col.appendChild(preview);
+    const execWrap = document.createElement("div");
+    execWrap.className = "bd-exec-prompt-wrap";
+    const exec = document.createElement("div");
+    exec.className = "bd-exec-prompt";
+    exec.setAttribute("data-r", "exec-prompt");
+    fillExecPrompt(exec, editor, seg);
+    execWrap.appendChild(exec);
+    col.appendChild(execWrap);
     return col;
 }
 
@@ -2709,6 +2871,7 @@ function passCachePayload(editor) {
         shift_video: Number(_batchWidgetValue(node, "shift_video", 12)),
         shift_audio: Number(_batchWidgetValue(node, "shift_audio", 3)),
         sigmas_linked: directorHasSigmasLink(node),
+        lora_trigger_words: readLoraTriggerWords(editor),
     };
 }
 
@@ -3312,6 +3475,8 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             editor.scheduleTimelineSync();
             // External groups execute from Group-node widgets — keep them aligned.
             editor.writeExternalGroupPrompt?.(segIndex, live.prompt);
+            const card = promptEl.closest(".bd-batch-card");
+            fillExecPrompt(card?.querySelector("[data-r=exec-prompt]"), editor, live);
         };
         if (isR2v) {
             wirePromptImageMentions(editor, promptEl, () => {
@@ -3336,7 +3501,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         const preview = document.createElement("div");
         preview.className = "bd-batch-preview";
         renderPreview(preview, seg, index === runningIdx, isVideo, seg.previewFps || fps, editor);
-        const previewCol = wrapPreviewColumn(preview);
+        const previewCol = wrapPreviewColumn(preview, editor, seg);
 
         if (isR2v && r2vMain) {
             r2vMain.appendChild(prompts);

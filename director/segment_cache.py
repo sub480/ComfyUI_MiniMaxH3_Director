@@ -18,7 +18,12 @@ import torch
 
 import folder_paths
 
-from .h3_motion_context import CONTINUITY_PIPELINE_ID, trim_context_prefix, trim_export_tail
+from .h3_motion_context import (
+    CONTINUITY_PIPELINE_ID,
+    CONTINUITY_TASK_KEYS,
+    trim_context_prefix,
+    trim_export_tail,
+)
 from .plan import DirectorPlan, SegmentPlan, resolve_ref_image_size
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.cache")
@@ -89,6 +94,23 @@ def _cache_root(node_id: str) -> Path | None:
         return None
 
 
+def _segment_uses_motion_context(seg: SegmentPlan, plan: DirectorPlan) -> bool:
+    """True when this segment's first-pass sample pins the previous AV tail.
+
+    Segment 0 never pins. Adding a later group or toggling「段间引导」must not
+    bust group 1's first-pass cache. Inline of ``is_continuity_active`` — do not
+    import ``segment_continuity`` here (circular).
+    """
+    if not bool(getattr(plan, "continuity_enabled", False)):
+        return False
+    if int(getattr(seg, "index", 0) or 0) <= 0:
+        return False
+    if not bool(getattr(seg, "continuity_from_prev", True)):
+        return False
+    task = str(getattr(seg, "task_key", "") or "")
+    return task in CONTINUITY_TASK_KEYS
+
+
 def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Identity that affects first-pass sampling (no Refine settings)."""
     ref_files = sorted(
@@ -108,11 +130,13 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         or seg.reference_video_meta.get("fileName")
         or ""
     ).strip()
+    uses_mc = _segment_uses_motion_context(seg, plan)
     return {
         "index": seg.index,
         "start": seg.start_frame,
         "end": seg.end_frame,
         "prompt": seg.prompt,
+        "lora_trigger_words": str(getattr(plan, "lora_trigger_words", "") or "").strip(),
         "negative": seg.negative_prompt,
         "task_key": seg.task_key,
         "width": plan.width,
@@ -127,9 +151,11 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         "ref_video": ref_video_file,
         "ref_video_start": seg.reference_video_start_frame,
         SOURCE_VIDEO_FP_KEY: source_video_identity(plan),
-        "continuity": plan.continuity_enabled,
-        "continuity_overlap": plan.continuity_overlap_frames if plan.continuity_enabled else 0,
-        "continuity_from_prev": bool(getattr(seg, "continuity_from_prev", True)),
+        "continuity": uses_mc,
+        "continuity_overlap": (
+            int(plan.continuity_overlap_frames or 0) if uses_mc else 0
+        ),
+        "continuity_from_prev": uses_mc,
         "continuity_pipeline": CONTINUITY_PIPELINE_ID,
     }
 
@@ -325,6 +351,38 @@ def _fingerprint_diff_keys(stored: Any, expected: dict[str, Any]) -> list[str]:
     return [k for k in keys if stored.get(k) != expected.get(k)]
 
 
+def _align_cache_fingerprint(stored: Any, expected: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """Normalize old first-pass meta that baked LoRA trigger into ``prompt``."""
+    if not isinstance(stored, dict):
+        return stored, expected
+    stored_cmp = dict(stored)
+    expected_cmp = dict(expected)
+    if "lora_trigger_words" not in stored_cmp:
+        from .plan import strip_lora_trigger_prefix
+
+        trigger = str(expected_cmp.get("lora_trigger_words") or "").strip()
+        raw = stored_cmp.get("prompt") or ""
+        stripped = strip_lora_trigger_prefix(raw, trigger)
+        if trigger and stripped != raw:
+            stored_cmp["prompt"] = stripped
+            stored_cmp["lora_trigger_words"] = trigger
+        else:
+            stored_cmp["lora_trigger_words"] = ""
+    # Older caches stamped plan-level「段间引导」onto every segment, including
+    # the first one (which never pins). When this segment does not use motion
+    # context, ignore that drift so adding a later group keeps group 1's cache.
+    if not expected_cmp.get("continuity"):
+        for key in ("continuity", "continuity_overlap", "continuity_from_prev"):
+            if key in expected_cmp:
+                stored_cmp[key] = expected_cmp[key]
+    return stored_cmp, expected_cmp
+
+
+def _cache_fingerprint_matches(stored: Any, expected: dict[str, Any]) -> bool:
+    stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
+    return isinstance(stored_cmp, dict) and stored_cmp == expected_cmp
+
+
 def load_segment_handoff_meta(
     node_id: str | None,
     seg: SegmentPlan,
@@ -346,7 +404,7 @@ def load_segment_handoff_meta(
     try:
         expected = segment_cache_fingerprint(seg, plan)
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
-        if stored != expected:
+        if not _cache_fingerprint_matches(stored, expected):
             if _reject_source_stale(stored, expected, seg_index=idx, quiet=True) or not allow_stale:
                 return None
         data = json.loads(handoff_path.read_text(encoding="utf-8"))
@@ -403,7 +461,7 @@ def load_segment_av_latent(
     try:
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
         expected = segment_cache_fingerprint(seg, plan)
-        if stored != expected:
+        if not _cache_fingerprint_matches(stored, expected):
             if _reject_source_stale(stored, expected, seg_index=idx, quiet=True) or not allow_stale:
                 return None
         payload = torch.load(latent_path, map_location="cpu", weights_only=False)
@@ -434,7 +492,7 @@ def _fingerprint_matches(
     try:
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
         expected = segment_cache_fingerprint(seg, plan)
-        if stored == expected:
+        if _cache_fingerprint_matches(stored, expected):
             return True
         if _reject_source_stale(stored, expected, seg_index=seg.index, quiet=True):
             return False
@@ -472,10 +530,11 @@ def load_segment_cache(
         expected = segment_cache_fingerprint(seg, plan)
         if meta_path.is_file():
             stored = json.loads(meta_path.read_text(encoding="utf-8"))
-            if stored != expected:
+            stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
+            if stored_cmp != expected_cmp:
                 if _reject_source_stale(stored, expected, seg_index=idx):
                     return None
-                diff = _fingerprint_diff_keys(stored, expected)
+                diff = _fingerprint_diff_keys(stored_cmp, expected_cmp)
                 if not allow_stale:
                     log.info(
                         "Segment %d cache stale (diff=%s); re-run this segment to refresh.",
@@ -699,12 +758,13 @@ def load_first_pass_cache(
     try:
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
         expected = first_pass_cache_fingerprint(seg, plan)
-        if not isinstance(stored, dict) or stored != expected:
+        stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
+        if not isinstance(stored, dict) or stored_cmp != expected_cmp:
             if isinstance(stored, dict) and _reject_source_stale(
                 stored, expected, seg_index=idx, quiet=True,
             ):
                 return None
-            diff = _fingerprint_diff_keys(stored, expected) if isinstance(stored, dict) else ["<invalid-meta>"]
+            diff = _fingerprint_diff_keys(stored_cmp, expected_cmp) if isinstance(stored_cmp, dict) else ["<invalid-meta>"]
             log.info(
                 "Segment %d first-pass cache miss (diff=%s); will sample first pass.",
                 idx + 1,
@@ -852,15 +912,14 @@ def inspect_first_pass_cache(
                 read_error = str(exc)
 
         expected = first_pass_cache_fingerprint(seg, plan)
-        stored_cmp = stored
-        expected_cmp = expected
-        if getattr(plan, "sample_sigmas_linked", False) and isinstance(stored, dict):
-            stored_cmp = {k: v for k, v in stored.items() if k != "sigmas"}
-            expected_cmp = {k: v for k, v in expected.items() if k != "sigmas"}
+        stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
+        if getattr(plan, "sample_sigmas_linked", False) and isinstance(stored_cmp, dict):
+            stored_cmp = {k: v for k, v in stored_cmp.items() if k != "sigmas"}
+            expected_cmp = {k: v for k, v in expected_cmp.items() if k != "sigmas"}
         matches = bool(cache_exists and isinstance(stored, dict) and stored_cmp == expected_cmp)
         diff = (
             _fingerprint_diff_keys(stored_cmp, expected_cmp)
-            if isinstance(stored, dict)
+            if isinstance(stored_cmp, dict)
             else (["<invalid-meta>"] if meta_exists else ["<missing-cache>"])
         )
         if not cache_exists:

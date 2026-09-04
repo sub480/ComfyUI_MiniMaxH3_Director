@@ -247,6 +247,24 @@ def _video_latent_from_x0(x0: Any) -> torch.Tensor | None:
 
 LIVE_PREVIEW_MAX_FRAMES = 16
 LIVE_PREVIEW_FPS = 16.0
+# Cap latent spatial size before TAE so HD 二采 (e.g. 68×120) stays as cheap as 一采.
+_PREVIEW_MAX_LATENT_SIDE = 64
+
+
+def _shrink_preview_latent(video: torch.Tensor, max_side: int = _PREVIEW_MAX_LATENT_SIDE) -> torch.Tensor:
+    """Area-downsample [B,C,T,H,W] when H/W exceed ``max_side``."""
+    h, w = int(video.shape[-2]), int(video.shape[-1])
+    longest = max(h, w)
+    limit = max(1, int(max_side))
+    if longest <= limit:
+        return video
+    scale = limit / float(longest)
+    nh = max(1, int(round(h * scale)))
+    nw = max(1, int(round(w * scale)))
+    b, c, t = int(video.shape[0]), int(video.shape[1]), int(video.shape[2])
+    flat = video.reshape(b, c * t, h, w).to(dtype=torch.float32)
+    out = torch.nn.functional.interpolate(flat, size=(nh, nw), mode="area")
+    return out.reshape(b, c, t, nh, nw).to(dtype=video.dtype)
 
 
 def _latent2rgb_pil(video: torch.Tensor, t: int | None = None) -> Image.Image | None:
@@ -301,6 +319,7 @@ def x0_to_preview_pils(
     video = _video_latent_from_x0(x0)
     if video is None or video.numel() == 0:
         return []
+    video = _shrink_preview_latent(video)
 
     t_total = max(1, int(video.shape[2]))
     n = max(1, min(int(max_frames or 1), t_total))

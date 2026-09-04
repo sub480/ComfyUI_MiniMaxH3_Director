@@ -353,7 +353,10 @@ def load_fl2v_segment_media(
     raw = seg_data if isinstance(seg_data, dict) else {}
     start = _image_ref_from_raw(raw.get("startImage") or raw.get("start_image"))
     end = _image_ref_from_raw(raw.get("endImage") or raw.get("end_image"))
-    if start is None:
+    # Legacy packs stored the first frame only in genImage. Mixed-mode cards always
+    # have startImage (possibly null): do not promote leftover genImage into image0,
+    # or last-only shots get pinned as first+last with the same picture.
+    if start is None and "startImage" not in raw and "start_image" not in raw:
         start = _image_ref_from_raw(raw.get("genImage") or raw.get("gen_image"))
     start_img = None
     if start is not None:

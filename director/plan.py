@@ -160,6 +160,44 @@ class SegmentRefVideo:
     meta: dict = field(default_factory=dict)
 
 
+def prepend_lora_trigger_words(prompt: str | None, trigger: str | None) -> str:
+    """Put LoRA trigger words in front of a group prompt."""
+    head = str(trigger or "").strip()
+    body = str(prompt or "").strip()
+    if not head:
+        return prompt or ""
+    if not body:
+        return head
+    if body == head or body.startswith(f"{head},") or body.startswith(f"{head}\n"):
+        return body
+    if head.endswith(","):
+        return f"{head} {body}".strip()
+    return f"{head}, {body}"
+
+
+def strip_lora_trigger_prefix(prompt: str | None, trigger: str | None) -> str:
+    """Undo :func:`prepend_lora_trigger_words` when ``trigger`` is known."""
+    head = str(trigger or "").strip()
+    body = str(prompt or "")
+    if not head or not body:
+        return body
+    if body == head:
+        return ""
+    if body.startswith(f"{head},"):
+        return body[len(head) + 1 :].lstrip()
+    if body.startswith(f"{head}\n"):
+        return body[len(head) + 1 :]
+    if head.endswith(",") and body.startswith(f"{head} "):
+        return body[len(head) + 1 :].lstrip()
+    return body
+
+
+def apply_lora_trigger_words(plan, trigger: str | None):
+    """Remember LoRA trigger words on the plan. Segment prompts stay user input."""
+    plan.lora_trigger_words = str(trigger or "").strip()
+    return plan
+
+
 def concat_common_segment_prompt(common: str | None, segment: str | None) -> str:
     """Join shared (common) prompt with per-group prompt.
 
@@ -258,6 +296,7 @@ class DirectorPlan:
     sample_sigmas_linked: bool = False
     sample_shift_video: float = 12.0
     sample_shift_audio: float = 3.0
+    lora_trigger_words: str = ""
 
     @property
     def segment_count(self) -> int:

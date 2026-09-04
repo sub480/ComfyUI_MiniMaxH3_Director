@@ -1473,7 +1473,9 @@ export function drawFl2vSegmentThumbnails(editor, ctx, seg, startX, pxWidth, y0,
     ctx.fillRect(startX, y0 + 1, pxWidth, h - 2);
 
     // Start and end are independent — never treat end as a fake start thumb.
-    const startFile = seg.genImage?.imageFile || seg.imageFile || "";
+    // Mixed-mode cards keep the first frame on startImage; dedicated fl2v
+    // mirrors it onto genImage / imageFile.
+    const startFile = seg.startImage?.imageFile || seg.genImage?.imageFile || seg.imageFile || "";
     const endFile = seg.endImage?.imageFile || "";
     if (!startFile && !endFile) {
         ctx.fillStyle = "#666";

@@ -542,7 +542,7 @@ async def minimax_first_pass_cache_status(request):
     if isinstance(timeline_data, dict):
         timeline_data = json.dumps(timeline_data, ensure_ascii=False)
     try:
-        from .plan import build_director_plan
+        from .plan import apply_lora_trigger_words, build_director_plan
         from .segment_cache import inspect_first_pass_cache
 
         plan = build_director_plan(
@@ -555,6 +555,7 @@ async def minimax_first_pass_cache_status(request):
             height=int(body.get("height") or 480),
             ref_max_size=int(body.get("ref_max_size") or 864),
         )
+        plan = apply_lora_trigger_words(plan, body.get("lora_trigger_words"))
         plan.sample_seed = int(body.get("seed") or 0)
         plan.sample_cfg = float(body.get("cfg") or 1.0)
         plan.sample_steps = int(body.get("steps") or 25)
