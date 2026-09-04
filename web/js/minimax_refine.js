@@ -1,16 +1,19 @@
 /** MiniMax H3 Director Refine — show canvas widgets like Director output bar. */
 
 import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
 import {
     CUSTOM_ASPECT_RATIO,
     resolutionFromSelector,
     snapResolutionDim,
 } from "./minimax_gen_timeline.js";
+import {
+    applyDirectorRefinePassDefaults,
+    directorRefineActive,
+    scheduleDirectorPassCacheRefresh,
+} from "./minimax_image_batch.js";
 
 const REFINE_CLASS = "MiniMaxH3DirectorRefine";
 const DIRECTOR_CLASSES = new Set(["MiniMaxH3Director", "ComfyMiniMaxH3Director"]);
-const CACHE_STATUS_WIDGET = "first_pass_cache_status";
 const FOLLOW_DIRECTOR_ASPECT = "跟随导演台";
 
 function isRefineNode(node) {
@@ -111,6 +114,11 @@ function migrateRefineWidgetOrder(node) {
     if (passesW) {
         passesW.value = clampPasses(widgetValue(passesW));
     }
+    const tilesW = widgetByName(node, "n_tiles");
+    if (tilesW) {
+        const n = Math.round(Number(widgetValue(tilesW)));
+        tilesW.value = Number.isFinite(n) ? Math.min(8, Math.max(1, n)) : 2;
+    }
     if (methodW && !looksLikeUpscaleMethod(widgetValue(methodW))) {
         methodW.value = "h3_latent";
     }
@@ -181,12 +189,33 @@ function migrateRefineWidgets(node) {
     setWidgetVisible(node, "sigmas", false);
     setWidgetVisible(node, "h3_latent_model", false);
     setWidgetVisible(node, "upscale_model", false);
+    setWidgetVisible(node, "confirm_first_pass", false);
+    setWidgetVisible(node, "first_pass_cache_status", false);
 }
 
 function isFollowAspect(value) {
     const v = String(value ?? "").trim();
     if (v === "0" || v === "0.0") return true;
     return !v || v === FOLLOW_DIRECTOR_ASPECT || v === "Follow Director";
+}
+
+function setAspectProgrammatic(node, value) {
+    const aspectW = widgetByName(node, "aspect_ratio");
+    if (!aspectW || widgetValue(aspectW) === value) return;
+    node._mmxAspectProgrammatic = true;
+    try {
+        aspectW.value = value;
+        aspectW.callback?.(value);
+    } finally {
+        node._mmxAspectProgrammatic = false;
+    }
+}
+
+function syncFollowDirectorAspect(node) {
+    if (!isRefineNode(node) || node._mmxAspectUserSet) return;
+    const aspectW = widgetByName(node, "aspect_ratio");
+    if (!aspectW || isCustomAspect(widgetValue(aspectW))) return;
+    setAspectProgrammatic(node, FOLLOW_DIRECTOR_ASPECT);
 }
 
 function readMode(node) {
@@ -225,220 +254,6 @@ function boolWidgetValue(node, name) {
     return value === true || value === 1 || String(value).toLowerCase() === "true";
 }
 
-function graphNodes() {
-    const graph = app.graph ?? app.canvas?.graph;
-    return graph?._nodes ?? graph?.nodes ?? [];
-}
-
-function connectedDirector(refineNode) {
-    const graph = refineNode?.graph ?? app.graph ?? app.canvas?.graph;
-    for (const candidate of graphNodes()) {
-        const cls = candidate?.comfyClass || candidate?.type || "";
-        if (!DIRECTOR_CLASSES.has(cls)) continue;
-        const input = candidate.inputs?.find((item) => item?.name === "refine");
-        if (input?.link == null) continue;
-        const link = graph?.links?.[input.link] ?? graph?._links?.[input.link];
-        if (String(link?.origin_id) === String(refineNode.id)) return candidate;
-    }
-    return null;
-}
-
-function directorValue(node, name, fallback) {
-    const value = widgetValue(widgetByName(node, name));
-    return value == null || value === "" ? fallback : value;
-}
-
-function directorHasSigmasLink(node) {
-    const inp = (node?.inputs || []).find((i) => String(i.name) === "sigmas");
-    if (!inp) return false;
-    if (inp.link != null) return true;
-    return Array.isArray(inp.links) && inp.links.length > 0;
-}
-
-function cacheStatusPayload(director) {
-    try {
-        director?._minimaxEditor?._writeTimelineWidget?.();
-    } catch {
-        /* best effort */
-    }
-    return {
-        node_id: String(director.id),
-        timeline_data: String(directorValue(director, "timeline_data", "")),
-        task_type: String(directorValue(director, "task_type", "")),
-        global_prompt: String(directorValue(director, "global_prompt", "")),
-        total_frames: Number(directorValue(director, "total_frames", 124)),
-        frame_rate: Number(directorValue(director, "frame_rate", 24)),
-        width: Number(directorValue(director, "width", 864)),
-        height: Number(directorValue(director, "height", 480)),
-        ref_max_size: Number(directorValue(director, "ref_max_size", 864)),
-        seed: Number(directorValue(director, "seed", 0)),
-        cfg: Number(directorValue(director, "cfg", 1)),
-        steps: Number(directorValue(director, "steps", 25)),
-        sampler: String(directorValue(director, "sampler", "")),
-        scheduler: String(directorValue(director, "scheduler", "")),
-        shift_video: Number(directorValue(director, "shift_video", 12)),
-        shift_audio: Number(directorValue(director, "shift_audio", 3)),
-        sigmas_linked: directorHasSigmasLink(director),
-    };
-}
-
-function renderCacheStatus(node, data, kind = "normal") {
-    const ui = node._mmxFirstPassCacheUI;
-    if (!ui) return;
-    const colors = {
-        normal: "var(--input-text, #ddd)",
-        ok: "#65d68a",
-        warn: "#f0bd58",
-        error: "#ef7777",
-        muted: "#aaa",
-    };
-    ui.body.style.color = colors[kind] || colors.normal;
-    if (typeof data === "string") {
-        ui.body.textContent = data;
-        return;
-    }
-    const total = Number(data?.segment_total || 0);
-    const cached = Number(data?.cached_count || 0);
-    const matched = Number(data?.matched_count || 0);
-    const seeds = Array.isArray(data?.cached_seeds) && data.cached_seeds.length
-        ? data.cached_seeds.join(", ")
-        : "—";
-    const diffLabels = {
-        seed: "seed",
-        start: "片段起点",
-        end: "片段终点（时间范围变化）",
-        prompt: "提示词",
-        negative: "反向提示词",
-        task_key: "生成模式",
-        width: "宽度",
-        height: "高度",
-        frame_rate: "帧率",
-        output_mode: "输出模式",
-        refs: "参考图片",
-        ref_audios: "参考音频",
-        ref_videos: "参考视频",
-        ref_video: "参考视频",
-        ref_video_start: "参考视频起点",
-        source_video: "源视频",
-        continuity: "段间连续性",
-        continuity_overlap: "上下文帧数",
-        cfg: "CFG",
-        steps: "一采步数",
-        sampler: "一采采样器",
-        scheduler: "调度器",
-        sigmas: "一采噪声表",
-        sigmas_source: "一采 SIGMAS 接线",
-        shift_video: "视频 shift",
-        shift_audio: "音频 shift",
-        "<invalid-meta>": "缓存信息损坏",
-    };
-    const diffs = Array.isArray(data?.diff_keys)
-        ? data.diff_keys
-            .filter((key) => key !== "<missing-cache>")
-            .slice(0, 8)
-            .map((key) => diffLabels[key] || key)
-        : [];
-    const lines = [
-        `一采缓存：${data?.exists ? `存在（${cached}/${total} 段）` : "不存在"}`,
-        `当前匹配：${data?.matches ? `是（${matched}/${total} 段）` : "否"}`,
-        `缓存 seed：${seeds}`,
-        `当前 seed：${data?.current_seed ?? "—"}`,
-    ];
-    if (diffs.length) lines.push(`差异：${diffs.join(", ")}`);
-    ui.body.textContent = lines.join("\n");
-}
-
-async function refreshFirstPassCacheStatus(node) {
-    if (!isRefineNode(node) || !boolWidgetValue(node, "confirm_first_pass")) return;
-    ensureFirstPassCacheUI(node);
-    const director = connectedDirector(node);
-    if (!director) {
-        renderCacheStatus(node, "未找到相连的 MiniMax H3 Director。", "warn");
-        return;
-    }
-    const seq = (node._mmxCacheStatusSeq || 0) + 1;
-    node._mmxCacheStatusSeq = seq;
-    renderCacheStatus(node, "正在检查一采缓存…", "muted");
-    try {
-        const response = await api.fetchApi("/minimax/director/first_pass_cache_status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(cacheStatusPayload(director)),
-        });
-        const data = await response.json();
-        if (seq !== node._mmxCacheStatusSeq) return;
-        if (!response.ok || data?.error) {
-            throw new Error(data?.error || `HTTP ${response.status}`);
-        }
-        renderCacheStatus(node, data, data.matches ? "ok" : (data.exists ? "warn" : "muted"));
-    } catch (error) {
-        if (seq !== node._mmxCacheStatusSeq) return;
-        renderCacheStatus(node, `缓存检查失败：${error?.message || error}`, "error");
-    }
-}
-
-function scheduleCacheStatusRefresh(node, delay = 120) {
-    clearTimeout(node._mmxCacheStatusTimer);
-    node._mmxCacheStatusTimer = setTimeout(() => refreshFirstPassCacheStatus(node), delay);
-}
-
-function refreshCacheStatusForDirector(director, delay = 120) {
-    for (const node of graphNodes()) {
-        if (
-            isRefineNode(node)
-            && boolWidgetValue(node, "confirm_first_pass")
-            && connectedDirector(node) === director
-        ) {
-            scheduleCacheStatusRefresh(node, delay);
-        }
-    }
-}
-
-function ensureFirstPassCacheUI(node) {
-    if (node._mmxFirstPassCacheUI || typeof node.addDOMWidget !== "function") return;
-    const root = document.createElement("div");
-    root.style.cssText = [
-        "box-sizing:border-box",
-        "margin:4px 8px",
-        "padding:8px 10px",
-        "border:1px solid var(--border-color, #555)",
-        "border-radius:6px",
-        "background:rgba(0,0,0,.16)",
-        "font:12px/1.45 sans-serif",
-    ].join(";");
-    const header = document.createElement("div");
-    header.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:5px";
-    const title = document.createElement("strong");
-    title.textContent = "一采缓存状态";
-    const refresh = document.createElement("button");
-    refresh.type = "button";
-    refresh.textContent = "重新检查";
-    refresh.style.cssText = "padding:2px 8px;cursor:pointer";
-    refresh.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        refreshFirstPassCacheStatus(node);
-    });
-    const body = document.createElement("div");
-    body.style.cssText = "white-space:pre-wrap;word-break:break-word;user-select:text;cursor:text";
-    body.textContent = "等待检查…";
-    for (const eventName of ["pointerdown", "mousedown", "click"]) {
-        body.addEventListener(eventName, (event) => event.stopPropagation());
-    }
-    header.append(title, refresh);
-    root.append(header, body);
-    const widget = node.addDOMWidget(CACHE_STATUS_WIDGET, "cache_status", root, {
-        getValue: () => "",
-        setValue: () => {},
-        getMinHeight: () => 104,
-        hideOnZoom: false,
-    });
-    // Status is derived UI, not a positional backend widget value.
-    widget.serialize = false;
-    if (!widget.options) widget.options = {};
-    widget.options.serialize = false;
-    node._mmxFirstPassCacheUI = { root, body, refresh, widget };
-}
 function syncRefineWidgetVisibility(node) {
     const mode = readMode(node);
     const upscale = mode === "upscale";
@@ -448,7 +263,7 @@ function syncRefineWidgetVisibility(node) {
     const follow = isFollowAspect(aspect);
     const custom = isCustomAspect(aspect);
     setWidgetVisible(node, "aspect_ratio", needsCanvas);
-    setWidgetVisible(node, "megapixels", needsCanvas && !follow && !custom);
+    setWidgetVisible(node, "megapixels", needsCanvas && !custom);
     setWidgetVisible(node, "width", needsCanvas && custom);
     setWidgetVisible(node, "height", needsCanvas && custom);
     const method = readUpscaleMethod(node);
@@ -465,11 +280,19 @@ function syncRefineWidgetVisibility(node) {
     setWidgetVisible(node, "sampler", !latentOnly);
     setWidgetVisible(node, "passes", !latentOnly);
     setWidgetVisible(node, "seed_mode", !latentOnly);
+    const nTiles = Math.max(1, Math.round(Number(widgetValue(widgetByName(node, "n_tiles"))) || 2));
+    const tiled = !latentOnly && nTiles > 1;
+    const seamOn = tiled && boolWidgetValue(node, "refine_seams");
+    setWidgetVisible(node, "n_tiles", !latentOnly);
+    setWidgetVisible(node, "tile_axis", tiled);
+    setWidgetVisible(node, "tile_overlap", tiled);
+    setWidgetVisible(node, "max_size_for_no_tile", tiled);
+    setWidgetVisible(node, "refine_seams", tiled);
+    setWidgetVisible(node, "refine_steps", seamOn);
     setWidgetVisible(node, "target_width", false);
     setWidgetVisible(node, "target_height", false);
-    const confirm = boolWidgetValue(node, "confirm_first_pass");
-    if (confirm) ensureFirstPassCacheUI(node);
-    setWidgetVisible(node, CACHE_STATUS_WIDGET, confirm);
+    setWidgetVisible(node, "confirm_first_pass", false);
+    setWidgetVisible(node, "first_pass_cache_status", false);
     if (needsCanvas && !follow && !custom) syncRefineComputedSize(node);
     try {
         const size = node.computeSize?.();
@@ -509,7 +332,12 @@ function installRefineResolutionUI(node) {
     };
     hookWidget(node, "mode", () => syncRefineWidgetVisibility(node));
     hookWidget(node, "upscale_method", () => syncRefineWidgetVisibility(node));
-    hookWidget(node, "aspect_ratio", onAspect);
+    hookWidget(node, "n_tiles", () => syncRefineWidgetVisibility(node));
+    hookWidget(node, "refine_seams", () => syncRefineWidgetVisibility(node));
+    hookWidget(node, "aspect_ratio", () => {
+        if (!node._mmxAspectProgrammatic) node._mmxAspectUserSet = true;
+        onAspect();
+    });
     hookWidget(node, "megapixels", () => syncRefineComputedSize(node));
     hookWidget(node, "width", () => {
         const w = widgetByName(node, "width");
@@ -519,18 +347,19 @@ function installRefineResolutionUI(node) {
         const w = widgetByName(node, "height");
         if (w) w.value = snapResolutionDim(widgetValue(w));
     });
-    hookWidget(node, "confirm_first_pass", () => {
-        syncRefineWidgetVisibility(node);
-        if (boolWidgetValue(node, "confirm_first_pass")) {
-            scheduleCacheStatusRefresh(node, 0);
-        }
-    });
     if (!node._mmxRefineOnWidgetChanged) {
         node._mmxRefineOnWidgetChanged = true;
         const prev = node.onWidgetChanged;
         node.onWidgetChanged = function (name, ...rest) {
             const r = prev?.apply(this, [name, ...rest]);
-            if (name === "mode" || name === "upscale_method" || name === "aspect_ratio" || name === "megapixels") {
+            if (
+                name === "mode"
+                || name === "upscale_method"
+                || name === "aspect_ratio"
+                || name === "megapixels"
+                || name === "n_tiles"
+                || name === "refine_seams"
+            ) {
                 migrateRefineWidgets(this);
                 syncRefineWidgetVisibility(this);
             }
@@ -539,12 +368,171 @@ function installRefineResolutionUI(node) {
     }
 }
 
+const DIRECTOR_REFINE_DETAIL_WIDGETS = [
+    "refine_mode",
+    "refine_upscale_method",
+    "refine_latent_upscale_model",
+    "refine_sampler",
+    "refine_passes",
+    "refine_sample_steps",
+    "refine_scheduler",
+    "refine_denoise",
+    "refine_extra_steps",
+    "refine_start_at_sigma",
+    "refine_end_at_sigma",
+    "refine_spacing",
+    "refine_seed_mode",
+    "refine_aspect_ratio",
+    "refine_megapixels",
+    "refine_width",
+    "refine_height",
+    "refine_skip_fl2v",
+    "refine_tile",
+    "refine_n_tiles",
+    "refine_tile_axis",
+    "refine_tile_overlap",
+    "refine_max_size_for_no_tile",
+    "refine_seams",
+    "refine_seam_steps",
+];
+
+function directorHasNamedLink(node, name) {
+    const inp = (node?.inputs || []).find((item) => String(item?.name) === name);
+    if (!inp) return false;
+    if (inp.link != null) return true;
+    return Array.isArray(inp.links) && inp.links.length > 0;
+}
+
+function directorHasRefineLink(node) {
+    return directorHasNamedLink(node, "refine");
+}
+
+function readDirectorRefineMode(node) {
+    const raw = String(widgetValue(widgetByName(node, "refine_mode")) ?? "").toLowerCase();
+    if (raw.includes("latent_upscale") || raw.includes("latent")) return "latent_upscale";
+    if (raw.includes("upscale")) return "upscale";
+    if (raw.includes("refine")) return "refine";
+    return "refine";
+}
+
+function syncDirectorBuiltinRefineWidgets(node) {
+    if (!node || !DIRECTOR_CLASSES.has(node.comfyClass || node.type || "")) return;
+    setWidgetVisible(node, "refine_model", false);
+    setWidgetVisible(node, "upscale_model", false);
+    setWidgetVisible(node, "refine_sigmas", false);
+    const linked = directorHasRefineLink(node);
+    const enabled = boolWidgetValue(node, "refine_enable");
+    setWidgetVisible(node, "refine_enable", !linked);
+    const show = enabled && !linked;
+    for (const name of DIRECTOR_REFINE_DETAIL_WIDGETS) {
+        setWidgetVisible(node, name, false);
+    }
+    if (!show) {
+        try {
+            const size = node.computeSize?.();
+            if (Array.isArray(size) && size.length >= 2) {
+                node.setSize?.([node.size?.[0] || size[0], size[1]]);
+            }
+        } catch {
+            /* ignore */
+        }
+        node.setDirtyCanvas?.(true, true);
+        return;
+    }
+    const mode = readDirectorRefineMode(node);
+    const upscale = mode === "upscale";
+    const latentOnly = mode === "latent_upscale";
+    const needsCanvas = upscale || latentOnly;
+    const aspect = widgetValue(widgetByName(node, "refine_aspect_ratio"));
+    const follow = isFollowAspect(aspect);
+    const custom = isCustomAspect(aspect);
+    const method = String(widgetValue(widgetByName(node, "refine_upscale_method")) ?? "").trim().toLowerCase();
+    const showH3Model = latentOnly || (upscale && method === "h3_latent");
+    const sigmasWired = directorHasNamedLink(node, "refine_sigmas");
+    const tileOn = !latentOnly && boolWidgetValue(node, "refine_tile");
+    const seamOn = tileOn && boolWidgetValue(node, "refine_seams");
+    setWidgetVisible(node, "refine_mode", true);
+    setWidgetVisible(node, "refine_upscale_method", upscale);
+    setWidgetVisible(node, "refine_latent_upscale_model", showH3Model);
+    setWidgetVisible(node, "refine_sampler", !latentOnly);
+    setWidgetVisible(node, "refine_passes", !latentOnly);
+    setWidgetVisible(node, "refine_sample_steps", !latentOnly && !sigmasWired);
+    setWidgetVisible(node, "refine_scheduler", !latentOnly && !sigmasWired);
+    setWidgetVisible(node, "refine_denoise", !latentOnly && !sigmasWired);
+    const extraOn = Number(widgetValue(widgetByName(node, "refine_extra_steps")) || 0) > 0;
+    setWidgetVisible(node, "refine_extra_steps", !latentOnly && !sigmasWired);
+    setWidgetVisible(node, "refine_start_at_sigma", !latentOnly && !sigmasWired && extraOn);
+    setWidgetVisible(node, "refine_end_at_sigma", !latentOnly && !sigmasWired && extraOn);
+    setWidgetVisible(node, "refine_spacing", !latentOnly && !sigmasWired && extraOn);
+    setWidgetVisible(node, "refine_seed_mode", !latentOnly);
+    setWidgetVisible(node, "refine_aspect_ratio", needsCanvas);
+    setWidgetVisible(node, "refine_megapixels", needsCanvas && !custom);
+    setWidgetVisible(node, "refine_width", needsCanvas && custom);
+    setWidgetVisible(node, "refine_height", needsCanvas && custom);
+    setWidgetVisible(node, "refine_skip_fl2v", true);
+    setWidgetVisible(node, "refine_tile", !latentOnly);
+    setWidgetVisible(node, "refine_n_tiles", tileOn);
+    setWidgetVisible(node, "refine_tile_axis", tileOn);
+    setWidgetVisible(node, "refine_tile_overlap", tileOn);
+    setWidgetVisible(node, "refine_max_size_for_no_tile", tileOn);
+    setWidgetVisible(node, "refine_seams", tileOn);
+    setWidgetVisible(node, "refine_seam_steps", seamOn);
+    if (needsCanvas && !follow && !custom) {
+        const mpW = widgetByName(node, "refine_megapixels");
+        const widthW = widgetByName(node, "refine_width");
+        const heightW = widgetByName(node, "refine_height");
+        const resolved = resolutionFromSelector(aspect, widgetValue(mpW) ?? 1.0);
+        if (resolved) {
+            if (widthW) widthW.value = resolved.width;
+            if (heightW) heightW.value = resolved.height;
+        }
+    }
+    try {
+        const size = node.computeSize?.();
+        if (Array.isArray(size) && size.length >= 2) {
+            node.setSize?.([node.size?.[0] || size[0], size[1]]);
+        }
+    } catch {
+        /* ignore */
+    }
+    node.setDirtyCanvas?.(true, true);
+}
+
+function hookDirectorBuiltinRefine(node) {
+    if (!node || node._mmxDirectorRefineHooked) return;
+    node._mmxDirectorRefineHooked = true;
+    const names = ["refine_enable", "refine_mode", "refine_upscale_method", "refine_aspect_ratio", "refine_n_tiles", "refine_tile", "refine_seams", "refine_extra_steps", "refine_megapixels"];
+    for (const name of names) {
+        hookWidget(node, name, () => {
+            syncDirectorBuiltinRefineWidgets(node);
+            if (name === "refine_enable") {
+                applyDirectorRefinePassDefaults(node._minimaxEditor, directorRefineActive(node));
+                rememberDirectorRefineActive(node);
+            }
+        });
+    }
+}
+
+function rememberDirectorRefineActive(node) {
+    if (!node) return;
+    node._mmxRefineActive = directorRefineActive(node);
+}
+
+function maybeApplyDirectorPassDefaults(node) {
+    const now = directorRefineActive(node);
+    if (node._mmxRefineActive === now) return;
+    const prev = node._mmxRefineActive;
+    node._mmxRefineActive = now;
+    if (prev === undefined) return;
+    applyDirectorRefinePassDefaults(node._minimaxEditor, now);
+}
+
 function refreshRefineNode(node) {
     if (!isRefineNode(node)) return;
     installRefineResolutionUI(node);
     migrateRefineWidgets(node);
+    syncFollowDirectorAspect(node);
     syncRefineWidgetVisibility(node);
-    if (boolWidgetValue(node, "confirm_first_pass")) scheduleCacheStatusRefresh(node);
 }
 
 function refreshAllRefineNodes() {
@@ -566,16 +554,46 @@ app.registerExtension({
     name: "ComfyUI.MiniMaxH3DirectorRefine",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (DIRECTOR_CLASSES.has(nodeData?.name)) {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function (...args) {
+                const r = onNodeCreated?.apply(this, args);
+                hookDirectorBuiltinRefine(this);
+                syncDirectorBuiltinRefineWidgets(this);
+                rememberDirectorRefineActive(this);
+                queueMicrotask(() => {
+                    syncDirectorBuiltinRefineWidgets(this);
+                    rememberDirectorRefineActive(this);
+                });
+                return r;
+            };
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (...args) {
+                const r = onConfigure?.apply(this, args);
+                hookDirectorBuiltinRefine(this);
+                syncDirectorBuiltinRefineWidgets(this);
+                rememberDirectorRefineActive(this);
+                return r;
+            };
             const onWidgetChanged = nodeType.prototype.onWidgetChanged;
             nodeType.prototype.onWidgetChanged = function (...args) {
                 const result = onWidgetChanged?.apply(this, args);
-                refreshCacheStatusForDirector(this);
+                const name = String(args[0] || "");
+                scheduleDirectorPassCacheRefresh(this);
+                refreshAllRefineNodes();
+                syncDirectorBuiltinRefineWidgets(this);
+                if (name === "refine_enable") {
+                    applyDirectorRefinePassDefaults(this._minimaxEditor, directorRefineActive(this));
+                    rememberDirectorRefineActive(this);
+                }
                 return result;
             };
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (...args) {
                 const result = onConnectionsChange?.apply(this, args);
-                refreshCacheStatusForDirector(this);
+                scheduleDirectorPassCacheRefresh(this);
+                refreshAllRefineNodes();
+                syncDirectorBuiltinRefineWidgets(this);
+                maybeApplyDirectorPassDefaults(this);
                 return result;
             };
             return;
@@ -597,33 +615,42 @@ app.registerExtension({
         nodeType.prototype.onConnectionsChange = function (...args) {
             const r = onConnectionsChange?.apply(this, args);
             syncRefineWidgetVisibility(this);
-            scheduleCacheStatusRefresh(this);
+            const director = this.graph?._nodes?.find?.((n) => {
+                const inp = n?.inputs?.find((item) => item?.name === "refine");
+                if (inp?.link == null) return false;
+                const link = this.graph?.links?.[inp.link] ?? this.graph?._links?.[inp.link];
+                return String(link?.origin_id) === String(this.id);
+            });
+            if (director) scheduleDirectorPassCacheRefresh(director);
             return r;
         };
     },
     nodeCreated(node) {
-        const cls = node?.comfyClass || node?.type || "";
-        if (DIRECTOR_CLASSES.has(cls)) {
-            node._mmxRefreshFirstPassCache = (delay = 0) => {
-                refreshCacheStatusForDirector(node, delay);
-            };
-            return;
-        }
         scheduleRefineRefresh(node);
+        if (DIRECTOR_CLASSES.has(node?.comfyClass || node?.type || "")) {
+            hookDirectorBuiltinRefine(node);
+            syncDirectorBuiltinRefineWidgets(node);
+            rememberDirectorRefineActive(node);
+        }
     },
     loadedGraphNode(node) {
         scheduleRefineRefresh(node);
+        if (DIRECTOR_CLASSES.has(node?.comfyClass || node?.type || "")) {
+            hookDirectorBuiltinRefine(node);
+            syncDirectorBuiltinRefineWidgets(node);
+            rememberDirectorRefineActive(node);
+        }
     },
     afterConfigureGraph() {
         refreshAllRefineNodes();
         setTimeout(refreshAllRefineNodes, 100);
-    },
-});
-
-api.addEventListener?.("executed", () => {
-    for (const node of graphNodes()) {
-        if (isRefineNode(node) && boolWidgetValue(node, "confirm_first_pass")) {
-            scheduleCacheStatusRefresh(node, 250);
+        const graph = app.graph ?? app.canvas?.graph;
+        for (const node of graph?._nodes ?? graph?.nodes ?? []) {
+            if (DIRECTOR_CLASSES.has(node?.comfyClass || node?.type || "")) {
+                hookDirectorBuiltinRefine(node);
+                syncDirectorBuiltinRefineWidgets(node);
+                rememberDirectorRefineActive(node);
+            }
         }
-    }
+    },
 });

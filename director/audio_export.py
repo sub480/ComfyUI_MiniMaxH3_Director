@@ -11,6 +11,7 @@ from typing import Any
 import torch
 
 from ..lib.audio_io import (
+    H3_AUDIO_SAMPLE_RATE,
     diagnose_source_audio_failure,
     extract_timeline_audio,
     frames_to_audio_samples,
@@ -19,7 +20,10 @@ from ..lib.audio_io import (
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.audio_export")
 
-SILENT_SAMPLE_RATE = 44100
+# Generated MiniMax H3 audio is 32 kHz. Do not default empty/merge clocks to 44.1 kHz
+# or 32 k PCM gets tagged/padded as 44.1 k (waveform looks short / plays fast).
+SILENT_SAMPLE_RATE = H3_AUDIO_SAMPLE_RATE
+REF_MUX_SAMPLE_RATE = 44100
 
 AUDIO_MODE_GENERATE = "generate"
 AUDIO_MODE_SOURCE = "source"
@@ -72,14 +76,14 @@ def _normalize_audio(audio: dict[str, Any] | None) -> dict[str, Any] | None:
     if audio is None or not _audio_has_samples(audio):
         return audio
     wave = audio["waveform"]
-    sr = int(audio.get("sample_rate") or SILENT_SAMPLE_RATE)
+    sr = int(audio.get("sample_rate") or REF_MUX_SAMPLE_RATE)
     try:
         import torchaudio
         if not isinstance(wave, torch.Tensor) or wave.ndim != 3:
             return audio
-        if sr != SILENT_SAMPLE_RATE:
-            wave = torchaudio.functional.resample(wave, sr, SILENT_SAMPLE_RATE)
-            sr = SILENT_SAMPLE_RATE
+        if sr != REF_MUX_SAMPLE_RATE:
+            wave = torchaudio.functional.resample(wave, sr, REF_MUX_SAMPLE_RATE)
+            sr = REF_MUX_SAMPLE_RATE
         ch = int(wave.shape[1])
         if ch < 2:
             wave = wave.repeat(1, 2, 1)
@@ -421,7 +425,12 @@ def build_director_audio_outputs(
         for i, tensor in enumerate(images_out):
             gen = segment_audios[i] if i < len(segment_audios) else None
             if _audio_has_samples(gen):
-                n_frames = int(getattr(tensor, "shape", [0])[0] or 0)
+                if segment_frame_counts is not None and i < len(segment_frame_counts):
+                    n_frames = int(segment_frame_counts[i] or 0)
+                else:
+                    n_frames = 0
+                if n_frames <= 0:
+                    n_frames = int(getattr(tensor, "shape", [0])[0] or 0)
                 sr = int(gen.get("sample_rate") or SILENT_SAMPLE_RATE)
                 outputs.append(
                     _pad_or_trim_audio_to_frames(gen, frame_count=n_frames, fps=fps, sample_rate=sr)
@@ -471,7 +480,12 @@ def build_director_audio_outputs(
                 extracted = None
                 source_fallback = "silent"
             audio = _coerce_audio_output(extracted, sample_rate=silent_sample_rate)
-            n_frames = int(getattr(tensor, "shape", [0])[0] or seg.frame_count or 0)
+            if segment_frame_counts is not None and i < len(segment_frame_counts):
+                n_frames = int(segment_frame_counts[i] or 0)
+            else:
+                n_frames = 0
+            if n_frames <= 0:
+                n_frames = int(getattr(tensor, "shape", [0])[0] or seg.frame_count or 0)
             sr = int(audio.get("sample_rate") or silent_sample_rate)
             outputs.append(
                 _pad_or_trim_audio_to_frames(

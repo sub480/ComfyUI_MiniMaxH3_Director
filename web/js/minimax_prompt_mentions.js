@@ -43,10 +43,10 @@ const MENTION_STYLES = `
   resize:none!important;min-height:0!important;flex:none!important
 }
 .bd-token-editor{
-  width:100%;min-height:96px;flex:1 1 auto;box-sizing:border-box;
+  width:100%;min-height:96px;flex:1 1 auto;height:auto;box-sizing:border-box;
   background:#181818;border:1px solid #333;border-radius:6px;color:#eee;padding:8px;
   font-size:12px;font-family:inherit;line-height:1.45;outline:none;overflow:auto;white-space:pre-wrap;word-break:break-word;
-  resize:vertical
+  resize:none
 }
 .bd-token-editor:focus{border-color:#4a7a5a;box-shadow:0 0 0 1px rgba(79,255,143,.18)}
 .bd-token-editor:empty:before{content:attr(data-placeholder);color:#666;pointer-events:none}
@@ -71,13 +71,20 @@ body.bd-token-resizing{cursor:ns-resize!important;user-select:none!important}
 }
 .bd-v2v-layout .bd-token-editor{min-height:180px}
 .bd-batch-prompts .bd-token-editor{
-  min-height:88px;background:#181818;border:1px solid #333;border-radius:4px;padding:6px;font-size:11px;line-height:1.35
+  min-height:88px;flex:1 1 auto;height:auto;overflow:auto;resize:none;background:#181818;border:1px solid #333;border-radius:4px;padding:6px;font-size:11px;line-height:1.35
 }
-.bd-batch-plain .bd-batch-prompts .bd-token-editor,.bd-batch-source .bd-batch-prompts .bd-token-editor{
-  min-height:120px;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
+.bd-batch-plain .bd-batch-prompts .bd-token-editor,.bd-batch-source .bd-batch-prompts .bd-token-editor,
+.bd-batch-fl2v .bd-batch-prompts .bd-token-editor,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-editor{
+  min-height:88px;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
 }
 .bd-batch-r2v .bd-batch-prompts .bd-token-editor{
-  min-height:360px;height:100%;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
+  min-height:120px;height:auto;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
+}
+.bd-fl2v-prompt-col .bd-token-editor,.bd-fl2v-detail .bd-token-editor{
+  min-height:120px;flex:1 1 auto;height:auto;overflow:auto;resize:none;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px
+}
+.bd-prompt-col .bd-token-editor{
+  flex:1 1 auto;min-height:96px;height:auto;overflow:auto;resize:none
 }
 
 .bd-token{

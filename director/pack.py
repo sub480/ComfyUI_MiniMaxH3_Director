@@ -26,6 +26,7 @@ import folder_paths
 from aiohttp import web
 
 from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
+from .frame_align import H3_FPS
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.pack")
 
@@ -39,6 +40,7 @@ VIDEO_FILE_RE = re.compile(r"^Video([1-3])(\.[A-Za-z0-9]{1,8})$", re.I)
 AUDIO_FILE_RE = re.compile(r"^Audio([1-3])(\.[A-Za-z0-9]{1,8})$", re.I)
 START_FILE_RE = re.compile(r"^start(\.[A-Za-z0-9]{1,8})$", re.I)
 END_FILE_RE = re.compile(r"^end(\.[A-Za-z0-9]{1,8})$", re.I)
+SOURCE_FILE_RE = re.compile(r"^source(\.[A-Za-z0-9]{1,8})$", re.I)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mpg", ".mpeg", ".mts", ".ts"}
@@ -429,6 +431,7 @@ def _group_json(seg: dict) -> dict:
         "refVideos": seg.get("refVideos") or seg.get("ref_videos") or [],
         "continuityFromPrev": seg.get("continuityFromPrev", seg.get("continuity_from_prev")),
         "refImageSize": seg.get("refImageSize") or seg.get("ref_image_size"),
+        "passMode": seg.get("passMode") or seg.get("pass_mode"),
     }
     if isinstance(seg.get("genImage"), dict):
         out["genImage"] = {
@@ -454,11 +457,15 @@ def _explode_card(card: dict, folder: str, staging: Path, missing: list[str], dr
     _rewrite_image_list(card.get("refs") or [], folder, staging, missing, dry_run, sizes)
     _rewrite_audio_list(card.get("refAudios") or card.get("ref_audios") or [], folder, staging, missing, dry_run, sizes)
     _rewrite_video_list(card.get("refVideos") or card.get("ref_videos") or [], folder, staging, missing, dry_run, sizes)
+    start_ref = card.get("startImage") if isinstance(card.get("startImage"), dict) else None
+    has_start = bool(start_ref and (start_ref.get("imageFile") or start_ref.get("image_file")))
     if isinstance(card.get("genImage"), dict):
-        _rewrite_image_ref(card["genImage"], "start", folder, staging, missing, dry_run, sizes)
+        # i2v-only packs keep historical start.*; mixed fl2v also has startImage → source.*
+        dest = "source" if has_start else "start"
+        _rewrite_image_ref(card["genImage"], dest, folder, staging, missing, dry_run, sizes)
         if card["genImage"].get("imageFile"):
             card["imageFile"] = card["genImage"]["imageFile"]
-    elif card.get("imageFile"):
+    elif card.get("imageFile") and not has_start:
         dummy = {"imageFile": card.get("imageFile"), "subfolder": card.get("subfolder") or "", "type": card.get("type") or "input"}
         _rewrite_image_ref(dummy, "start", folder, staging, missing, dry_run, sizes)
         card["imageFile"] = dummy.get("imageFile") or card.get("imageFile")
@@ -700,8 +707,9 @@ def _scan_slot_files(folder: Path) -> dict[str, list[dict]]:
     videos: list[dict] = []
     start = None
     end = None
+    source = None
     if not folder.is_dir():
-        return {"refs": refs, "refAudios": audios, "refVideos": videos, "startImage": start, "endImage": end}
+        return {"refs": refs, "refAudios": audios, "refVideos": videos, "startImage": start, "endImage": end, "genImage": source}
     pack_folder = _posix(folder.name if folder.parent.name != "asset_groups" else f"asset_groups/{folder.name}")
     if folder.name == "shared_params":
         pack_folder = "shared_params"
@@ -735,10 +743,13 @@ def _scan_slot_files(folder: Path) -> dict[str, list[dict]]:
         elif END_FILE_RE.fullmatch(name):
             rel = f"{pack_folder}/{name}"
             end = {"imageFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder}
+        elif SOURCE_FILE_RE.fullmatch(name):
+            rel = f"{pack_folder}/{name}"
+            source = {"imageFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder}
     refs.sort(key=lambda r: int(r["index"]))
     audios.sort(key=lambda r: int(r["index"]))
     videos.sort(key=lambda r: int(r["index"]))
-    return {"refs": refs, "refAudios": audios, "refVideos": videos, "startImage": start, "endImage": end}
+    return {"refs": refs, "refAudios": audios, "refVideos": videos, "startImage": start, "endImage": end, "genImage": source}
 
 
 def _merge_refs(json_refs: list | None, scanned: list) -> list:
@@ -790,8 +801,8 @@ def _assemble_timeline(extracted: Path, pack_meta: dict) -> dict:
         dur = raw.get("durationSec")
         start_img = raw.get("startImage") if isinstance(raw.get("startImage"), dict) else scanned["startImage"]
         end_img = raw.get("endImage") if isinstance(raw.get("endImage"), dict) else scanned["endImage"]
-        gen = raw.get("genImage") if isinstance(raw.get("genImage"), dict) else None
-        if scanned["startImage"] and not (gen and gen.get("imageFile")) and not (start_img and start_img.get("imageFile")):
+        gen = raw.get("genImage") if isinstance(raw.get("genImage"), dict) else scanned.get("genImage")
+        if scanned.get("startImage") and not (gen and gen.get("imageFile")) and not (start_img and start_img.get("imageFile")):
             gen = {"imageFile": scanned["startImage"]["imageFile"], "fileName": scanned["startImage"]["fileName"]}
         seg = {
             "id": raw.get("id") or f"g{i}",
@@ -830,7 +841,7 @@ def _assemble_timeline(extracted: Path, pack_meta: dict) -> dict:
         "version": 5,
         "timelineMode": mode,
         "editMode": "segment" if mode != "video" else "global",
-        "frameRate": output.get("frameRate") or 24,
+        "frameRate": H3_FPS,
         "totalFrames": cursor or 124,
         "global": global_block,
         "output": output or {

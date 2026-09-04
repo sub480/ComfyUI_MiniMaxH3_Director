@@ -21,18 +21,31 @@ import {
     fileForComfyUpload,
 } from "./minimax_gen_timeline.js";
 import { t } from "./minimax_i18n.js";
+import { patchGroupLivePreview } from "./minimax_image_batch.js";
 
 export const FL2V_STYLES = `
-.bd-fl2v-detail-wrap{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}
+.bd-fl2v-detail-wrap{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;min-height:0}
+.bd-fl2v-detail-wrap:not(.hidden){flex:1 1 0;overflow:hidden}
+.bd-main>.bd-fl2v-detail-wrap:not(.hidden)~*,
+.bd-main>:not(.bd-fl2v-detail-wrap){flex-shrink:0}
+.bd-fl2v-hint,.bd-fl2v-workbench{flex-shrink:0}
 .bd-fl2v-hint{color:#aaa;font-size:11px;line-height:1.45;background:#181818;border:1px solid #333;border-radius:6px;padding:8px 10px}
 .bd-fl2v-hint b{color:#4fff8f;font-weight:600}
-.bd-fl2v-workbench{display:flex;flex-wrap:wrap;gap:12px;align-items:stretch;width:100%;box-sizing:border-box}
-.bd-fl2v-workbench .bd-live-sample{flex:1 1 320px;min-width:280px;max-width:560px;min-height:320px;display:flex;flex-direction:column}
-.bd-fl2v-workbench .bd-live-sample .bd-live-sample-body{flex:1 1 auto;min-height:260px;max-height:none}
-.bd-fl2v-workbench .bd-live-sample .bd-live-sample-body img{width:100%;height:100%;max-height:420px;object-fit:contain}
-.bd-fl2v-workbench .bd-fl2v-shots{flex:2 1 420px;min-width:220px}
-.bd-fl2v-shots{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch}
-.bd-fl2v-shot{width:220px;box-sizing:border-box;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px;cursor:default;transition:border-color .15s,opacity .15s}
+.bd-fl2v-workbench{display:flex;flex-direction:column;gap:12px;align-items:stretch;width:100%;box-sizing:border-box}
+.bd-fl2v-workbench .bd-fl2v-shots{flex:1 1 auto;min-width:0;width:100%}
+.bd-fl2v-shots{display:flex;flex-direction:column;gap:10px;align-items:stretch;width:100%}
+.bd-fl2v-shot{width:100%;box-sizing:border-box;background:linear-gradient(165deg,#1a1a1a 0%,#141414 55%,#111 100%);border:1px solid #2c2c2c;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;cursor:default;transition:border-color .15s,opacity .15s}
+.bd-fl2v-shot-body{display:grid;grid-template-columns:minmax(200px,.7fr) minmax(0,1.4fr);gap:12px;align-items:stretch;width:100%}
+.bd-wrap.bd-live-preview-on .bd-fl2v-shot-body{grid-template-columns:minmax(200px,.7fr) minmax(0,1.3fr) minmax(200px,.7fr)}
+.bd-fl2v-params{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bd-fl2v-prompt-col{display:flex;flex-direction:column;gap:6px;min-width:0;min-height:0;height:100%;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px}
+.bd-fl2v-prompt-col .bd-label{color:#eaeaea;font-size:11px;font-weight:700;flex-shrink:0}
+.bd-fl2v-prompt-col textarea{width:100%;flex:1 1 auto;min-height:120px;height:auto;background:#101010;border:1px solid #2e2e2e;border-radius:8px;color:#eee;padding:10px;resize:none;overflow-y:auto;font-size:12px;line-height:1.45;box-sizing:border-box;font-family:inherit}
+.bd-fl2v-preview-col{display:flex;flex-direction:column;gap:6px;min-width:0;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;box-sizing:border-box}
+.bd-fl2v-preview-col .bd-label{color:#eaeaea;font-size:11px;font-weight:700}
+.bd-wrap:not(.bd-live-preview-on) .bd-fl2v-preview-col{display:none!important}
+.bd-fl2v-preview{width:100%;flex:1 1 auto;min-height:160px;border:0;border-radius:0;background:transparent;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#555;font-size:10px;text-align:center;box-sizing:border-box}
+.bd-fl2v-preview img{width:100%;max-height:220px;object-fit:contain;display:block}
 .bd-fl2v-shot:hover{border-color:#555}
 .bd-fl2v-shot.selected{border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.35)}
 .bd-fl2v-shot.shot-dragging{opacity:.4}
@@ -69,14 +82,19 @@ export const FL2V_STYLES = `
 .bd-fl2v-shot-row{display:flex;align-items:center;gap:6px;color:#ddd;font-size:11px;min-width:0}
 .bd-fl2v-shot-row input{width:56px}
 .bd-fl2v-shot-foot .bd-r2v-pick-existing{flex-shrink:0;cursor:pointer}
-.bd-fl2v-detail{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px}
+.bd-fl2v-detail{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px;min-height:0}
+.bd-fl2v-detail:not(.hidden){flex:1 1 0;overflow:hidden}
 .bd-fl2v-detail.hidden{display:none!important}
-.bd-fl2v-detail .bd-label{color:#888;font-size:10px;margin-top:2px}
+.bd-fl2v-detail .bd-label{color:#888;font-size:10px;margin-top:2px;flex-shrink:0}
 .bd-fl2v-detail textarea{width:100%;min-height:64px;background:#141414;border:1px solid #333;border-radius:4px;color:#eee;padding:6px;resize:vertical;font-size:11px;box-sizing:border-box;font-family:inherit;line-height:1.35}
+.bd-fl2v-detail textarea[data-r="fl2v-prompt"]{flex:1 1 auto;min-height:64px;height:auto;resize:none;overflow-y:auto}
 .bd-fl2v-detail textarea:disabled{opacity:.45;cursor:not-allowed}
 .bd-fl2v-total-wrap{display:inline-flex;align-items:center;gap:6px}
 .bd-fl2v-total-wrap.hidden{display:none!important}
 .bd-fl2v-total-wrap input:disabled{opacity:.75;cursor:default;color:#ccc}
+@media(max-width:860px){
+.bd-fl2v-shot-body,.bd-wrap.bd-live-preview-on .bd-fl2v-shot-body{grid-template-columns:1fr}
+}
 `;
 
 const DEFAULT_TOTAL = defaultFrameCount("fl2v");
@@ -169,6 +187,14 @@ export function newFl2vShot(overrides = {}) {
     if (overrides.continuityFromPrev != null || overrides.continuity_from_prev != null) {
         shot.continuityFromPrev = overrides.continuityFromPrev ?? overrides.continuity_from_prev;
     }
+    if (overrides.previewB64) shot.previewB64 = overrides.previewB64;
+    if (Array.isArray(overrides.previewFrames) && overrides.previewFrames.length) {
+        shot.previewFrames = overrides.previewFrames;
+        shot.previewFps = overrides.previewFps || 16;
+    }
+    if (overrides.previewLive != null) shot.previewLive = !!overrides.previewLive;
+    if (overrides.previewStep != null) shot.previewStep = overrides.previewStep;
+    if (overrides.previewTotalSteps != null) shot.previewTotalSteps = overrides.previewTotalSteps;
     return shot;
 }
 
@@ -785,15 +811,16 @@ export function stripFl2vPromptBody(text) {
 }
 
 export function flushFl2vPromptDraft(editor) {
-    const ui = editor?.fl2vUi;
-    if (!ui?.prompt && !ui?.negative) return;
     const shots = editor.timeline?.shots || [];
+    editor?.fl2vUi?.shotsEl?.querySelectorAll("[data-r='shot-prompt']").forEach((ta) => {
+        const i = parseInt(ta.closest("[data-shot-index]")?.dataset?.shotIndex, 10);
+        if (Number.isFinite(i) && shots[i]) shots[i].prompt = ta.value || "";
+    });
+    const ui = editor?.fl2vUi;
     const idx = editor._fl2vPromptSegIndex;
-    if (!Number.isFinite(idx) || idx < 0 || idx >= shots.length) return;
-    const shot = shots[idx];
-    if (!shot) return;
-    if (ui.prompt) shot.prompt = ui.prompt.value || "";
-    if (ui.negative) shot.negativePrompt = ui.negative.value || "";
+    if (ui?.negative && Number.isFinite(idx) && shots[idx]) {
+        shots[idx].negativePrompt = ui.negative.value || "";
+    }
 }
 
 /** Output canvas W/H for shot-slot aspect-ratio (matches 输出分辨率). */
@@ -1134,33 +1161,60 @@ function renderFl2vShotCards(editor) {
                 ${showCont ? `<div class="bd-fl2v-shot-cont"><label class="bd-fl2v-continuity" draggable="false" title="${t("tooltip.segmentContinuityFromPrev")}"><input type="checkbox" data-r="shot-continuity" ${contChecked ? "checked" : ""}><span>${t("batch.continuityFromPrev")}</span></label></div>` : ""}
                 <span class="bd-fl2v-shot-meta">${badge} · ${fc}f</span>
             </div>
-            <div class="bd-fl2v-slots">
-                <div class="bd-fl2v-slot-wrap${startUrl ? " has-img" : ""}">
-                    <div class="bd-fl2v-slot${startUrl ? " has-img" : ""}" data-slot="start" title="${t("tooltip.fl2vStartSlot")}">
-                        ${startUrl ? `<span class="tag start">${t("fl2v.tag.start")}</span>` : ""}
-                        ${startUrl ? `<img src="${startUrl}" alt="">` : `<span class="ph">${t("panel.fl2v.startRequired")}</span>`}
+            <div class="bd-fl2v-shot-body">
+                <div class="bd-fl2v-params">
+                    <div class="bd-fl2v-slots">
+                        <div class="bd-fl2v-slot-wrap${startUrl ? " has-img" : ""}">
+                            <div class="bd-fl2v-slot${startUrl ? " has-img" : ""}" data-slot="start" title="${t("tooltip.fl2vStartSlot")}">
+                                ${startUrl ? `<span class="tag start">${t("fl2v.tag.start")}</span>` : ""}
+                                ${startUrl ? `<img src="${startUrl}" alt="">` : `<span class="ph">${t("panel.fl2v.startRequired")}</span>`}
+                            </div>
+                            ${startUrl ? `<button type="button" class="x" data-clear="start" title="${t("tooltip.fl2vClear")}" draggable="false">×</button>` : ""}
+                        </div>
+                        <div class="bd-fl2v-slot-wrap${endUrl ? " has-img" : ""}">
+                            <div class="bd-fl2v-slot${endUrl ? " has-img" : ""}" data-slot="end" title="${t("tooltip.fl2vEndSlot")}">
+                                ${endUrl ? `<span class="tag end">${t("fl2v.tag.end")}</span>` : ""}
+                                ${endUrl ? `<img src="${endUrl}" alt="">` : `<span class="ph">${t("panel.fl2v.endOptional")}</span>`}
+                            </div>
+                            ${endUrl ? `<button type="button" class="x" data-clear="end" title="${t("tooltip.fl2vClear")}" draggable="false">×</button>` : ""}
+                        </div>
                     </div>
-                    ${startUrl ? `<button type="button" class="x" data-clear="start" title="${t("tooltip.fl2vClear")}" draggable="false">×</button>` : ""}
-                </div>
-                <div class="bd-fl2v-slot-wrap${endUrl ? " has-img" : ""}">
-                    <div class="bd-fl2v-slot${endUrl ? " has-img" : ""}" data-slot="end" title="${t("tooltip.fl2vEndSlot")}">
-                        ${endUrl ? `<span class="tag end">${t("fl2v.tag.end")}</span>` : ""}
-                        ${endUrl ? `<img src="${endUrl}" alt="">` : `<span class="ph">${t("panel.fl2v.endOptional")}</span>`}
+                    <div class="bd-fl2v-shot-foot">
+                        <label class="bd-fl2v-shot-row" title="${t("tooltip.fl2vShotDuration")}">
+                            ${t("panel.fl2v.duration")}
+                            <input type="number" class="bd-num" data-r="shot-sec" min="${minDurationSec()}" max="${maxDurationSec()}" step="0.1" value="${shot.durationSec}">
+                            ${t("panel.fl2v.seconds")}
+                        </label>
+                        <button type="button" class="bd-r2v-pick-existing" data-a="fl2v-pick-existing" title="${t("mediaPicker.pickExistingHint")}">${t("mediaPicker.pickExisting")}</button>
                     </div>
-                    ${endUrl ? `<button type="button" class="x" data-clear="end" title="${t("tooltip.fl2vClear")}" draggable="false">×</button>` : ""}
                 </div>
-            </div>
-            <div class="bd-fl2v-shot-foot">
-                <label class="bd-fl2v-shot-row" title="${t("tooltip.fl2vShotDuration")}">
-                    ${t("panel.fl2v.duration")}
-                    <input type="number" class="bd-num" data-r="shot-sec" min="${minDurationSec()}" max="${maxDurationSec()}" step="0.1" value="${shot.durationSec}">
-                    ${t("panel.fl2v.seconds")}
-                </label>
-                <button type="button" class="bd-r2v-pick-existing" data-a="fl2v-pick-existing" title="${t("mediaPicker.pickExistingHint")}">${t("mediaPicker.pickExisting")}</button>
+                <div class="bd-fl2v-prompt-col">
+                    <span class="bd-label">${t("panel.fl2v.shotPrompt")}</span>
+                    <textarea data-r="shot-prompt" placeholder="${t("placeholder.fl2vShot")}"></textarea>
+                </div>
+                <div class="bd-fl2v-preview-col">
+                    <span class="bd-label">${t("liveSample.title")}</span>
+                    <div class="bd-fl2v-preview" data-r="shot-preview"></div>
+                </div>
             </div>
         `;
+        const promptTa = card.querySelector('[data-r="shot-prompt"]');
+        if (promptTa) {
+            promptTa.value = shot.prompt || "";
+            promptTa.addEventListener("input", () => {
+                shot.prompt = promptTa.value || "";
+                editor.scheduleTimelineSync?.();
+            });
+            promptTa.addEventListener("click", (e) => e.stopPropagation());
+            promptTa.addEventListener("keydown", (e) => e.stopPropagation());
+        }
+        patchGroupLivePreview(
+            card.querySelector('[data-r="shot-preview"]'),
+            shot,
+            t("batch.previewVideoAfterRun"),
+        );
         card.addEventListener("click", (e) => {
-            if (e.target.closest("[data-slot], [data-clear], input, .bd-fl2v-slot-wrap, .bd-fl2v-continuity, .bd-fl2v-shot-cont, [data-a='fl2v-pick-existing']")) return;
+            if (e.target.closest("[data-slot], [data-clear], input, textarea, .bd-fl2v-slot-wrap, .bd-fl2v-continuity, .bd-fl2v-shot-cont, [data-a='fl2v-pick-existing']")) return;
             if (editor._fl2vShotDrag || editor._fl2vSlotDrag) return;
             if (editor.selectedIndex !== i) flushFl2vPromptDraft(editor);
             editor.selectedIndex = i;
@@ -1261,6 +1315,36 @@ function renderFl2vShotCards(editor) {
     });
 }
 
+export function setFl2vShotPreview(editor, index, imageB64, extra = {}) {
+    const shot = editor?.timeline?.shots?.[index];
+    if (!shot) return;
+    shot.previewB64 = imageB64 || shot.previewB64 || "";
+    if (extra.step != null) shot.previewStep = extra.step;
+    if (extra.total_steps != null) shot.previewTotalSteps = extra.total_steps;
+    if (Array.isArray(extra.frames) && extra.frames.length) {
+        shot.previewFrames = extra.frames;
+        shot.previewFps = extra.fps || shot.previewFps || 16;
+        shot.previewLive = !!extra.live;
+    } else if (imageB64) {
+        if (extra.live) {
+            if (!Array.isArray(shot.previewFrames) || shot.previewFrames.length <= 1) {
+                shot.previewFrames = [imageB64];
+            }
+            shot.previewLive = true;
+        } else {
+            shot.previewFrames = [imageB64];
+            shot.previewLive = false;
+        }
+        shot.previewB64 = imageB64;
+    }
+    const card = editor.fl2vUi?.shotsEl?.querySelector(`[data-shot-index="${index}"]`);
+    patchGroupLivePreview(
+        card?.querySelector('[data-r="shot-preview"]'),
+        shot,
+        t("batch.previewVideoAfterRun"),
+    );
+}
+
 export function updateFl2vDetailUI(editor) {
     const ui = editor.fl2vUi;
     if (!ui) return;
@@ -1273,35 +1357,20 @@ export function updateFl2vDetailUI(editor) {
         ui.totalInput.disabled = true;
         ui.totalInput.title = t("tooltip.fl2vTotalInput");
     }
+    ui.detail?.classList.add("hidden");
     renderFl2vShotCards(editor);
     updateFl2vToolbarBtns(editor);
 
     const shots = editor.timeline.shots || [];
     const idx = editor.selectedIndex;
     const shot = shots[idx];
+    editor.syncLiveSampleToSelection?.();
     if (!shot) {
         flushFl2vPromptDraft(editor);
         editor._fl2vPromptSegIndex = null;
-        ui.detail?.classList.add("hidden");
         return;
     }
-    ui.detail?.classList.remove("hidden");
-    const prevIdx = editor._fl2vPromptSegIndex;
-    const selectionChanged = prevIdx !== idx;
-    if (selectionChanged) flushFl2vPromptDraft(editor);
     editor._fl2vPromptSegIndex = idx;
-    if (ui.prompt) {
-        ui.prompt.disabled = false;
-        if (selectionChanged || ui.prompt !== document.activeElement) {
-            ui.prompt.value = shot.prompt || "";
-        }
-    }
-    if (ui.negative) {
-        ui.negative.disabled = false;
-        if (selectionChanged || ui.negative !== document.activeElement) {
-            ui.negative.value = shot.negativePrompt || DEFAULT_FL2V_NEGATIVE;
-        }
-    }
 }
 
 export function bindFl2vEvents(editor) {
@@ -1518,8 +1587,7 @@ export function drawFl2vSegmentThumbnails(editor, ctx, seg, startX, pxWidth, y0,
 
 export function getFl2vUiHeight(editor) {
     const n = editor.timeline?.shots?.length || 0;
-    const rows = Math.max(1, Math.ceil(n / 3));
-    return 420 + rows * 150 + 80;
+    return 160 + Math.max(1, n) * 280;
 }
 
 export function buildFl2vPayloadFields(editor) {

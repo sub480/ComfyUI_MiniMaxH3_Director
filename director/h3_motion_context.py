@@ -12,6 +12,7 @@ from typing import Any
 
 import torch
 
+from ..lib.audio_io import frames_to_audio_samples
 from .h3_context_patches import (
     CTX_AUDIO_END_KEY,
     CTX_FRAME_KEY,
@@ -535,11 +536,11 @@ def trim_context_prefix(
         return images, audio
     waveform = audio["waveform"]
     sr = int(audio.get("sample_rate") or 32000)
-    drop = int(round((trim / float(fps)) * sr)) if trim > 0 else 0
+    drop = frames_to_audio_samples(trim, fps, sr) if trim > 0 else 0
     if drop > 0 and int(waveform.shape[-1]) > drop:
         waveform = waveform[..., drop:]
     if match_tail:
-        want = int(round((int(images.shape[0]) / float(fps)) * sr))
+        want = frames_to_audio_samples(int(images.shape[0]), fps, sr)
         if int(waveform.shape[-1]) > want:
             waveform = waveform[..., :want]
     return images, {"waveform": waveform, "sample_rate": sr}
@@ -567,7 +568,7 @@ def trim_export_tail(
         return images, audio
     waveform = audio["waveform"]
     sr = int(audio.get("sample_rate") or 32000)
-    want = int(round((keep / float(fps)) * sr))
+    want = frames_to_audio_samples(keep, fps, sr)
     if int(waveform.shape[-1]) > want:
         waveform = waveform[..., :want]
     return images, {"waveform": waveform, "sample_rate": sr}

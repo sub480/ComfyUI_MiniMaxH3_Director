@@ -6,6 +6,66 @@
 
 ![MiniMaxH3Director 工作流截图](docs/screenshot.png)
 
+## Dev 更新
+
+相对 [`main`](https://github.com/AIMixer/ComfyUI_MiniMaxH3_Director) 的增量。下列功能仅本分支提供；其余章节与 main 文档一致。
+
+### 混合模式
+
+新增 `task_type=mixed`。添加组后，每组可单独改类型（文生 `t2v` / 图生 `i2v` / 首尾帧 `fl2v` / 参考主体 `r2v`），行为与对应原模式一致。`t2v` / `i2v` / `fl2v` 组走导演台主 `model`（fl2va）；`r2v` 组请另接可选 `model_r2v`（ref2va），不接则回退到主模型。
+
+### 导演台内置二采
+
+导演台自带「二采」分组，不必再外接 Refine 节点：
+
+- **启用二采**关闭 = 只一采；打开后各组默认切到二采
+- 模式仍是 `refine`（同分辨率精修）/ `upscale`（先放大再二采）/ `latent_upscale`（只放大 H3 latent）
+- 内置默认：`euler` + `simple`、3 步、denoise **0.35**；可开低噪加步（默认 +1，cosine，起始 sigma 0.70）
+- 可选口：`refine_model`（二采 UNET）、`upscale_model`（仅 `upscale` + `lanczos`）、`refine_sigmas`（接线后覆盖步数 / 调度器 / denoise / 低噪加步）
+- 仍可外接 **MiniMax H3 Director Refine**：接线后覆盖内置控件（旧工作流不用改）
+
+### 分段一采 / 二采
+
+启用二采后（内置分组或外接 Refine），每组卡片右上角可选 **一采** / **二采**（取代原先全局 `confirm_first_pass`）：
+
+- **一采**：只跑第一遍；已有精确匹配的一采缓存则跳过
+- **二采**：先一采再二采；已有精确匹配的一采缓存则直接二采
+- 点状态色点可看该组是否匹配及差异项
+- **清理**只删该组一采缓存
+
+Refine 面板会展示全时间轴缓存状态。开启段间引导时，若没有上一段结果则跳过引导继续采样，而不会中断。
+
+### 高清二采空间分块
+
+高清二采默认空间分块，降低 DiT 显存：
+
+- `refine_tile`：分块开关（关闭 = 整幅采样）
+- `n_tiles`（默认 2；设 1 则整幅采样）
+- `tile_axis`（`auto` = 取 latent 较长边）
+- `tile_overlap`（latent 域重叠，建议 4~8）
+- 目标轴 latent 边长 ≤ `max_size_for_no_tile`（默认 64，约 480p）时自动不分块
+
+音频不切开；I2V/FL2V 高清关键帧随块裁切。所有采样器逐步同步融合，并把各块 RoPE 对齐到整幅画布，避免独立分块拼回的接缝。不依赖外部分块采样器节点。
+
+### 预览
+
+- 时间轴 / 分组卡片预览格式统一，可切换预览
+- 采样预览速度条（0–1）：0 不显示预览，1 为原速 16fps
+- 视频缩略图懒加载首帧海报
+
+### 音频与帧率
+
+- 声音输出（生成 / 原声 / 静音）按任务类型显示：`v2v` / `rv2v` 以及混合模式中的对应组可用原声
+- 音频导出强制对齐 24 fps 网格
+- 提示词文本框填充更稳
+
+### 稳定性
+
+- 分段导出在片段落盘后释放像素，降低长片内存占用
+- 二采目标分辨率自动对齐（×32）
+- 修复尾帧相关衔接问题
+- 新增控件按名称写入工作流，避免插入二采分组后旧图控件错位
+
 ## 功能介绍
 
 **MiniMaxH3Director** 是面向长视频、多段生成的 MiniMax H3 导演台节点，把分段计划、条件编码、采样解码和导出整合在一个节点里。底层走官方 `MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` + `MiniMaxH3SigmaShift` + `KSampler` + AV 分离解码链路，原生输出立体声音频。

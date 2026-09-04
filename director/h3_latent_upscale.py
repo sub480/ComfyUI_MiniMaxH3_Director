@@ -189,9 +189,7 @@ class LatentResizer3D(nn.Module):
         self.norm_out = _normalization(channels)
         self.conv_out = nn.Conv3d(channels, in_channels, 3, padding=1)
 
-    def forward(self, x, scale: float, target_size: tuple[int, int, int]):
-        if tuple(target_size) == tuple(x.shape[-3:]):
-            return x
+    def _forward_segment(self, x, scale: float, target_size: tuple[int, int, int]):
         scale_emb = torch.tensor(
             [float(scale) - 1.0], dtype=x.dtype, device=x.device
         ).unsqueeze(0)
@@ -211,6 +209,51 @@ class LatentResizer3D(nn.Module):
         x = self.norm_out(x)
         x = F.silu(x)
         return self.conv_out(x)
+
+    def forward(self, x, scale: float, target_size: tuple[int, int, int], enable_chunking: bool = True):
+        if tuple(target_size) == tuple(x.shape[-3:]):
+            return x
+        source_t = int(x.shape[2])
+        if not enable_chunking or source_t <= 24:
+            return self._forward_segment(x, scale, target_size)
+
+        temporal_kernel = 5
+        for block in self.in_blocks:
+            if isinstance(block, TemporalConv):
+                temporal_kernel = int(block.dwconv.kernel_size[0])
+                break
+        overlap = max(1, temporal_kernel)
+        chunk_size = 24
+        padded = F.pad(x, (0, 0, 0, 0, overlap, overlap), mode="replicate")
+        out = torch.zeros(
+            x.shape[0], x.shape[1], source_t, target_size[-2], target_size[-1],
+            device=x.device, dtype=x.dtype,
+        )
+        weights = torch.zeros(1, 1, source_t, 1, 1, device=x.device, dtype=x.dtype)
+        for start in range(0, source_t, chunk_size):
+            end = min(source_t, start + chunk_size)
+            output_start = max(0, start - overlap)
+            output_end = min(source_t, end + overlap)
+            low = max(0, output_start - overlap)
+            high = min(source_t + 2 * overlap, output_end + overlap)
+            segment = padded[:, :, low:high]
+            segment_out = self._forward_segment(
+                segment, scale, (high - low, target_size[-2], target_size[-1]),
+            )
+            source_offset = (output_start + overlap) - low
+            valid = segment_out[:, :, source_offset:source_offset + output_end - output_start]
+            length = output_end - output_start
+            blend = torch.ones(length, device=x.device, dtype=x.dtype)
+            if start > output_start:
+                count = start - output_start
+                blend[:count] = torch.arange(1, count + 1, device=x.device, dtype=x.dtype) / (count + 1)
+            if output_end > end:
+                count = output_end - end
+                blend[-count:] = torch.arange(count, 0, -1, device=x.device, dtype=x.dtype) / (count + 1)
+            blend = blend.view(1, 1, length, 1, 1)
+            out[:, :, output_start:output_end] += valid * blend
+            weights[:, :, output_start:output_end] += blend
+        return out / weights.clamp_min(1e-8)
 
 
 def _load_raw_sd(path: str) -> dict:
@@ -382,7 +425,15 @@ def upscale_h3_video_latent(
     x = (x - mean) / std
     try:
         with torch.no_grad():
-            out = model(x, scale=scale, target_size=(t_size, dst_h, dst_w))
+            try:
+                out = model(
+                    x,
+                    scale=scale,
+                    target_size=(t_size, dst_h, dst_w),
+                    enable_chunking=True,
+                )
+            except TypeError:
+                out = model(x, scale=scale, target_size=(t_size, dst_h, dst_w))
         out = out * std + mean
         out = out.to(device="cpu", dtype=orig_dtype).contiguous()
     finally:

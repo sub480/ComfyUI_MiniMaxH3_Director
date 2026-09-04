@@ -97,6 +97,26 @@ def _legacy_output_ref_image_size(timeline: dict | None) -> str | None:
     return normalize_ref_image_size(raw)
 
 
+PASS_MODE_FIRST = "first"
+PASS_MODE_SECOND = "second"
+
+
+def resolve_segment_pass_mode(seg_or_data=None) -> str:
+    """Per-segment 一采/二采 target. Missing field defaults to second pass."""
+    raw = None
+    if isinstance(seg_or_data, dict):
+        if "passMode" in seg_or_data:
+            raw = seg_or_data.get("passMode")
+        elif "pass_mode" in seg_or_data:
+            raw = seg_or_data.get("pass_mode")
+    elif seg_or_data is not None:
+        raw = getattr(seg_or_data, "pass_mode", None)
+    text = str(raw or "").strip().lower()
+    if text in {"first", "1", "一采"}:
+        return PASS_MODE_FIRST
+    return PASS_MODE_SECOND
+
+
 def resolve_ref_image_size(seg_or_data=None, plan_or_timeline=None) -> str:
     """Per-segment MiniMax ``ref_image_size``; legacy ``output.refImageSize`` as fallback."""
     raw = None
@@ -187,6 +207,8 @@ class SegmentPlan:
     continuity_from_prev: bool = True
     # Official MiniMaxH3ReferenceToVideo combo: match | max. Per r2v/rv2v group.
     ref_image_size: str = "match"
+    # Per-segment 一采 / 二采. Default second (run both when Refine is connected).
+    pass_mode: str = PASS_MODE_SECOND
 
     @property
     def frame_count(self) -> int:
@@ -270,7 +292,7 @@ def _resolve_global_reference_video(timeline: dict) -> dict:
     return dict(legacy) if isinstance(legacy, dict) else {}
 
 
-from .frame_align import minimax_align_frame_count as wan_align_frame_count
+from .frame_align import H3_FPS, minimax_align_frame_count as wan_align_frame_count
 
 
 def _decode_image_b64(b64_str: str) -> torch.Tensor:
@@ -664,6 +686,7 @@ def build_director_plan(
             timeline = json.loads(timeline_data)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid timeline_data JSON: {exc}") from exc
+    timeline["frameRate"] = H3_FPS
 
     global_block = timeline.get("global") or {}
     edit_mode = timeline.get("editMode") or timeline.get("edit_mode") or "global"
@@ -824,9 +847,12 @@ def build_director_plan(
             seg_data if isinstance(seg_data, dict) else {},
             load_timeline,
         )
+        seg.pass_mode = resolve_segment_pass_mode(
+            seg_data if isinstance(seg_data, dict) else {},
+        )
 
     return DirectorPlan(
-        frame_rate=float(timeline.get("frameRate") or frame_rate or 24),
+        frame_rate=float(H3_FPS),
         total_frames=total,
         width=out_w,
         height=out_h,

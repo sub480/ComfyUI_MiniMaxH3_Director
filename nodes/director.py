@@ -5,16 +5,26 @@ from __future__ import annotations
 import comfy.samplers
 
 from ..director.executor_core import execute_director_plan_core
+from ..director.refine_pack import pack_director_builtin_refine
 from .director_common import (
     finalize_director_outputs,
     prepare_director_plan,
     timeline_required_inputs,
     director_perf_inputs,
 )
+from .director_refine import director_refine_widget_inputs
 
 _CATEGORY = "MiniMaxH3"
 
 _DEFAULT_GLOBAL_PROMPT = "A cinematic scene with natural motion and synchronized ambience"
+
+
+def _live_tae_vae_choices():
+    try:
+        from ..director.tae_preview import list_vae_approx_names
+        return ["auto", *list_vae_approx_names()]
+    except Exception:
+        return ["auto"]
 
 
 def director_timeline_required_inputs() -> dict:
@@ -53,7 +63,14 @@ class MiniMaxH3Director:
             "required": {
                 "model": (
                     "MODEL",
-                    {"tooltip": "MiniMax H3 UNET (UNETLoader)."},
+                    {
+                        "tooltip": (
+                            "MiniMax H3 UNET (UNETLoader). "
+                            "t2v / i2v / fl2v 以及混合模式中的这三类组用 ImageToVideo（fl2va）。"
+                            "r2v / v2v / rv2v 仍接此口（ref2va）。"
+                            "混合模式的 r2v 组请另接可选 model_r2v。"
+                        ),
+                    },
                 ),
                 "video_vae": (
                     "VAE",
@@ -70,6 +87,16 @@ class MiniMaxH3Director:
                 **director_timeline_required_inputs(),
             },
             "optional": {
+                "model_r2v": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "可选 ReferenceToVideo UNET（ref2va）。"
+                            "混合模式中 r2v 组使用此模型；不接则回退到 model。"
+                            "纯 r2v / v2v / rv2v 仍只用上面的 model 口。"
+                        ),
+                    },
+                ),
                 "i2v_groups": (
                     "MMX_DIR_GROUP",
                     {
@@ -94,12 +121,27 @@ class MiniMaxH3Director:
                     "MMX_DIR_REFINE",
                     {
                         "tooltip": (
-                            "Optional Refine node. When connected, each segment runs a second "
-                            "sample pass (same-size refine, or upscale then sample). "
-                            "Wire a MODEL into Refine.refine_model to use a different UNET for that pass; "
-                            "unwired uses this Director model. "
-                            "images is the refined result; images_pre_refine is the first pass. "
-                            "Unconnected = single-pass (current behavior)."
+                            "可选。外接 MiniMax H3 Director Refine pack。"
+                            "接线后覆盖导演台内置「二采」控件。"
+                            "不接则用上方「二采」分组；分组关闭=单次采样。"
+                        ),
+                    },
+                ),
+                "refine_model": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "可选二采 UNET。不接则用导演台主模型。"
+                            "适合一采挂 Turbo LoRA、二采卸掉或换另一套。"
+                        ),
+                    },
+                ),
+                "upscale_model": (
+                    "UPSCALE_MODEL",
+                    {
+                        "tooltip": (
+                            "可选像素放大模型（RealESRGAN 等）。"
+                            "仅 mode=upscale 且 upscale_method=lanczos 时使用。"
                         ),
                     },
                 ),
@@ -141,7 +183,18 @@ class MiniMaxH3Director:
                     "FLOAT",
                     {"default": 3.0, "min": 0.01, "max": 100.0, "step": 0.01, "tooltip": "MiniMaxH3SigmaShift shift_audio."},
                 ),
+                "live_tae_vae": (
+                    _live_tae_vae_choices(),
+                    {
+                        "default": "auto",
+                        "tooltip": (
+                            "实时预览 TinyVAE / taeh3（扫描 models/vae_approx）。"
+                            "auto=自动选用 minimax-h3/taeh3。"
+                        ),
+                    },
+                ),
                 **director_perf_inputs(),
+                **director_refine_widget_inputs(),
                 "sigmas": (
                     "SIGMAS",
                     {
@@ -154,6 +207,17 @@ class MiniMaxH3Director:
                         ),
                     },
                 ),
+                "refine_sigmas": (
+                    "SIGMAS",
+                    {
+                        "forceInput": True,
+                        "tooltip": (
+                            "可选。二采噪声表，接 BasicScheduler 或 ManualSigmas。"
+                            "接线后覆盖二采步数 / 调度器 / denoise / 低噪加步。"
+                            "不接则用「二采」分组内部算表。"
+                        ),
+                    },
+                ),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -163,6 +227,7 @@ class MiniMaxH3Director:
         if input_types is not None:
             expected = {
                 "model": "MODEL",
+                "model_r2v": "MODEL",
                 "video_vae": "VAE",
                 "audio_vae": "VAE",
                 "clip": "CLIP",
@@ -174,13 +239,18 @@ class MiniMaxH3Director:
             got_sigmas = input_types.get("sigmas")
             if got_sigmas is not None and got_sigmas != "SIGMAS":
                 return f"sigmas: expected SIGMAS, linked node returns {got_sigmas}."
+            got_refine_model = input_types.get("refine_model")
+            if got_refine_model is not None and got_refine_model != "MODEL":
+                return f"refine_model: expected MODEL, linked node returns {got_refine_model}."
+            got_refine_sigmas = input_types.get("refine_sigmas")
+            if got_refine_sigmas is not None and got_refine_sigmas != "SIGMAS":
+                return f"refine_sigmas: expected SIGMAS, linked node returns {got_refine_sigmas}."
         return True
 
     @classmethod
     def IS_CHANGED(cls, unique_id=None, **kwargs):
-        # Do not return NaN: that would re-run every Director queue even when
-        # confirm_first_pass is off. Linked Refine is None here, so fingerprint
-        # the .pre cache files that only the confirmation hold writes.
+        # Fingerprint .pre cache files so clearing / rewriting 一采 cache
+        # invalidates Comfy's execution cache even when widgets are unchanged.
         del kwargs
         from ..director.segment_cache import first_pass_cache_disk_signature
 
@@ -194,10 +264,11 @@ class MiniMaxH3Director:
     DESCRIPTION = (
         "MiniMax H3 Director: MiniMaxH3ImageToVideo / ReferenceToVideo conditioning, "
         "single-stage KSampler + MiniMaxH3SigmaShift, LTXVSeparateAVLatent decode. "
-        "Supports t2v / i2v / fl2v / r2v / v2v / rv2v. "
+        "Supports t2v / i2v / fl2v / mixed / r2v / v2v / rv2v. "
         "Optional i2v_groups / r2v_groups accept multi-group packs from Director Group nodes "
-        "(external priority over UI cards). Optional refine accepts MiniMax H3 Director Refine "
-        "(second sample / upscale). images_pre_refine is the first-pass video before refine. "
+        "(external priority over UI cards). Built-in 二采 group runs a second sample / upscale; "
+        "optional refine pack still overrides the in-node widgets. "
+        "images_pre_refine is the first-pass video before refine. "
         "Defaults: 0.4MP 16:9 (864×480), 5s / 124 frames @ 24 fps."
     )
 
@@ -216,9 +287,13 @@ class MiniMaxH3Director:
         total_frames,
         timeline_data,
         unique_id=None,
+        model_r2v=None,
         i2v_groups=None,
         r2v_groups=None,
         refine=None,
+        refine_model=None,
+        upscale_model=None,
+        refine_sigmas=None,
         sigmas=None,
         steps=25,
         sampler="res_multistep",
@@ -229,8 +304,17 @@ class MiniMaxH3Director:
         shift_audio=3.0,
         clear_vram_between_segments=True,
         export_source_images=False,
+        live_tae_vae="auto",
         **kwargs,
     ):
+        if refine is None:
+            refine = pack_director_builtin_refine(
+                enabled=kwargs.get("refine_enable", False),
+                refine_model=refine_model,
+                upscale_model=upscale_model,
+                refine_sigmas=refine_sigmas,
+                **kwargs,
+            )
         del kwargs
 
         plan = prepare_director_plan(
@@ -247,13 +331,18 @@ class MiniMaxH3Director:
             r2v_groups=r2v_groups,
             refine=refine,
         )
+        raw = getattr(plan, "raw", None)
+        if isinstance(raw, dict):
+            vae_name = "" if str(live_tae_vae or "").strip() in ("", "auto") else str(live_tae_vae).strip()
+            raw["liveTaeVae"] = vae_name
 
         try:
-            combined, segment_outputs, segment_audios, report, export_frame_counts, pre_combined, pre_segments, held_for_confirmation = (
+            combined, segment_outputs, segment_audios, report, export_frame_counts, pre_combined, pre_segments = (
                 execute_director_plan_core(
                     plan,
                     node_id=unique_id,
                     model=model,
+                    model_r2v=model_r2v,
                     vae=video_vae,
                     audio_vae=audio_vae,
                     clip=clip,
@@ -279,7 +368,6 @@ class MiniMaxH3Director:
                 segment_frame_counts=export_frame_counts,
                 pre_refine_combined=pre_combined,
                 pre_refine_segments=pre_segments,
-                block_final_images=held_for_confirmation,
             )
         finally:
             # Full source/reference PCM is execution-scoped.

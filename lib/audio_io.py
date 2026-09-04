@@ -125,12 +125,28 @@ def _probe_audio_stream(path: str) -> tuple[int, int]:
         return 44100, 2
 
 
+# MiniMax H3 audio VAE: 32 kHz, 40 latent frames/s, hop 800.
+H3_AUDIO_SAMPLE_RATE = 32000
+H3_AUDIO_LATENT_FPS = 40
+H3_AUDIO_HOP = H3_AUDIO_SAMPLE_RATE // H3_AUDIO_LATENT_FPS  # 800
+
+
 def frames_to_audio_samples(frame_count: int, fps: float, sample_rate: int) -> int:
+    """PCM length for ``frame_count`` picture frames.
+
+    Generated MiniMax H3 audio (32 kHz @ 24 fps) uses the official hop grid:
+    ``round(frames / 24 * 40) * 800``. Wall-clock ``round(frames * sr / fps)``
+    is ~267 samples short on a 124-frame clip and chops the VAE tail.
+    Other sample rates (source extract / ref mux) keep wall-clock rounding.
+    """
     frame_count = max(0, int(frame_count))
     fps = float(fps or 24.0)
     sample_rate = max(1, int(sample_rate))
     if frame_count <= 0 or fps <= 0:
         return 0
+    if sample_rate == H3_AUDIO_SAMPLE_RATE and abs(fps - 24.0) < 1e-6:
+        audio_t = int(round(frame_count / 24.0 * H3_AUDIO_LATENT_FPS))
+        return audio_t * H3_AUDIO_HOP
     return int(round(frame_count * sample_rate / fps))
 
 

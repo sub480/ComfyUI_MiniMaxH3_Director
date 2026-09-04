@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import time
 from typing import Any
 
 import torch
 
+from ..lib.audio_io import frames_to_audio_samples
 from ..lib.image_prep import assert_minimax_canvas, fit_canvas, fit_video_long_edge
 from ..lib.task_modes import SUPPORTED_TASK_KEYS
 from ..nodes.conditioning import run_minimax_conditioning
 from .core_sampling import sample_single_stage
 from .refine_pack import (
-    confirm_first_pass_enabled,
     first_pass_sigmas_override,
     refine_needs_canvas,
     refine_passes_for,
@@ -39,6 +40,7 @@ from .plan import (
     plan_summary,
     prepare_segment_clip,
     resolve_ref_image_size,
+    resolve_segment_pass_mode,
     ref_audios_to_dict,
     ref_videos_to_dict,
     reference_video_for_segment,
@@ -84,16 +86,24 @@ from .vram_cleanup import cleanup_segment_vram
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.core")
 
+_R2V_FAMILY_KEYS = frozenset({"r2v", "v2v", "rv2v"})
+
+
+def _model_for_segment(seg, model, model_r2v):
+    """ImageToVideo family uses `model`; r2v family prefers optional `model_r2v`."""
+    if getattr(seg, "task_key", "") in _R2V_FAMILY_KEYS and model_r2v is not None:
+        return model_r2v
+    return model
+
 
 def _segment_disk_cache_needed(
     plan: DirectorPlan,
     *,
     timeline_seg_total: int,
     will_refine: bool,
-    hold_after_first: bool,
 ) -> bool:
     """Disk cache is for partial re-run / refine / continuity — not single-shot r2v."""
-    if will_refine or hold_after_first:
+    if will_refine:
         return True
     if plan.continuity_enabled:
         return True
@@ -141,20 +151,21 @@ def _trim_decoded_to_export(
     export_len: int,
     plan: DirectorPlan,
 ) -> tuple[torch.Tensor, dict[str, Any] | None]:
-    """Drop motion-context prefix and crop to the UI export length."""
+    """Drop motion-context prefix and crop to the aligned export length."""
+    fps = float(plan.frame_rate or 24)
     if trim_frames > 0:
         decoded, audio_dict = trim_context_prefix(
             decoded,
             audio_dict,
             trim_frames,
-            fps=float(plan.frame_rate or 24),
+            fps=fps,
             match_tail=True,
         )
     if decoded.shape[0] > export_len:
         decoded = decoded[:export_len]
         if isinstance(audio_dict, dict) and audio_dict.get("waveform") is not None:
             sr = int(audio_dict.get("sample_rate") or 32000)
-            want = int(round((export_len / float(plan.frame_rate or 24)) * sr))
+            want = frames_to_audio_samples(export_len, fps, sr)
             wf = audio_dict["waveform"]
             if int(wf.shape[-1]) > want:
                 audio_dict = {"waveform": wf[..., :want], "sample_rate": sr}
@@ -194,13 +205,11 @@ def _build_minimax_inputs(
         # (1×16×16 gray) or a held clip when refs only carry image1.
         first_frame = _ref_tensor_from_seg_refs(seg.refs, 0)
         last_frame = _ref_tensor_from_seg_refs(seg.refs, 1)
-        # Empty fl2v shot = text-to-video. Do not invent keyframes from the
-        # 1×16×16 gray placeholder or a held clip. End-only also must not
-        # promote clip_frames[0] into first_frame.
-        if first_frame is not None and last_frame is None and clip_frames is not None:
-            # Start+end endpoint hold: last may only live on the clip tail.
-            if clip_frames.shape[0] >= 2:
-                last_frame = clip_frames[-1:].clone()
+        # Keyframes come only from explicit refs (0=start, 1=end). Do not invent
+        # last_frame from clip_frames: start-only i2v holds image0 through the
+        # tail, so clip[-1] == first_frame and would pin the ending back to the
+        # start (fighting the shot prompt). Empty / end-only shots also must not
+        # promote a placeholder or held clip into first_frame / last_frame.
     elif task_key == "i2v":
         # Explicit per-segment image wins; motion-context path leaves first_frame empty
         # so the previous tail can be pinned as a multi-frame head instead.
@@ -286,9 +295,8 @@ def _prune_continuity_working_set(
 ) -> None:
     """Keep only the direct predecessor needed by the next segment.
 
-    Final/pre-refine frames and export audio live in separate collections and
-    are intentionally untouched. A missing direct predecessor is loaded from
-    the existing disk cache by the continuity path.
+    Final/pre-refine frames are released separately in「分段导出」after the
+    next pin. A missing direct predecessor is loaded from disk cache.
     """
     current = int(next_segment_index)
     keep = current - 1
@@ -296,6 +304,58 @@ def _prune_continuity_working_set(
         for index in tuple(working_set):
             if int(index) < current and int(index) != keep:
                 working_set.pop(index, None)
+
+
+def _poster_frame(tensor: torch.Tensor | None) -> torch.Tensor:
+    """1-frame stand-in so IMAGE list length stays valid after a pixel release."""
+    if not isinstance(tensor, torch.Tensor) or tensor.ndim != 4 or int(tensor.shape[0]) <= 0:
+        return torch.full((1, 1, 1, 3), 0.5)
+    if int(tensor.shape[0]) == 1:
+        return tensor.detach().cpu().contiguous()
+    return tensor[-1:].detach().cpu().contiguous().clone()
+
+
+def _release_segment_pixels(
+    index: int,
+    *,
+    completed_outputs: dict[int, torch.Tensor],
+    completed_pre_refine: dict[int, torch.Tensor],
+    completed_refine_passes: dict[int, list[tuple[str, torch.Tensor]]],
+    segment_outputs: list[torch.Tensor],
+    segment_pre_refine: list[torch.Tensor],
+    progress_pos: dict[int, int],
+) -> bool:
+    """Drop full-resolution pixels for a finished predecessor. Audio stays.
+
+    Replaces IMAGE-list slots with a 1-frame poster. Safe after mp4 + the
+    next segment has already pinned / phase-trimmed this index.
+    """
+    idx = int(index)
+    if idx < 0:
+        return False
+    chunk = completed_outputs.pop(idx, None)
+    pre = completed_pre_refine.pop(idx, None)
+    completed_refine_passes.pop(idx, None)
+    run_pos = progress_pos.get(idx)
+    had = chunk is not None or pre is not None
+    if run_pos is not None and run_pos < len(segment_outputs):
+        src = chunk if chunk is not None else segment_outputs[run_pos]
+        poster = _poster_frame(src)
+        segment_outputs[run_pos] = poster
+        if run_pos < len(segment_pre_refine):
+            if pre is chunk:
+                segment_pre_refine[run_pos] = poster
+            else:
+                segment_pre_refine[run_pos] = _poster_frame(
+                    pre if pre is not None else segment_pre_refine[run_pos]
+                )
+        had = True
+    elif chunk is not None or pre is not None:
+        had = True
+    if had:
+        del chunk, pre
+        gc.collect()
+    return had
 
 
 def _ref_video_audios_to_dict(items) -> dict | None:
@@ -314,6 +374,7 @@ def execute_director_plan_core(
     *,
     node_id: str | None = None,
     model,
+    model_r2v=None,
     vae,
     audio_vae,
     clip,
@@ -465,29 +526,32 @@ def execute_director_plan_core(
     completed_av_latents: dict[int, dict] = {}
     completed_av_handoff: dict[int, dict] = {}
     completed_audios: dict[int, dict] = {}
-    held_for_confirmation = False
+    # Segments actually executed by _run_one_segment in THIS run.
+    # completed_* also get export-fill hydrations from disk; this set does not.
+    resampled_this_run: set[int] = set()
+    # True export lengths (post continuity trim). Kept after「分段导出」
+    # replaces older IMAGE slots with 1-frame posters.
+    segment_export_lengths: dict[int, int] = {}
+    export_segments_mode = plan.export_mode == "segments"
 
     def _run_one_segment(
         seg, *, progress_index: int
     ) -> tuple[torch.Tensor, dict[str, Any] | None, torch.Tensor]:
-        nonlocal held_for_confirmation
         if seg.task_key not in SUPPORTED_TASK_KEYS:
             raise ValueError(
                 f"Task '{seg.task_key}' is not supported on MiniMax H3 Director. "
                 f"Supported: {', '.join(sorted(SUPPORTED_TASK_KEYS))}."
             )
+        seg_model = _model_for_segment(seg, model, model_r2v)
 
         ui_idx = seg.timeline_index
         will_refine = refine_will_sample(plan, seg)
-        confirm_first = confirm_first_pass_enabled(plan)
-        pre_cache = (
-            load_first_pass_cache(node_id, seg, plan)
-            if confirm_first and will_refine
-            else None
-        )
-        skip_first_sample = pre_cache is not None
-        hold_after_first = confirm_first and will_refine and not skip_first_sample
-        held_for_confirmation = held_for_confirmation or hold_after_first
+        pass_mode = resolve_segment_pass_mode(seg)
+        run_refine = will_refine and pass_mode == "second"
+        pre_cache = load_first_pass_cache(node_id, seg, plan)
+        skip_first_sample = isinstance(pre_cache, dict)
+        if not skip_first_sample:
+            pre_cache = {}
         meta = {
             "frames_label": frames_label(seg),
             "task_key": seg.task_key,
@@ -544,15 +608,28 @@ def execute_director_plan_core(
                     "是源视频透传（未采样/无有效缓存），不能作为 motion context。"
                     "请先运行该段，或将其纳入「选择运行」。"
                 )
-            prev_tail = resolve_prev_segment_output(
-                plan, all_segments, seg.index, completed_outputs, node_id
-            )
+            prev_seg = all_segments[prev_idx] if prev_idx >= 0 else None
+            prev_from_this_run = prev_idx in resampled_this_run
+            try:
+                prev_tail = resolve_prev_segment_output(
+                    plan, all_segments, seg.index, completed_outputs, node_id
+                )
+            except ValueError as exc:
+                # No frame cache for prev (partial re-run, never rendered):
+                # continue; AV latent on disk may still pin. If neither
+                # exists, skip motion context instead of aborting the queue.
+                log.info(
+                    "Segment %d continuity resolve failed (%s); "
+                    "will pin from AV cache if present.",
+                    seg.index + 1,
+                    exc,
+                )
+                prev_tail = None
             # Hydrate prev into completed_* so phase-align trim can rewrite
             # in-memory exports + disk cache even on「分段导出」/ partial re-run
             # (resolve_prev may return a cache tensor without storing it).
             if prev_idx >= 0 and prev_tail is not None and prev_idx not in completed_outputs:
                 completed_outputs[prev_idx] = prev_tail
-            prev_seg = all_segments[prev_idx] if prev_idx >= 0 else None
             prev_av = completed_av_latents.get(prev_idx)
             if prev_av is None and prev_seg is not None:
                 prev_av = load_segment_av_latent(
@@ -574,6 +651,18 @@ def execute_director_plan_core(
                 )
                 if prev_audio is not None:
                     completed_audios[prev_idx] = prev_audio
+            if prev_av is None and prev_tail is None:
+                reports.append(
+                    f"Segment {seg.index + 1}/{timeline_seg_total}: "
+                    "上一段无有效缓存，已跳过段间引导"
+                    "（重跑上一段或将其纳入「选择运行」可恢复衔接）"
+                )
+            elif not prev_from_this_run:
+                reports.append(
+                    f"Segment {seg.index + 1}/{timeline_seg_total}: "
+                    f"引导接自上一段 #{prev_idx + 1} 的磁盘缓存"
+                    "（该段本轮未重跑；接缝对齐成片中的旧结果）"
+                )
             if prev_handoff:
                 prev_end_frame = handoff_end_frame(
                     trim_frames=int(prev_handoff.get("trim_frames") or 0),
@@ -663,6 +752,8 @@ def execute_director_plan_core(
         if use_motion_context:
             # Clear single-frame first lock so multi-frame context owns the head.
             first_frame = None
+        refine_keyframe_first = first_frame
+        refine_keyframe_last = last_frame
 
         if seg.task_key in {"r2v", "v2v", "rv2v"} and (
             ref_images or ref_videos or ref_audios or ref_video_audios
@@ -747,6 +838,7 @@ def execute_director_plan_core(
                         fps=fps,
                     )
                     completed_outputs[prev_idx] = prev_chunk
+                    segment_export_lengths[prev_idx] = int(prev_chunk.shape[0])
                     if prev_audio_trim is not None:
                         completed_audios[prev_idx] = prev_audio_trim
                     # Lists may already hold the untrimmed tensor/audio from when
@@ -802,25 +894,14 @@ def execute_director_plan_core(
                             replace_audio=False,
                         )
                         # Rewrite incremental mp4 so mid-run files match trimmed length.
-                        if hold_after_first:
-                            pre_path = maybe_export_segment_mp4(
-                                mp4_run_dir,
-                                plan,
-                                prev_seg,
-                                prev_chunk,
-                                completed_audios.get(prev_idx),
-                                suffix="pre",
-                            )
-                            mp4_paths = [pre_path] if pre_path else []
-                        else:
-                            mp4_paths = maybe_export_segment_mp4s(
-                                mp4_run_dir,
-                                plan,
-                                prev_seg,
-                                prev_chunk,
-                                completed_audios.get(prev_idx),
-                                pre_frames=completed_pre_refine.get(prev_idx),
-                            )
+                        mp4_paths = maybe_export_segment_mp4s(
+                            mp4_run_dir,
+                            plan,
+                            prev_seg,
+                            prev_chunk,
+                            completed_audios.get(prev_idx),
+                            pre_frames=completed_pre_refine.get(prev_idx),
+                        )
                         extra_passes = list(completed_refine_passes.get(prev_idx) or [])
                         rewritten_extra: list[tuple[str, torch.Tensor]] = []
                         for suffix, frames in extra_passes:
@@ -899,19 +980,37 @@ def execute_director_plan_core(
             )
 
         def _report_step_preview(step: int, total_steps: int, x0) -> None:
-            # Live frame for the batch-card preview slot (「生成中…」 area).
+            # KJ-style live clip: TAE-decode a temporal strip and loop it in-node.
             try:
-                from .tae_preview import pil_to_jpeg_b64, x0_to_preview_pil
+                from .tae_preview import (
+                    LIVE_PREVIEW_FPS,
+                    LIVE_PREVIEW_MAX_FRAMES,
+                    pil_to_jpeg_b64,
+                    x0_to_preview_pils,
+                )
 
-                pil = x0_to_preview_pil(x0, max_side=512)
-                if pil is None:
+                tae_name = str(
+                    (plan.raw or {}).get("liveTaeVae")
+                    or (plan.raw or {}).get("live_tae_vae")
+                    or ""
+                ).strip()
+                pils = x0_to_preview_pils(
+                    x0,
+                    max_side=512,
+                    max_frames=LIVE_PREVIEW_MAX_FRAMES,
+                    tae_name=tae_name or None,
+                )
+                if not pils:
                     return
+                frames_b64 = [pil_to_jpeg_b64(p) for p in pils]
                 report_director_segment_preview(
                     node_id,
                     segment_index=ui_idx,
-                    image_b64=pil_to_jpeg_b64(pil),
-                    width=pil.width,
-                    height=pil.height,
+                    image_b64=frames_b64[0],
+                    width=pils[0].width,
+                    height=pils[0].height,
+                    frames=frames_b64,
+                    fps=float(LIVE_PREVIEW_FPS),
                     live=True,
                     step=step + 1,
                     total_steps=total_steps,
@@ -927,13 +1026,14 @@ def execute_director_plan_core(
             cached_sample = int(cached_h.get("sample_frames") or 0)
             if cached_sample > 0:
                 sample_len = cached_sample
+            skip_note = "跳过一采，开始二采" if run_refine else "跳过一采"
             reports.append(
                 f"Segment {ui_idx + 1}/{timeline_seg_total}: 命中一采缓存 "
-                f"(seed={int(getattr(plan, 'sample_seed', seed) or seed)})，跳过一采，开始二采"
+                f"(seed={int(getattr(plan, 'sample_seed', seed) or seed)})，{skip_note}"
             )
         else:
             samples = sample_single_stage(
-                model=model,
+                model=seg_model,
                 positive=positive,
                 negative=negative,
                 latent=latent,
@@ -953,7 +1053,6 @@ def execute_director_plan_core(
         first_pass_samples = samples
         first_pass_gpu = None
         pre_export = None
-        run_refine = will_refine and not hold_after_first
         if will_refine:
             cached_frames = pre_cache.get("frames") if skip_first_sample else None
             if isinstance(cached_frames, torch.Tensor) and cached_frames.numel() > 0:
@@ -988,8 +1087,8 @@ def execute_director_plan_core(
         if first_pass_gpu is not None and upscale_frames is None:
             del first_pass_gpu
             first_pass_gpu = None
-        export_len = int(num_frames) if trim_frames > 0 else int(target_len)
-        if will_refine and not skip_first_sample:
+        export_len = int(num_frames)
+        if not skip_first_sample:
             save_first_pass_cache(
                 node_id,
                 seg,
@@ -1053,7 +1152,7 @@ def execute_director_plan_core(
                 plan,
                 seg,
                 samples=samples,
-                model=model,
+                model=seg_model,
                 vae=vae,
                 audio_vae=audio_vae,
                 positive=positive,
@@ -1070,12 +1169,11 @@ def execute_director_plan_core(
                 first_pass_images=upscale_frames,
                 trim_frames=trim_frames,
                 on_pass=_export_refine_pass if mp4_run_dir is not None else None,
+                first_frame=refine_keyframe_first,
+                last_frame=refine_keyframe_last,
             )
-        elif hold_after_first:
-            refine_note = (
-                f"先确认一采（已缓存 seed={int(getattr(plan, 'sample_seed', seed) or seed)}，未二采；"
-                "用同一 seed 再 Queue 将只跑二采）"
-            )
+        elif pass_mode == "first":
+            refine_note = "一采"
         else:
             refine_note = ""
         samples = first_pass_samples if not run_refine else samples
@@ -1093,10 +1191,11 @@ def execute_director_plan_core(
         decoded, audio_dict = _decode_av_latent(
             samples, vae, audio_vae, decode_audio=decode_audio,
         )
-        # Keep exactly the UI segment length. With motion context, sample is
-        # longer (visible+ctx, 17k+5 aligned); after trim, crop to num_frames.
-        # Next segment must pin at export end (trim+export), not sample end.
-        export_len = int(num_frames) if trim_frames > 0 else int(target_len)
+        # Official H3 keeps the 17k+5 sample length. Cropping back to the
+        # unaligned UI duration (e.g. 120 vs 124) chopped the last ~167 ms of
+        # audio. With motion context, sample is longer; after prefix trim,
+        # crop to aligned visible ``num_frames``.
+        export_len = int(num_frames)
         decoded, audio_dict = _trim_decoded_to_export(
             decoded,
             audio_dict,
@@ -1129,8 +1228,6 @@ def execute_director_plan_core(
                 pre_chunk = pre_chunk.float()
         else:
             pre_chunk = chunk
-        if hold_after_first and pre_chunk is chunk:
-            pre_chunk = chunk.clone()
         decode_s = time.perf_counter() - t_decode
         handoff = {
             "trim_frames": int(trim_frames),
@@ -1147,7 +1244,6 @@ def execute_director_plan_core(
             plan,
             timeline_seg_total=timeline_seg_total,
             will_refine=will_refine,
-            hold_after_first=hold_after_first,
         )
         t_cache = time.perf_counter()
         if write_cache:
@@ -1164,29 +1260,18 @@ def execute_director_plan_core(
         completed_outputs[seg.index] = chunk
         completed_pre_refine[seg.index] = pre_chunk
         completed_refine_passes[seg.index] = pass_clips
+        segment_export_lengths[seg.index] = int(chunk.shape[0])
 
         #「分段导出」: flush mp4 as soon as this segment succeeds (crash-safe).
-        # Confirmation hold has no final/second-pass clip yet: save only _pre.
-        if hold_after_first:
-            pre_path = maybe_export_segment_mp4(
-                mp4_run_dir,
-                plan,
-                seg,
-                chunk,
-                audio_dict if isinstance(audio_dict, dict) else None,
-                suffix="pre",
-            )
-            mp4_paths = [pre_path] if pre_path else []
-        else:
-            # Final clip = last refine pass; _pre = 一采; _pN = each refine round.
-            mp4_paths = maybe_export_segment_mp4s(
-                mp4_run_dir,
-                plan,
-                seg,
-                chunk,
-                audio_dict if isinstance(audio_dict, dict) else None,
-                pre_frames=pre_chunk if run_refine else None,
-            )
+        # Final clip = last refine pass; _pre = 一采; _pN = each refine round.
+        mp4_paths = maybe_export_segment_mp4s(
+            mp4_run_dir,
+            plan,
+            seg,
+            chunk,
+            audio_dict if isinstance(audio_dict, dict) else None,
+            pre_frames=pre_chunk if run_refine else None,
+        )
         n_refine = refine_passes_for(getattr(plan, "refine", None)) if run_refine else 1
         if isinstance(pack, dict) and (pack.get("mode") or "") == "latent_upscale":
             n_refine = 1
@@ -1204,7 +1289,10 @@ def execute_director_plan_core(
 
         if (
             live_tae_preview
-            and seg.task_key in {"t2v", "i2v", "r2v", "fl2v", "v2v", "rv2v"}
+            and seg.task_key in {
+                "t2v", "i2v", "r2v", "fl2v", "v2v", "mv2v", "ads2v",
+                "rv2v", "vrc2v", "vi2v",
+            }
             and decoded.shape[0] >= 1
         ):
             try:
@@ -1254,6 +1342,19 @@ def execute_director_plan_core(
             completed_av_latents,
             completed_refine_passes,
         )
+        if export_segments_mode:
+            # Older than the predecessor cannot be pinned anymore.
+            for stale in tuple(completed_outputs):
+                if int(stale) < int(seg.index) - 1:
+                    _release_segment_pixels(
+                        stale,
+                        completed_outputs=completed_outputs,
+                        completed_pre_refine=completed_pre_refine,
+                        completed_refine_passes=completed_refine_passes,
+                        segment_outputs=segment_outputs,
+                        segment_pre_refine=segment_pre_refine,
+                        progress_pos=progress_pos,
+                    )
         if seg.index in run_indices:
             if clear_vram_between_segments and segment_outputs:
                 cleanup_segment_vram(enabled=True)
@@ -1266,6 +1367,19 @@ def execute_director_plan_core(
             segment_outputs.append(chunk)
             segment_pre_refine.append(pre_chunk)
             segment_audios.append(audio_dict or {})
+            segment_export_lengths[seg.index] = int(chunk.shape[0])
+            resampled_this_run.add(seg.index)
+            if export_segments_mode and seg.index > 0:
+                # Next pin + phase-trim already happened inside _run_one_segment.
+                _release_segment_pixels(
+                    seg.index - 1,
+                    completed_outputs=completed_outputs,
+                    completed_pre_refine=completed_pre_refine,
+                    completed_refine_passes=completed_refine_passes,
+                    segment_outputs=segment_outputs,
+                    segment_pre_refine=segment_pre_refine,
+                    progress_pos=progress_pos,
+                )
             if plan.export_mode == "all":
                 output_chunks.append(chunk)
                 output_pre_chunks.append(pre_chunk)
@@ -1401,20 +1515,41 @@ def execute_director_plan_core(
             completed_audios.get(idx) or (segment_audios[pos] if pos < len(segment_audios) else {})
             for pos, idx in enumerate(run_list)
         ]
-        export_frame_counts = [int(t.shape[0]) for t in segment_outputs]
-    combined = concat_continuous_chunks(export_chunks, export_segments, plan)
-    pre_source = export_pre_chunks if export_pre_chunks else segment_pre_refine
-    if not pre_source:
-        pre_source = list(segment_outputs)
-    same_as_final = (
-        len(pre_source) == len(export_chunks)
-        and all(a is b for a, b in zip(pre_source, export_chunks))
-    )
-    pre_combined = (
-        combined
-        if same_as_final
-        else concat_continuous_chunks(pre_source, export_segments, plan)
-    )
+        export_frame_counts = [
+            int(
+                segment_export_lengths.get(idx)
+                or (segment_outputs[pos].shape[0] if pos < len(segment_outputs) else 0)
+            )
+            for pos, idx in enumerate(run_list)
+        ]
+    if export_segments_mode:
+        # Never assemble the full timeline in RAM. Layout uses the segment list
+        # (older slots are 1-frame posters after release).
+        fallback = torch.full((1, 1, 1, 3), 0.5)
+        combined = segment_outputs[-1] if segment_outputs else fallback
+        pre_combined = (
+            segment_pre_refine[-1]
+            if segment_pre_refine
+            else combined
+        )
+        reports.append(
+            "Export mode: segments — released prior-segment pixels after mp4 "
+            "and continuity pin (no full-timeline concat; IMAGE keeps a 1-frame poster)."
+        )
+    else:
+        combined = concat_continuous_chunks(export_chunks, export_segments, plan)
+        pre_source = export_pre_chunks if export_pre_chunks else segment_pre_refine
+        if not pre_source:
+            pre_source = list(segment_outputs)
+        same_as_final = (
+            len(pre_source) == len(export_chunks)
+            and all(a is b for a, b in zip(pre_source, export_chunks))
+        )
+        pre_combined = (
+            combined
+            if same_as_final
+            else concat_continuous_chunks(pre_source, export_segments, plan)
+        )
     return (
         combined,
         segment_outputs,
@@ -1423,5 +1558,4 @@ def execute_director_plan_core(
         export_frame_counts,
         pre_combined,
         segment_pre_refine,
-        held_for_confirmation,
     )

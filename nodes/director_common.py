@@ -14,7 +14,7 @@ from ..director.audio_export import (
     resolve_audio_mode,
     source_audio_report_note,
 )
-from ..director.frame_align import pad_or_trim_frames
+from ..director.frame_align import H3_FPS, pad_or_trim_frames
 from ..director.gen_timeline import is_prompt_batch_timeline, is_video_batch_task_key
 from ..director.plan import build_director_plan, count_all_timeline_segments, count_timeline_segments, plan_summary
 from ..director.progress import report_director_planning
@@ -55,7 +55,13 @@ def timeline_required_inputs() -> dict:
         ),
         "frame_rate": (
             "FLOAT",
-            {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.01, "tooltip": "Timeline / output FPS (H3 trained at 24)."},
+            {
+                "default": H3_FPS,
+                "min": H3_FPS,
+                "max": H3_FPS,
+                "step": 0.01,
+                "tooltip": "Locked to 24 fps (MiniMax H3 training / audio clock).",
+            },
         ),
         "width": ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32}),
         "height": ("INT", {"default": 480, "min": 32, "max": 8192, "step": 32}),
@@ -176,6 +182,7 @@ def prepare_director_plan(
         validate_external_group_inputs,
     )
 
+    frame_rate = H3_FPS
     if not timeline_data or not timeline_data.strip():
         timeline_data = default_timeline_json(
             task_type=task_type,
@@ -359,10 +366,13 @@ def finalize_director_outputs(
         is_batch=is_batch,
         video_batch=video_batch,
     )
+    if segment_frame_counts:
+        frame_count = int(sum(int(n) for n in segment_frame_counts))
     if export_segments and len(segment_outputs) > 1:
         report = (
             report
-            + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s) on images output."
+            + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s) on images output "
+            "(full frames are in per-segment mp4; released clips keep a 1-frame poster)."
         )
     if plan.run_indices is not None and split_layout:
         report = (
@@ -464,12 +474,12 @@ def finalize_director_outputs(
         )
     else:
         report = report + (
-            "\n\nimages_pre_refine: same as images (Refine node not connected)."
+            "\n\nimages_pre_refine: same as images (二采未启用)."
         )
 
     report = report + "\n\n有问题联系作者：AI搅拌手  QQ交流群：551482703"
 
-    fps_out = float(plan.frame_rate or 24.0)
+    fps_out = float(H3_FPS)
     if block_final_images:
         report = report + (
             "\n\n本轮仅确认一采：images（最终/二采输出）已阻断，"

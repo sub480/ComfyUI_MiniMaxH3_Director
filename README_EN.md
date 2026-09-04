@@ -7,6 +7,66 @@ Repository: [AIMixer/ComfyUI_MiniMaxH3_Director](https://github.com/AIMixer/Comf
 
 ![MiniMaxH3Director workflow screenshot](docs/screenshot.png)
 
+## Dev updates
+
+Incremental changes versus [`main`](https://github.com/AIMixer/ComfyUI_MiniMaxH3_Director). Features below are unique to this branch; the rest of the document matches main.
+
+### Mixed mode
+
+New `task_type=mixed`. After adding a group, each group can switch type (`t2v` / `i2v` / `fl2v` / `r2v`); behavior matches the original mode. `t2v` / `i2v` / `fl2v` groups use Director `model` (fl2va). `r2v` groups should wire optional `model_r2v` (ref2va); unwired falls back to `model`.
+
+### Built-in second pass
+
+Director now has an in-node **Second pass** group; an external Refine node is no longer required:
+
+- **Enable second pass** off = first pass only; on = groups default to second pass
+- Modes are still `refine` (same-resolution), `upscale` (enlarge then sample), `latent_upscale` (H3 latent enlarge only)
+- Built-in defaults: `euler` + `simple`, 3 steps, denoise **0.35**; optional low-sigma extra steps (default +1, cosine, start sigma 0.70)
+- Optional ports: `refine_model` (second-pass UNET), `upscale_model` (`upscale` + `lanczos` only), `refine_sigmas` (overrides steps / scheduler / denoise / extra steps when wired)
+- **MiniMax H3 Director Refine** still works: a wired pack overrides the in-node widgets (old workflows unchanged)
+
+### Per-group first / second pass
+
+With second pass enabled (in-node group or wired Refine), each group card can pick **pass 1** / **pass 2** (replaces the old global `confirm_first_pass`):
+
+- **Pass 1**: first sample only; skipped on an exact first-pass cache hit
+- **Pass 2**: first then second sample; skips to second if a first-pass cache matches
+- Click the status dot for per-group match / diff
+- **Clear** deletes that group's first-pass cache only
+
+The Refine panel shows cache status across the full timeline. With segment continuity on, a missing previous segment skips the handoff and continues sampling instead of aborting.
+
+### HD tiled second sample
+
+HD second sample spatially tiles by default to lower DiT VRAM:
+
+- `refine_tile`: tiling on/off (off = full-frame)
+- `n_tiles` (default 2; 1 = full-frame)
+- `tile_axis` (`auto` = longer latent axis)
+- `tile_overlap` (latent-domain overlap; 4–8 recommended)
+- If the target-axis latent size is ≤ `max_size_for_no_tile` (default 64, ~480p), tiling is skipped
+
+Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every sampler step-syncs tile denoise and aligns each tile's RoPE to the full canvas so independently sampled seams do not appear. No extra tiled-sampler custom node is required.
+
+### Preview
+
+- Unified preview format on the timeline and group cards; preview can be switched
+- Live-sample speed slider (0–1): 0 hides preview, 1 is native 16 fps
+- Video thumbs lazy-load a first-frame poster
+
+### Audio and frame rate
+
+- Audio output (generate / source / mute) is shown by task type: `v2v` / `rv2v` and matching mixed-mode groups can keep source audio
+- Audio export is forced onto the 24 fps grid
+- Prompt text-box fill is more stable
+
+### Stability
+
+- Segment export releases pixels after each clip is written, lowering memory on long jobs
+- Refine target resolution auto-aligns (×32)
+- Tail-frame continuity handoff fix
+- New widgets are saved by name so old graphs keep widget values after the Second pass group is inserted
+
 ## Features
 
 **MiniMaxH3Director** is a single-node director for long-form, multi-segment MiniMax H3 audio–video generation — timeline planning, conditioning, sampling, AV decode, and export in one place. It wraps the official `MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` + `MiniMaxH3SigmaShift` + `KSampler` pipeline with native stereo audio.

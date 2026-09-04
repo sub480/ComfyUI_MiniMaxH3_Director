@@ -53,6 +53,7 @@ def sample_single_stage(
     phase_name: str = "sample",
     sigmas=None,
     apply_shift: bool = True,
+    tile=None,
 ):
     import torch
     from comfy_extras.nodes_custom_sampler import (
@@ -99,6 +100,23 @@ def sample_single_stage(
         )[0]
 
     def _run_official() -> dict:
+        tile_cfg = tile if isinstance(tile, dict) and int(tile.get("n_tiles") or 1) > 1 else None
+        if tile_cfg:
+            from .h3_tiled_sampler import sample_h3_tiled
+
+            return sample_h3_tiled(
+                noise=noise_obj,
+                guider=guider,
+                sampler=sampler_obj,
+                sigmas=sigma_t,
+                latent=latent,
+                n_tiles=int(tile_cfg.get("n_tiles") or 2),
+                tile_axis=str(tile_cfg.get("tile_axis") or "auto"),
+                tile_overlap=int(tile_cfg.get("tile_overlap") or 8),
+                max_size_for_no_tile=int(tile_cfg.get("max_size_for_no_tile") or 64),
+                refine_seams=bool(tile_cfg.get("refine_seams", True)),
+                refine_steps=int(tile_cfg.get("refine_steps") or 8),
+            )
         sampled = SamplerCustomAdvanced.execute(
             noise_obj, guider, sampler_obj, sigma_t, latent
         )

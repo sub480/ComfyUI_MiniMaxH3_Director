@@ -20,6 +20,7 @@ import torch
 
 from ..lib.image_prep import assert_minimax_canvas, fit_canvas, fit_video_long_edge, resolve_output_dimensions
 from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
+from .frame_align import H3_FPS
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.fl2v")
 
@@ -31,10 +32,11 @@ DEFAULT_FL2V_DURATION_SEC = 5.0
 DEFAULT_FL2V_NEGATIVE = "bad video"
 
 
-def _duration_to_minimax_frames(seconds: float, fps: float = 24.0) -> int:
-    """Official MiniMax formula: max(5, round(a*fps)) then snap to 17k+5."""
+def _duration_to_minimax_frames(seconds: float, fps: float = H3_FPS) -> int:
+    """Official MiniMax formula: max(5, round(a*24)) then snap to 17k+5."""
+    del fps
     a = max(0.1, float(seconds or 0.1))
-    rate = max(1.0, float(fps or 24.0))
+    rate = float(H3_FPS)
     n = max(5, int(round(a * rate)))
     rem = (5 - (n % 17)) % 17
     return n + rem
@@ -60,7 +62,7 @@ def _image_ref_from_raw(raw: Any) -> dict[str, Any] | None:
     }
 
 
-def _normalize_shots(raw_shots: list | None, *, frame_rate: float = 24.0) -> list[dict[str, Any]]:
+def _normalize_shots(raw_shots: list | None, *, frame_rate: float = H3_FPS) -> list[dict[str, Any]]:
     """Normalize explicit shots[]. Empty start+end is kept as a text-to-video shot."""
     out: list[dict[str, Any]] = []
     if not raw_shots:
@@ -332,6 +334,57 @@ def _build_fl2v_endpoint_source(
     return clip
 
 
+def load_fl2v_segment_media(
+    seg_data: dict | None,
+    *,
+    width: int,
+    height: int,
+    output_mode: str,
+    ref_max_size: int,
+    frame_count: int,
+) -> tuple[list, torch.Tensor | None]:
+    """Load start/end images from a mixed-mode (or batch) segment into fl2v refs.
+
+    Returns (refs, source_clip). refs use index 0=start, 1=end. source_clip is
+    only built when both endpoints exist (same as the dedicated fl2v planner).
+    """
+    from .plan import SegmentRef
+
+    raw = seg_data if isinstance(seg_data, dict) else {}
+    start = _image_ref_from_raw(raw.get("startImage") or raw.get("start_image"))
+    end = _image_ref_from_raw(raw.get("endImage") or raw.get("end_image"))
+    if start is None:
+        start = _image_ref_from_raw(raw.get("genImage") or raw.get("gen_image"))
+    start_img = None
+    if start is not None:
+        start_img = _fit_image(
+            _load_image_ref(start),
+            width=width,
+            height=height,
+            output_mode=output_mode,
+            ref_max_size=ref_max_size,
+        )
+    end_img = None
+    if end is not None:
+        end_img = _fit_image(
+            _load_image_ref(end),
+            width=width,
+            height=height,
+            output_mode=output_mode,
+            ref_max_size=ref_max_size,
+        )
+    start_img, end_img = _unify_fl2v_pair_canvas(start_img, end_img)
+    refs: list[SegmentRef] = []
+    if start_img is not None:
+        refs.append(SegmentRef(index=0, tensor=start_img[:1].clone()))
+    if end_img is not None:
+        refs.append(SegmentRef(index=1, tensor=end_img[:1].clone()))
+    source_clip = None
+    if start_img is not None and end_img is not None:
+        source_clip = _build_fl2v_endpoint_source(start_img, end_img, frame_count)
+    return refs, source_clip
+
+
 def _unify_fl2v_pair_canvas(
     start_img: torch.Tensor | None,
     end_img: torch.Tensor | None,
@@ -520,7 +573,7 @@ def _expand_shots(keyframes: list[dict]) -> list[dict[str, Any]]:
 
 
 def count_fl2v_runnable_shots(timeline: dict) -> int:
-    fps = float(timeline.get("frameRate") or 24)
+    fps = float(H3_FPS)
     shots = _normalize_shots(timeline.get("shots"), frame_rate=fps)
     if shots:
         return max(1, len(shots))
@@ -545,6 +598,7 @@ def build_fl2v_director_plan(
         SegmentRef,
         _parse_run_selection,
         _resolve_export_mode,
+        resolve_segment_pass_mode,
     )
 
     global_block = timeline.get("global") or {}
@@ -555,7 +609,7 @@ def build_fl2v_director_plan(
     if task_key != "fl2v":
         raise ValueError(f"fl2v plan builder received task_key={task_key}")
 
-    fps = float(timeline.get("frameRate") or frame_rate or 24)
+    fps = float(H3_FPS)
     keyframes = _normalize_keyframes(
         timeline.get("keyframes") or timeline.get("segments") or []
     )
@@ -682,11 +736,16 @@ def build_fl2v_director_plan(
         if end_img is not None:
             refs.append(SegmentRef(index=1, tensor=end_img[:1].clone()))
 
-        # Last-only: no source_clip — otherwise held end would be read as first_frame.
-        # Empty shot: dummy clip; ImageToVideo gets no keyframes (text-to-video).
-        if start_img is not None:
+        # Start+end: encode endpoints on a held clip (last lives on the tail).
+        # Start-only / last-only / empty: no full held source — a start-held
+        # clip would make the executor treat the tail as last_frame (loop-back
+        # to the first frame); a last-held clip would be read as first_frame.
+        if start_img is not None and end_img is not None:
             source_clip = _build_fl2v_endpoint_source(start_img, end_img, fc)
             source_clips.append(source_clip[:1].clone())
+        elif start_img is not None:
+            source_clip = None
+            source_clips.append(start_img[:1].clone())
         elif end_img is not None:
             source_clip = None
             source_clips.append(end_img[:1].clone())
@@ -713,6 +772,9 @@ def build_fl2v_director_plan(
                     shot if isinstance(shot, dict) else {},
                     segment_index=plan_index,
                 ),
+                pass_mode=resolve_segment_pass_mode(
+                    shot if isinstance(shot, dict) else {},
+                ),
             )
         )
         plan_index += 1
@@ -729,6 +791,7 @@ def build_fl2v_director_plan(
 
     source_video = torch.full((len(segments), 16, 16, 3), 0.5, dtype=torch.float32)
     raw = dict(timeline)
+    raw["frameRate"] = H3_FPS
     raw["timelineMode"] = "fl2v"
     raw["keyframes"] = keyframes
     raw["totalFrames"] = timeline_total

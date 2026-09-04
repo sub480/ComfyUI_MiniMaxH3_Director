@@ -10,12 +10,22 @@ import torch
 from ..lib.image_prep import ensure_minimax_canvas
 from .core_sampling import sample_single_stage
 from .refine_pack import (
+    DEFAULT_REFINE_DENOISE,
+    DEFAULT_REFINE_END_AT_SIGMA,
+    DEFAULT_REFINE_EXTRA_STEPS,
+    DEFAULT_REFINE_SAMPLE_STEPS,
+    DEFAULT_REFINE_SCHEDULER,
+    DEFAULT_REFINE_START_AT_SIGMA,
+    DEFAULT_SIGMA_SPACING,
+    densify_refine_sigmas,
     latent_upscale_model_name,
+    parse_refine_sigmas,
     refine_model_for,
     refine_needs_canvas,
     refine_passes_for,
     refine_seed_for,
     refine_sigmas_override,
+    refine_tile_cfg,
     refine_uses_h3_latent,
 )
 
@@ -121,13 +131,91 @@ def _join_av(video_latent: dict, audio_latent, template: dict) -> dict:
         return out
 
 
-def _scale_images(images: torch.Tensor, width: int, height: int) -> torch.Tensor:
+def _scale_images(images: torch.Tensor, width: int, height: int, crop: str = "disabled") -> torch.Tensor:
     from comfy.utils import common_upscale
 
     rgb = images[..., :3]
     return common_upscale(
-        rgb.movedim(-1, 1), int(width), int(height), "lanczos", "disabled"
+        rgb.movedim(-1, 1), int(width), int(height), "lanczos", crop
     ).movedim(1, -1)
+
+
+def _video_latent_canvas(video_latent) -> tuple[int, int, int, tuple[int, int]]:
+    samples = video_latent.get("samples") if isinstance(video_latent, dict) else video_latent
+    if not torch.is_tensor(samples):
+        raise ValueError("Second-pass keyframe rebuild needs a video latent tensor")
+    if samples.ndim == 4:
+        samples = samples.unsqueeze(0)
+    if samples.ndim != 5 or int(samples.shape[1]) != 24:
+        raise ValueError("Second-pass keyframe rebuild needs a 24-channel video latent")
+    latent_hw = (int(samples.shape[-2]), int(samples.shape[-1]))
+    return int(samples.shape[-1]) * 16, int(samples.shape[-2]) * 16, int(samples.shape[2]), latent_hw
+
+
+def _rebuild_second_pass_keyframes(
+    positive,
+    *,
+    vae,
+    video_latent,
+    first_frame=None,
+    last_frame=None,
+):
+    """Re-encode I2V/FL2V keyframes at the upscaled canvas. CLIP tokens stay as first-pass."""
+    import node_helpers
+
+    from .h3_context_patches import CTX_FRAME_KEY
+    from .h3_motion_context import _existing_keyframes, pixel_frames_for_latent_t
+
+    width, height, latent_t, latent_hw = _video_latent_canvas(video_latent)
+    frame_count = pixel_frames_for_latent_t(latent_t)
+    existing = _existing_keyframes(positive)
+    rebuilt: dict[int, torch.Tensor] = {}
+    if first_frame is not None:
+        encoded = vae.encode(_scale_images(first_frame[:1], width, height, "disabled"))
+        if not torch.is_tensor(encoded) or encoded.ndim != 5 or tuple(encoded.shape[-2:]) != latent_hw:
+            raise ValueError("Rebuilt first-frame keyframe does not match the second-pass video latent")
+        rebuilt[0] = encoded
+    if last_frame is not None:
+        encoded = vae.encode(_scale_images(last_frame[:1], width, height, "center"))
+        if not torch.is_tensor(encoded) or encoded.ndim != 5 or tuple(encoded.shape[-2:]) != latent_hw:
+            raise ValueError("Rebuilt last-frame keyframe does not match the second-pass video latent")
+        rebuilt[frame_count - 1] = encoded
+    if not rebuilt:
+        return positive, False
+
+    merged = []
+    used = set()
+    for kf in existing:
+        if CTX_FRAME_KEY in kf:
+            merged.append(kf)
+            continue
+        rfi = int(kf.get("resolved_frame_index", -1))
+        if rfi in rebuilt:
+            entry = dict(kf)
+            entry["latent"] = rebuilt[rfi]
+            merged.append(entry)
+            used.add(rfi)
+            continue
+        merged.append(kf)
+    for rfi, latent in rebuilt.items():
+        if rfi in used:
+            continue
+        merged.append({"resolved_frame_index": rfi, "latent": latent})
+    if not merged:
+        return positive, False
+    return node_helpers.conditioning_set_values(positive, {"minimax_keyframes": merged}), True
+
+
+def _unload_sampling_model(model) -> None:
+    if model is None:
+        return
+    try:
+        import comfy.model_management as model_management
+
+        model_management.unload_model_and_clones(model, unload_additional_models=False)
+        model_management.soft_empty_cache()
+    except Exception:
+        pass
 
 
 def _upscale_with_rtx_vsr(
@@ -332,12 +420,16 @@ def _apply_h3_latent_upscale(
     vae,
     refine_positive,
     on_phase=None,
+    first_frame=None,
+    last_frame=None,
+    unload_model=None,
 ) -> tuple[dict, Any, list[str]]:
     from .h3_latent_upscale import upscale_h3_video_latent
 
     src_w, src_h = _source_canvas(plan, first_pass_images)
     if on_phase:
         on_phase("upscale", 0)
+    _unload_sampling_model(unload_model)
     video_latent, audio_latent = _split_av(work)
     model_name = latent_upscale_model_name(pack)
     latent_mod = pack.get("latent_upscale_module")
@@ -365,6 +457,18 @@ def _apply_h3_latent_upscale(
         audio_latent.pop("noise_mask", None)
     work = _join_av(encoded, audio_latent, work)
     notes = [f"{tw}×{th}", "h3_latent"]
+    try:
+        refine_positive, rebuilt = _rebuild_second_pass_keyframes(
+            refine_positive,
+            vae=vae,
+            video_latent=encoded,
+            first_frame=first_frame,
+            last_frame=last_frame,
+        )
+        if rebuilt:
+            notes.append("second-pass keyframes")
+    except Exception as exc:
+        log.warning("H3 latent upscale keyframe rebuild failed (%s); continuing.", exc)
     if pin_frames > 0 and first_pass_images is not None:
         try:
             prefix = first_pass_images[:pin_frames]
@@ -415,6 +519,49 @@ def _repin_after_upscale(
     return new_positive, True
 
 
+def resolve_refine_sigmas(
+    pack: dict,
+    *,
+    model,
+    shift_video: float,
+    shift_audio: float,
+) -> tuple[tuple[float, ...], bool]:
+    """Return (sigma tuple, wired). Built-in packs generate BasicScheduler + densify."""
+    wired = refine_sigmas_override(pack)
+    if wired is not None:
+        return wired, True
+    if not pack.get("builtin"):
+        raise ValueError(
+            "Refine 二采需要把 BasicScheduler 或 ManualSigmas 接到 sigmas 口。"
+        )
+    from comfy_extras.nodes_custom_sampler import BasicScheduler
+    from comfy_extras.nodes_minimax_h3 import MiniMaxH3SigmaShift
+
+    shifted = MiniMaxH3SigmaShift.execute(model, float(shift_video), float(shift_audio))
+    model_use = _unpack(shifted)[0]
+    try:
+        steps = int(pack.get("sample_steps") or DEFAULT_REFINE_SAMPLE_STEPS)
+    except (TypeError, ValueError):
+        steps = DEFAULT_REFINE_SAMPLE_STEPS
+    steps = max(1, min(200, steps))
+    scheduler = str(pack.get("scheduler") or DEFAULT_REFINE_SCHEDULER).strip() or DEFAULT_REFINE_SCHEDULER
+    try:
+        denoise = float(pack.get("denoise") if pack.get("denoise") is not None else DEFAULT_REFINE_DENOISE)
+    except (TypeError, ValueError):
+        denoise = DEFAULT_REFINE_DENOISE
+    denoise = max(0.0, min(1.0, denoise))
+    sigma_out = BasicScheduler.execute(model_use, scheduler, steps, denoise)
+    sigma_t = _unpack(sigma_out)[0]
+    sigma_t = densify_refine_sigmas(
+        sigma_t,
+        extra_steps=pack.get("extra_steps", DEFAULT_REFINE_EXTRA_STEPS),
+        start_at_sigma=pack.get("start_at_sigma", DEFAULT_REFINE_START_AT_SIGMA),
+        end_at_sigma=pack.get("end_at_sigma", DEFAULT_REFINE_END_AT_SIGMA),
+        spacing=pack.get("spacing") or DEFAULT_SIGMA_SPACING,
+    )
+    return parse_refine_sigmas(sigma_t, fallback=False), False
+
+
 def apply_segment_refine(
     plan,
     seg,
@@ -437,6 +584,8 @@ def apply_segment_refine(
     first_pass_images: torch.Tensor | None = None,
     trim_frames: int = 0,
     on_pass: RefinePassCallback | None = None,
+    first_frame=None,
+    last_frame=None,
 ) -> tuple[dict, str]:
     """Run optional refine/upscale second sample. Never raises — returns first-pass on failure.
 
@@ -487,6 +636,9 @@ def apply_segment_refine(
                     vae=vae,
                     refine_positive=refine_positive,
                     on_phase=on_phase,
+                    first_frame=first_frame,
+                    last_frame=last_frame,
+                    unload_model=refine_model,
                 )
                 note_parts.extend(extra)
                 last_ok = work
@@ -523,6 +675,22 @@ def apply_segment_refine(
                 )
                 encoded = _encode_video(vae, frames)
                 work = _join_av(encoded, audio_latent, work)
+                try:
+                    refine_positive, rebuilt = _rebuild_second_pass_keyframes(
+                        refine_positive,
+                        vae=vae,
+                        video_latent=encoded,
+                        first_frame=first_frame,
+                        last_frame=last_frame,
+                    )
+                    if rebuilt:
+                        note_parts.append("second-pass keyframes")
+                except Exception as exc:
+                    log.warning(
+                        "Segment %s refine upscale keyframe rebuild failed (%s); continuing.",
+                        int(getattr(seg, "index", 0)) + 1,
+                        exc,
+                    )
                 if pin_frames > 0:
                     try:
                         refine_positive, pinned = _repin_after_upscale(
@@ -553,12 +721,12 @@ def apply_segment_refine(
                 on_phase("refine", 1)
             return work, "refine " + ", ".join(note_parts)
 
-        wired_sigmas = bool(pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None)
-        sigma_list = refine_sigmas_override(pack)
-        if sigma_list is None:
-            raise ValueError(
-                "Refine 二采需要把 BasicScheduler 或 ManualSigmas 接到 sigmas 口。"
-            )
+        sigma_list, wired_sigmas = resolve_refine_sigmas(
+            pack,
+            model=refine_model,
+            shift_video=shift_video,
+            shift_audio=shift_audio,
+        )
         sigma_sampler = str(pack.get("sampler") or "euler")
         sigma_steps = max(1, len(sigma_list) - 1)
         how = "sigmas wired" if wired_sigmas else f"sigma {sigma_sampler}"
@@ -570,16 +738,22 @@ def apply_segment_refine(
                 "Unwire refine_model so the first-pass UNET (Turbo+Sage) is reused, "
                 "or use a matching second-pass UNET."
             )
+        tile_cfg = refine_tile_cfg(pack)
+        if tile_cfg:
+            note_parts.append(
+                f"tile {tile_cfg['tile_axis']}×{tile_cfg['n_tiles']}"
+            )
         # Pass 1 samples after optional upscale; later passes are same-canvas refine only.
         for i in range(n_passes):
             log.info(
-                "Director refine pass %d/%d (%s %s %d-step%s)",
+                "Director refine pass %d/%d (%s %s %d-step%s%s)",
                 i + 1,
                 n_passes,
                 "sigmas wired" if wired_sigmas else "sigma",
                 sigma_sampler,
                 sigma_steps,
                 ", custom model" if refine_model is not model else "",
+                f", tile {tile_cfg['n_tiles']}" if tile_cfg else "",
             )
             if on_phase:
                 on_phase("refine", (i + 0.5) / n_passes)
@@ -602,6 +776,7 @@ def apply_segment_refine(
                 phase_name="refine",
                 sigmas=sigma_list,
                 apply_shift=True,
+                tile=tile_cfg,
             )
             last_ok = work
             if on_pass is not None:

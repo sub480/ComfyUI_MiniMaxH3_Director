@@ -542,7 +542,12 @@ export function mountPromptEnhancerPanel(editor, parentEl) {
     };
 
     pe.fetchTemplate = async (resetIfDefault = false) => {
-        const task = resolveTaskKey(editor.getTaskKey?.() || "rv2v");
+        const mixedSeg = editor.isMixedMode?.()
+            ? editor.timeline?.segments?.[editor.selectedIndex ?? 0]
+            : null;
+        const task = resolveTaskKey(
+            mixedSeg?.taskType || editor.getTaskKey?.() || "rv2v",
+        );
         const outputLanguage = resolveOutputLanguage(pe);
         try {
             const resp = await api.fetchApi("/minimax/director/get_template", {

@@ -15,6 +15,8 @@ import folder_paths
 from aiohttp import web
 from server import PromptServer
 
+from .frame_align import H3_FPS
+
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director")
 
 CHUNK_ROOT = os.path.join(folder_paths.get_temp_directory(), "minimax_upload_chunks")
@@ -407,6 +409,19 @@ async def minimax_probe_video(request):
     return web.json_response(info)
 
 
+async def minimax_list_vae_approx(request):
+    try:
+        from .tae_preview import default_tae_name, list_vae_approx_names
+        names = list_vae_approx_names()
+        return web.json_response({
+            "items": names,
+            "default": default_tae_name(),
+        })
+    except Exception as exc:
+        log.warning("MiniMax H3 Director list vae_approx failed: %s", exc)
+        return web.Response(status=500, text=str(exc))
+
+
 async def minimax_list_input_media(request):
     try:
         kind = str(request.query.get("kind") or "").strip().lower()
@@ -444,10 +459,7 @@ async def minimax_detect_shots(request):
             ),
         )
 
-    try:
-        frame_rate = float(body.get("frameRate") or body.get("frame_rate") or 24)
-    except (TypeError, ValueError):
-        frame_rate = 24.0
+    frame_rate = float(H3_FPS)
     try:
         total_frames = int(body.get("totalFrames") or body.get("total_frames") or 0)
     except (TypeError, ValueError):
@@ -538,7 +550,7 @@ async def minimax_first_pass_cache_status(request):
             global_task_type=str(body.get("task_type") or ""),
             global_prompt=str(body.get("global_prompt") or ""),
             total_frames=int(body.get("total_frames") or 124),
-            frame_rate=float(body.get("frame_rate") or 24.0),
+            frame_rate=float(H3_FPS),
             width=int(body.get("width") or 864),
             height=int(body.get("height") or 480),
             ref_max_size=int(body.get("ref_max_size") or 864),
@@ -558,6 +570,44 @@ async def minimax_first_pass_cache_status(request):
             {"exists": False, "matches": False, "error": str(exc)},
             status=400,
         )
+
+
+async def minimax_clear_segment_cache(request):
+    """Delete first-pass (.pre.*) or final segment cache files."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        return web.Response(status=400, text=f"Invalid JSON: {exc}")
+
+    node_id = str(body.get("node_id") or "").strip()
+    if not re.fullmatch(r"\d+", node_id):
+        return web.Response(status=400, text="Invalid Director node id.")
+
+    kind = str(body.get("kind") or "final").strip().lower()
+    if kind not in {"first_pass", "final", "all"}:
+        return web.Response(status=400, text="kind must be first_pass, final or all.")
+
+    raw_idx = body.get("index", body.get("segment_index"))
+    segment_index = None
+    if raw_idx is not None and str(raw_idx).strip() != "":
+        try:
+            segment_index = int(raw_idx)
+        except (TypeError, ValueError):
+            return web.Response(status=400, text="Invalid segment index.")
+        if segment_index < 0:
+            return web.Response(status=400, text="Invalid segment index.")
+
+    try:
+        from .segment_cache import clear_segment_cache
+
+        removed = clear_segment_cache(node_id, kind=kind, segment_index=segment_index)
+        payload = {"removed": removed, "kind": kind}
+        if segment_index is not None:
+            payload["index"] = segment_index
+        return web.json_response(payload)
+    except Exception as exc:
+        log.warning("MiniMax H3 Director clear segment cache failed: %s", exc)
+        return web.Response(status=500, text=str(exc))
 
 
 def _register_route(routes, method: str, path: str, handler) -> None:
@@ -599,12 +649,19 @@ def register_routes() -> bool:
     _register_route(routes, "POST", "/minimax/director/probe_video", minimax_probe_video)
     _register_route(routes, "GET", "/minimax/director/probe_video", minimax_probe_video)
     _register_route(routes, "GET", "/minimax/director/list_input_media", minimax_list_input_media)
+    _register_route(routes, "GET", "/minimax/director/list_vae_approx", minimax_list_vae_approx)
     _register_route(routes, "POST", "/minimax/director/detect_shots", minimax_detect_shots)
     _register_route(
         routes,
         "POST",
         "/minimax/director/first_pass_cache_status",
         minimax_first_pass_cache_status,
+    )
+    _register_route(
+        routes,
+        "POST",
+        "/minimax/director/clear_segment_cache",
+        minimax_clear_segment_cache,
     )
     from .pack import minimax_download_pack, minimax_export_pack, minimax_import_pack
 

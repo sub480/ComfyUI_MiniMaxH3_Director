@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import torch
 
+# MiniMax H3 is trained at 24 fps (audio latent 40 Hz on this clock). Not user-editable.
+H3_FPS = 24.0
+
 
 def minimax_align_frame_count(frame_count: int) -> int:
     """Round up to MiniMax H3 17k+5 frame grid (5, 22, 39, …)."""

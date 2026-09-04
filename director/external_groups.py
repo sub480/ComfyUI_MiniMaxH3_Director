@@ -25,7 +25,7 @@ from .fl2v_timeline import (
     _unify_fl2v_pair_canvas,
     reinforce_fl2v_prompt,
 )
-from .frame_align import minimax_align_frame_count
+from .frame_align import H3_FPS, minimax_align_frame_count
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.external_groups")
 
@@ -290,10 +290,10 @@ def validate_external_group_inputs(
         return task_key, None, None
 
     if i2v:
-        if task_key not in I2V_FAMILY:
+        if task_key not in I2V_FAMILY and task_key != "mixed":
             raise ValueError(
                 f"MiniMax H3 Director: i2v_groups is connected but task_type is '{task_key}'. "
-                "Set task to t2v / i2v / fl2v."
+                "Set task to t2v / i2v / fl2v / mixed."
             )
         for idx, g in enumerate(i2v):
             if g.get("family") not in (None, "i2v") or g.get("kind") not in I2V_FAMILY:
@@ -322,10 +322,10 @@ def validate_external_group_inputs(
         return task_key, i2v, "i2v"
 
     # r2v
-    if task_key != "r2v":
+    if task_key not in {"r2v", "mixed"}:
         raise ValueError(
             f"MiniMax H3 Director: r2v_groups is connected but task_type is '{task_key}'. "
-            "Set task to r2v."
+            "Set task to r2v / mixed."
         )
     for g in r2v:
         if g.get("kind") != "r2v":
@@ -358,10 +358,11 @@ def build_plan_from_external_groups(
         merge_indexed_refs,
         reinforce_r2v_prompt,
         resolve_ref_image_size,
+        resolve_segment_pass_mode,
     )
 
     timeline = _parse_timeline_meta(timeline_data)
-    fps = float(timeline.get("frameRate") or frame_rate or 24.0)
+    fps = float(H3_FPS)
     task_key = resolve_task_key(task_type)
     label = task_type_option_label(TASK_PROMPT_BY_KEY.get(task_key) or TASK_PROMPT_BY_KEY["t2v"])
     task_label = task_type or label
@@ -473,10 +474,12 @@ def build_plan_from_external_groups(
                     refs.append(SegmentRef(index=0, tensor=start_img[:1].clone()))
                 if end_img is not None:
                     refs.append(SegmentRef(index=1, tensor=end_img[:1].clone()))
-                # Last-only: skip source_clip so executor won't treat held end as first_frame.
+                # Start+end only: held endpoint clip. Start-only / last-only skip
+                # it so the executor cannot promote a held tail into last_frame
+                # (loop-back) or a held end into first_frame.
                 source_clip = (
                     _build_fl2v_endpoint_source(start_img, end_img, fc)
-                    if start_img is not None
+                    if start_img is not None and end_img is not None
                     else None
                 )
                 if seg_task_key in {"fl2v", "i2v"}:
@@ -506,6 +509,7 @@ def build_plan_from_external_groups(
                         row, segment_index=plan_idx
                     ),
                     ref_image_size=resolve_ref_image_size(row, timeline),
+                    pass_mode=resolve_segment_pass_mode(row),
                 )
             )
         else:
@@ -580,6 +584,7 @@ def build_plan_from_external_groups(
                         row, segment_index=plan_idx
                     ),
                     ref_image_size=resolve_ref_image_size(row, timeline),
+                    pass_mode=resolve_segment_pass_mode(row),
                 )
             )
 
@@ -589,6 +594,7 @@ def build_plan_from_external_groups(
     total = int(segments[-1].end_frame)
     source_video = torch.full((len(segments), 16, 16, 3), 0.5, dtype=torch.float32)
     raw = dict(timeline)
+    raw["frameRate"] = H3_FPS
     raw["externalGroups"] = {
         "source": family,
         "count": len(groups),
