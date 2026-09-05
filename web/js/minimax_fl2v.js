@@ -810,6 +810,22 @@ export function stripFl2vPromptBody(text) {
         .trim();
 }
 
+export function flushFl2vDurationInputs(editor) {
+    const shots = editor.timeline?.shots || [];
+    editor?.fl2vUi?.shotsEl?.querySelectorAll("[data-r='shot-sec']").forEach((input) => {
+        const i = parseInt(input.closest("[data-shot-index]")?.dataset?.shotIndex, 10);
+        if (!Number.isFinite(i) || !shots[i]) return;
+        const displayed = parseFloat(input.value);
+        if (!Number.isFinite(displayed)) return;
+        const current = Number(shots[i].durationSec);
+        if (Number.isFinite(current) && roundDurationSec(displayed) === roundDurationSec(current)
+            && input !== document.activeElement) {
+            return;
+        }
+        setFl2vShotDurationSec(editor, i, displayed);
+    });
+}
+
 export function flushFl2vPromptDraft(editor) {
     const shots = editor.timeline?.shots || [];
     editor?.fl2vUi?.shotsEl?.querySelectorAll("[data-r='shot-prompt']").forEach((ta) => {

@@ -62,6 +62,7 @@ import {
     listCommonImageRefs,
     mountImageBatchPanel,
     flushBatchPromptInputs,
+    flushBatchDurationInputs,
     normalizeImageBatchSegments,
     rebaseR2vGroupSlotsForCommon,
     renderImageBatchGroups,
@@ -110,6 +111,7 @@ import {
     setFl2vToolbar,
     setFl2vShotPreview,
     flushFl2vPromptDraft,
+    flushFl2vDurationInputs,
     syncFl2vDurationSecAfterDrag,
     syncFl2vFromShots,
     updateFl2vDetailUI,
@@ -2399,14 +2401,23 @@ class MiniMaxH3DirectorEditor {
      * widget so execution (and the next sync) don't revive stale graph text.
      */
     writeExternalGroupPrompt(segIndex, prompt) {
+        this._writeExternalGroupWidget(segIndex, "prompt", String(prompt ?? ""));
+    }
+
+    writeExternalGroupDuration(segIndex, durationSec) {
+        const sec = Number(durationSec);
+        if (!Number.isFinite(sec) || sec <= 0) return;
+        this._writeExternalGroupWidget(segIndex, "duration_sec", roundDurationSec(sec));
+    }
+
+    _writeExternalGroupWidget(segIndex, widgetName, next) {
         if (!this.hasExternalI2vGroups?.() && !this.hasExternalR2vGroups?.()) return;
         const nodes = collectExternalGroupNodes(this);
         const node = nodes?.[segIndex];
         if (!node) return;
-        const w = (node.widgets || []).find((x) => x?.name === "prompt");
+        const w = (node.widgets || []).find((x) => x?.name === widgetName);
         if (!w) return;
-        const next = String(prompt ?? "");
-        if (String(w.value ?? "") === next) return;
+        if (String(w.value ?? "") === String(next ?? "")) return;
         // Avoid feedback loop: our widget callback triggers syncExternalGroupsTimeline.
         w._mmxSkipExternalSync = true;
         try {
@@ -2415,6 +2426,20 @@ class MiniMaxH3DirectorEditor {
             w.callback?.(next);
         } finally {
             queueMicrotask(() => { w._mmxSkipExternalSync = false; });
+        }
+    }
+
+    /** Pack import must update wired Group widgets or graph sync will restore 5s. */
+    writeImportedTimelineToExternalGroups() {
+        if (!this.hasExternalI2vGroups?.() && !this.hasExternalR2vGroups?.()) return;
+        const nodes = collectExternalGroupNodes(this);
+        if (!nodes?.length) return;
+        const items = (this.timeline.shots?.length ? this.timeline.shots : this.timeline.segments) || [];
+        const n = Math.min(nodes.length, items.length);
+        for (let i = 0; i < n; i++) {
+            const item = items[i] || {};
+            this.writeExternalGroupDuration(i, item.durationSec);
+            if (item.prompt != null) this.writeExternalGroupPrompt(i, item.prompt);
         }
     }
 
@@ -2903,6 +2928,9 @@ class MiniMaxH3DirectorEditor {
         this._syncTimer = null;
         // Refresh visibility first so queue flush can pull checkbox state reliably.
         this.updateSegmentContinuityUI();
+        // Pack export / queue serialize: pull visible 秒数, not only prompt drafts.
+        if (this.isImageBatch?.()) flushBatchDurationInputs(this);
+        if (this.isFl2vMode?.()) flushFl2vDurationInputs(this);
         this._writeTimelineWidget();
     }
 
@@ -3980,6 +4008,11 @@ class MiniMaxH3DirectorEditor {
         this._lastOutputWasBatchFixed = false;
         this._legacyFrames = [];
         this._clearPreviewVideos?.(true);
+        // Drop live card drafts before parse/render. Otherwise renderImageBatchGroups
+        // flushes the previous 秒数 (e.g. 5s) onto pack groups that share the same id
+        // (e.g. exported 10s) and import looks like a no-op.
+        if (this.batchList) this.batchList.innerHTML = "";
+        if (this.fl2vUi?.shotsEl) this.fl2vUi.shotsEl.innerHTML = "";
         const taskType = widgets.task_type || widgets.taskType || data.global?.taskType || "";
         if (this.taskTypeWidget && taskType) this.taskTypeWidget.value = taskType;
         if (this.globalTask && taskType) this.globalTask.value = taskType;
@@ -4002,8 +4035,14 @@ class MiniMaxH3DirectorEditor {
         const initTotal = Math.max(0, parseInt(this.totalFramesWidget?.value || data.totalFrames || 124, 10));
         const storedFps = parseStoredFps(data.frameRate || this.frameRateWidget?.value || H3_FPS);
         this.timeline = parseTimeline(this.timelineWidget?.value, initTotal, H3_FPS);
+        if (this.globalPrompt && this.timeline.global?.prompt != null) {
+            this.globalPrompt.value = this.timeline.global.prompt;
+        }
         this._directorMode = this.getDirectorMode();
         this._taskKey = resolveTaskKey(this.taskTypeWidget?.value || taskType);
+        // Write pack duration/prompt onto Group nodes before graph sync, otherwise
+        // syncExternalGroupsTimeline restores the previous duration_sec (often 5s).
+        this.writeImportedTimelineToExternalGroups();
         if (this._directorMode === "video") {
             this.restoreVideoFromTimeline();
         } else if (this._directorMode === "prompt_batch" || this._directorMode === "image_batch") {

@@ -26,6 +26,7 @@ import folder_paths
 from aiohttp import web
 
 from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
+from .fl2v_timeline import DEFAULT_FL2V_DURATION_SEC, MIN_FL2V_FRAMES, _duration_to_minimax_frames
 from .frame_align import H3_FPS
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.pack")
@@ -797,8 +798,23 @@ def _assemble_timeline(extracted: Path, pack_meta: dict) -> dict:
         gj = gdir / "group.json"
         raw = _read_json(gj) if gj.is_file() else {}
         scanned = _scan_slot_files(gdir)
-        fc = int(raw.get("frameCount") or raw.get("length") or 124)
         dur = raw.get("durationSec")
+        try:
+            dur_f = float(dur) if dur is not None else None
+        except (TypeError, ValueError):
+            dur_f = None
+        fc_raw = raw.get("frameCount") if raw.get("frameCount") is not None else raw.get("length")
+        try:
+            fc = int(fc_raw) if fc_raw is not None else 0
+        except (TypeError, ValueError):
+            fc = 0
+        # durationSec is the user-facing source of truth; don't keep a stale 124
+        # frameCount when the pack stored 10s (or any other duration).
+        if dur_f is not None and dur_f > 0:
+            fc = max(MIN_FL2V_FRAMES, _duration_to_minimax_frames(dur_f, H3_FPS))
+            dur = dur_f
+        elif fc <= 0:
+            fc = max(MIN_FL2V_FRAMES, _duration_to_minimax_frames(DEFAULT_FL2V_DURATION_SEC, H3_FPS))
         start_img = raw.get("startImage") if isinstance(raw.get("startImage"), dict) else scanned["startImage"]
         end_img = raw.get("endImage") if isinstance(raw.get("endImage"), dict) else scanned["endImage"]
         gen = raw.get("genImage") if isinstance(raw.get("genImage"), dict) else scanned.get("genImage")

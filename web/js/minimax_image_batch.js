@@ -384,7 +384,7 @@ export function flushBatchPromptInputs(editor) {
 }
 
 /** Flush visible 秒数 inputs into segments before a full card re-render. */
-function flushBatchDurationInputs(editor) {
+export function flushBatchDurationInputs(editor) {
     const list = editor?.batchList;
     if (!list) return;
     // Persist prompts first — duration apply/normalize must not drop textarea drafts.
