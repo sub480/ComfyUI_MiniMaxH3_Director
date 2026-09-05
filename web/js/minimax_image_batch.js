@@ -2387,7 +2387,7 @@ export function patchGroupLivePreview(el, rec = {}, placeholder = "") {
     }
 }
 
-function mountVideoPreview(el, seg, running, fps, editor) {
+function mountVideoPreview(el, seg, running, fps) {
     stopPlayer(el);
     el.innerHTML = "";
     if (running) {
@@ -2406,11 +2406,6 @@ function mountVideoPreview(el, seg, running, fps, editor) {
     const frames = (seg.previewFrames?.length ? seg.previewFrames : null)
         || (seg.previewB64 ? [seg.previewB64] : null);
     if (!frames?.length) {
-        const refFile = firstRefPreviewFile(editor, seg);
-        if (refFile) {
-            mountRefStillPreview(el, refFile);
-            return;
-        }
         el.textContent = t("batch.previewVideoAfterRun");
         return;
     }
@@ -2464,23 +2459,7 @@ function mountVideoPreview(el, seg, running, fps, editor) {
     };
 }
 
-function firstRefPreviewFile(editor, seg) {
-    const groupFile = [...(seg?.refs || [])]
-        .sort((a, b) => Number(a.index ?? a.slot ?? 0) - Number(b.index ?? b.slot ?? 0))
-        .find((r) => r?.imageFile)?.imageFile;
-    if (groupFile) return groupFile;
-    return listCommonImageRefs(editor).find((r) => r?.imageFile)?.imageFile || "";
-}
-
-function mountRefStillPreview(el, imageFile) {
-    el.innerHTML = "";
-    const img = document.createElement("img");
-    img.src = viewUrl(imageFile);
-    img.alt = "ref preview";
-    el.appendChild(img);
-}
-
-function renderImagePreview(el, seg, running, editor) {
+function renderImagePreview(el, seg, running) {
     stopPlayer(el);
     el.innerHTML = "";
     if (running) {
@@ -2503,17 +2482,12 @@ function renderImagePreview(el, seg, running, editor) {
         el.appendChild(img);
         return;
     }
-    const refFile = firstRefPreviewFile(editor, seg);
-    if (refFile) {
-        mountRefStillPreview(el, refFile);
-        return;
-    }
     el.textContent = t("batch.previewAfterRun");
 }
 
-function renderPreview(el, seg, running, isVideo, fps, editor) {
-    if (isVideo) mountVideoPreview(el, seg, running, fps, editor);
-    else renderImagePreview(el, seg, running, editor);
+function renderPreview(el, seg, running, isVideo, fps) {
+    if (isVideo) mountVideoPreview(el, seg, running, fps);
+    else renderImagePreview(el, seg, running);
 }
 
 const LORA_TRIGGER_WIDGET_NAMES = new Set([
@@ -3500,7 +3474,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
 
         const preview = document.createElement("div");
         preview.className = "bd-batch-preview";
-        renderPreview(preview, seg, index === runningIdx, isVideo, seg.previewFps || fps, editor);
+        renderPreview(preview, seg, index === runningIdx, isVideo, seg.previewFps || fps);
         const previewCol = wrapPreviewColumn(preview, editor, seg);
 
         if (isR2v && r2vMain) {
