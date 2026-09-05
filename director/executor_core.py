@@ -38,7 +38,7 @@ from .segment_runtime import (
 from .plan import (
     DirectorPlan,
     plan_summary,
-    prepend_lora_trigger_words,
+    apply_lora_trigger_to_prompt,
     prepare_segment_clip,
     resolve_ref_image_size,
     resolve_segment_pass_mode,
@@ -689,9 +689,7 @@ def execute_director_plan_core(
             phase="prepare", phase_value=1, phase_max=1, **meta,
         )
 
-        positive_prompt = prepend_lora_trigger_words(
-            seg.prompt, getattr(plan, "lora_trigger_words", ""),
-        )
+        positive_prompt = seg.prompt or ""
 
         if seg.task_key == "fl2v":
             from .fl2v_timeline import reinforce_fl2v_prompt
@@ -725,6 +723,12 @@ def execute_director_plan_core(
             positive_prompt = reinforce_rv2v_prompt(
                 positive_prompt, ref_indices=ref_idxs, audio_indices=audio_idxs,
             )
+
+        positive_prompt = apply_lora_trigger_to_prompt(
+            positive_prompt,
+            getattr(plan, "lora_trigger_words", ""),
+            task_key=seg.task_key,
+        )
 
         report_director_progress(
             node_id, segment_index=progress_index, segment_total=seg_total,

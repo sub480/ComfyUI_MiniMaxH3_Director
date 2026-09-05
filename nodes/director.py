@@ -113,8 +113,8 @@ class MiniMaxH3Director:
                         "forceInput": True,
                         "default": "",
                         "tooltip": (
-                            "可选。LoRA 触发词，自动拼到每组提示词最前面。"
-                            "例如 mh3turbo, 会变成 mh3turbo, <原提示词>。"
+                            "可选。LoRA 触发词。r2v 追加到文末 style_tags 块；"
+                            "其它模式拼到每组提示词最前面（mh3turbo, <原提示词>）。"
                             "不接或为空则不改提示词。"
                         ),
                     },

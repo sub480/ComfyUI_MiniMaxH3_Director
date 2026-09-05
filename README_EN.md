@@ -32,7 +32,7 @@ Director has in-node second pass; an external Refine node is no longer required.
 
 ### LoRA trigger words
 
-Optional `lora_trigger_words` input is prepended to every group prompt (e.g. `mh3turbo, <user prompt>`). Common LoRA nodes can feed this socket. The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (common prompt + trigger). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
+Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (common prompt + trigger). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
 
 ### Per-group first / second pass
 

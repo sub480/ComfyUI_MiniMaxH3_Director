@@ -160,6 +160,9 @@ class SegmentRefVideo:
     meta: dict = field(default_factory=dict)
 
 
+R2V_LORA_STYLE_TAGS_FIELD = "style_tags"
+
+
 def prepend_lora_trigger_words(prompt: str | None, trigger: str | None) -> str:
     """Put LoRA trigger words in front of a group prompt."""
     head = str(trigger or "").strip()
@@ -173,6 +176,41 @@ def prepend_lora_trigger_words(prompt: str | None, trigger: str | None) -> str:
     if head.endswith(","):
         return f"{head} {body}".strip()
     return f"{head}, {body}"
+
+
+def lora_style_tags_block(trigger: str) -> str:
+    return f"{R2V_LORA_STYLE_TAGS_FIELD}:\n{str(trigger).strip()}"
+
+
+def append_lora_trigger_style_block(prompt: str | None, trigger: str | None) -> str:
+    """Put LoRA trigger words in a trailing r2v ``style_tags`` field."""
+    head = str(trigger or "").strip()
+    body = str(prompt or "").strip()
+    if not head:
+        return prompt or ""
+    block = lora_style_tags_block(head)
+    if not body:
+        return block
+    if body == block or body.endswith(f"\n{block}"):
+        return body
+    return f"{body}\n\n{block}"
+
+
+def apply_lora_trigger_to_prompt(
+    prompt: str | None,
+    trigger: str | None,
+    *,
+    task_key: str | None = None,
+) -> str:
+    """Attach LoRA trigger words for sampling.
+
+    r2v appends a trailing ``style_tags:`` block so the token is not the first
+    spoken content. Other tasks still prepend ``trigger, prompt``.
+    """
+    key = resolve_task_key(task_key or "")
+    if key == "r2v":
+        return append_lora_trigger_style_block(prompt, trigger)
+    return prepend_lora_trigger_words(prompt, trigger)
 
 
 def strip_lora_trigger_prefix(prompt: str | None, trigger: str | None) -> str:

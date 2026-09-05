@@ -2566,6 +2566,21 @@ function readLoraTriggerWords(editor) {
     return readLinkedLoraTrigger(origin);
 }
 
+function executedPromptTaskKey(editor, seg) {
+    const globalKey = resolveTaskKey(
+        editor?.getTaskKey?.()
+        || editor?.timeline?.global?.taskType
+        || editor?.timeline?.global?.task_type
+        || "",
+    );
+    if (isMixedTask(globalKey)) return resolveMixedGroupKey(seg);
+    return globalKey;
+}
+
+function loraStyleTagsBlock(trigger) {
+    return `style_tags:\n${trigger}`;
+}
+
 function executedPromptText(editor, seg) {
     let body = String(seg?.prompt || "").trim();
     const g = editor?.timeline?.global || {};
@@ -2575,6 +2590,12 @@ function executedPromptText(editor, seg) {
     else body = common || body;
     const lora = readLoraTriggerWords(editor);
     if (!lora) return body;
+    if (executedPromptTaskKey(editor, seg) === "r2v") {
+        const block = loraStyleTagsBlock(lora);
+        if (!body) return block;
+        if (body === block || body.endsWith(`\n${block}`)) return body;
+        return `${body}\n\n${block}`;
+    }
     if (!body) return lora;
     if (body === lora || body.startsWith(`${lora},`) || body.startsWith(`${lora}\n`)) return body;
     return lora.endsWith(",") ? `${lora} ${body}`.trim() : `${lora}, ${body}`;
