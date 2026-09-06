@@ -605,8 +605,6 @@ def build_export_pack(timeline: dict, widgets: dict | None = None, *, dry_run: b
         "output": data.get("output") if isinstance(data.get("output"), dict) else {},
     }
     shared_json = {
-        "commonEnabled": bool(global_block.get("commonEnabled") or global_block.get("common_enabled")),
-        "commonCollapsed": bool(global_block.get("commonCollapsed") or global_block.get("common_collapsed")),
         "prompt": global_block.get("prompt") or "",
         "refs": global_block.get("refs") or [],
         "refAudios": global_block.get("refAudios") or global_block.get("ref_audios") or [],
@@ -778,8 +776,6 @@ def _assemble_timeline(extracted: Path, pack_meta: dict) -> dict:
     global_block = {
         "taskType": _task_combo(str(pack_meta.get("taskType") or "t2v")),
         "prompt": shared.get("prompt") or "",
-        "commonEnabled": bool(shared.get("commonEnabled")),
-        "commonCollapsed": bool(shared.get("commonCollapsed")),
         "refs": _merge_refs(shared.get("refs"), scanned_shared["refs"]),
         "refAudios": _merge_refs(shared.get("refAudios") or shared.get("ref_audios"), scanned_shared["refAudios"]),
         "refVideos": _merge_refs(shared.get("refVideos") or shared.get("ref_videos"), scanned_shared["refVideos"]),

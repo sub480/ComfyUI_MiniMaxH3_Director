@@ -78,10 +78,9 @@ export const FL2V_STYLES = `
 .bd-fl2v-slot-wrap:focus-within .x{display:flex}
 @media (hover:none){.bd-fl2v-slot-wrap.has-img .x{display:flex}}
 .bd-fl2v-slot-wrap .x:hover{background:rgba(160,30,30,.95);color:#fff}
-.bd-fl2v-shot-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bd-fl2v-shot-foot{display:flex;align-items:center;justify-content:flex-start;gap:8px}
 .bd-fl2v-shot-row{display:flex;align-items:center;gap:6px;color:#ddd;font-size:11px;min-width:0}
 .bd-fl2v-shot-row input{width:56px}
-.bd-fl2v-shot-foot .bd-r2v-pick-existing{flex-shrink:0;cursor:pointer}
 .bd-fl2v-detail{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px;min-height:0}
 .bd-fl2v-detail:not(.hidden){flex:1 1 0;overflow:hidden}
 .bd-fl2v-detail.hidden{display:none!important}
@@ -1201,7 +1200,6 @@ function renderFl2vShotCards(editor) {
                             <input type="number" class="bd-num" data-r="shot-sec" min="${minDurationSec()}" max="${maxDurationSec()}" step="0.1" value="${shot.durationSec}">
                             ${t("panel.fl2v.seconds")}
                         </label>
-                        <button type="button" class="bd-r2v-pick-existing" data-a="fl2v-pick-existing" title="${t("mediaPicker.pickExistingHint")}">${t("mediaPicker.pickExisting")}</button>
                     </div>
                 </div>
                 <div class="bd-fl2v-prompt-col">
@@ -1230,7 +1228,7 @@ function renderFl2vShotCards(editor) {
             t("batch.previewVideoAfterRun"),
         );
         card.addEventListener("click", (e) => {
-            if (e.target.closest("[data-slot], [data-clear], input, textarea, .bd-fl2v-slot-wrap, .bd-fl2v-continuity, .bd-fl2v-shot-cont, [data-a='fl2v-pick-existing']")) return;
+            if (e.target.closest("[data-slot], [data-clear], input, textarea, .bd-fl2v-slot-wrap, .bd-fl2v-continuity, .bd-fl2v-shot-cont")) return;
             if (editor._fl2vShotDrag || editor._fl2vSlotDrag) return;
             if (editor.selectedIndex !== i) flushFl2vPromptDraft(editor);
             editor.selectedIndex = i;
@@ -1268,23 +1266,6 @@ function renderFl2vShotCards(editor) {
             });
         }
         bindFl2vShotCardDnD(editor, card, i);
-        const pickBtn = card.querySelector('[data-a="fl2v-pick-existing"]');
-        if (pickBtn) {
-            const bothFilled = !!(shot.startImage?.imageFile && shot.endImage?.imageFile);
-            pickBtn.disabled = bothFilled;
-            pickBtn.title = bothFilled ? t("mediaPicker.slotsFull") : t("mediaPicker.pickExistingHint");
-            pickBtn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                if (editor.selectedIndex !== i) flushFl2vPromptDraft(editor);
-                editor.selectedIndex = i;
-                const kind = shot.startImage?.imageFile ? "end" : "start";
-                try {
-                    await pickFl2vSlotImage(editor, i, kind);
-                } catch (err) {
-                    console.error("[MiniMax H3Director] fl2v pick failed:", err);
-                }
-            });
-        }
         card.querySelectorAll("[data-slot]").forEach((slot) => {
             const kind = slot.dataset.slot;
             bindFl2vSlotDnD(editor, slot, i, kind);
@@ -1670,7 +1651,6 @@ export function isFl2vTaskValue(taskTypeValue) {
 export function setFl2vToolbar(editor, enabled) {
     const disable = [
         editor.btnVideo,
-        editor.btnVideoExisting,
         editor.btnVideoAppend,
         editor.root?.querySelector('[data-a="split"]'),
         editor.root?.querySelector('[data-a="smart-split"]'),

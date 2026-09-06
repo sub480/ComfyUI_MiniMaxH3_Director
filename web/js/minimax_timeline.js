@@ -22,7 +22,6 @@ import {
     MAX_GEN_FRAMES,
     MAX_REFERENCE_AUDIOS,
     MAX_REFERENCE_IMAGES,
-    MAX_REFERENCE_VIDEOS,
     MINIMAX_CANVAS_MULTIPLE,
     minFrameCount,
     newBatchSegment,
@@ -32,7 +31,6 @@ import {
     clampMegapixels,
     refAudioLabel,
     refImageLabel,
-    refVideoLabel,
     RESOLUTION_ASPECTS,
     resolutionFromSelector,
     resolveMixedGroupKey,
@@ -59,12 +57,10 @@ import {
     formatMediaDuration,
     getImageBatchUiHeight,
     isBatchDetailSolo,
-    listCommonImageRefs,
     mountImageBatchPanel,
     flushBatchPromptInputs,
     flushBatchDurationInputs,
     normalizeImageBatchSegments,
-    rebaseR2vGroupSlotsForCommon,
     renderImageBatchGroups,
     setImageBatchPreview,
     patchGroupLivePreview,
@@ -343,8 +339,6 @@ function cloneJson(value, fallback) {
 function sanitizeBatchGlobalCommon(gc) {
     const src = gc && typeof gc === "object" ? gc : {};
     return {
-        commonEnabled: !!src.commonEnabled,
-        commonCollapsed: !!src.commonCollapsed,
         prompt: src.prompt || "",
         refs: Array.isArray(src.refs) ? src.refs.map(sanitizeRefImage) : [],
         refAudios: Array.isArray(src.refAudios) ? src.refAudios.map(sanitizeRefAudio) : [],
@@ -951,12 +945,11 @@ const STYLES = `
 .bd-wrap:not(.bd-batch-fill) .bd-prompt-layout{flex:1 1 0;min-height:0}
 .bd-live-tae-vae{max-width:280px;min-width:140px}
 /*
- * Batch is inside .bd-main (sibling of .bd-split which holds 公共参数).
- * Main grows with the node; .bd-split may shrink/scroll so .bd-batch always keeps space.
+ * Batch is inside .bd-main (sibling of .bd-split).
+ * Main grows with the node; leftover space goes to .bd-batch.
  */
 .bd-wrap.bd-batch-fill .bd-main{flex:1 1 0;min-height:0;overflow:hidden}
 .bd-wrap.bd-batch-fill .bd-main>:not(.bd-batch):not(.bd-split){flex:0 0 auto}
-/* 公共参数区：可收缩+内部滚动，避免展开后把素材组挤出视口 */
 .bd-wrap.bd-batch-fill .bd-main>.bd-split{
   flex:0 1 auto;min-height:0;max-height:42%;overflow:auto;width:100%
 }
@@ -1132,28 +1125,6 @@ const STYLES = `
 .bd-out-source-wrap.hidden{display:none}
 .bd-output .bd-out-source-wrap label{display:inline-flex;align-items:center;gap:4px;cursor:pointer}
 .bd-split{display:block;width:100%;box-sizing:border-box;min-width:0}
-.bd-r2v-common-hint{margin:0 0 8px;font-size:11px;line-height:1.4;color:#9ab;opacity:.95}
-.bd-panel.bd-r2v-common-panel{border:1px solid #3a4a5a;background:linear-gradient(180deg,#1a222c 0%,#151a20 100%)}
-.bd-r2v-common-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 8px}
-.bd-r2v-common-titles{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
-.bd-r2v-common-titles b{margin:0}
-.bd-r2v-common-status{display:none;font-size:11px;color:#8a9}
-.bd-r2v-common-status.on{color:#8fdfb0}
-.bd-panel.bd-r2v-common-panel .bd-r2v-common-status{display:inline}
-.bd-r2v-common-actions{display:none;align-items:center;gap:8px;flex:0 0 auto}
-.bd-panel.bd-r2v-common-panel .bd-r2v-common-actions{display:flex}
-.bd-btn.bd-r2v-common-toggle,.bd-btn.bd-r2v-common-fold{display:inline-block;flex:0 0 auto;padding:5px 10px;font-size:12px;border-radius:6px;border:1px solid #4a6a8a;background:#243040;color:#d8e6f5;cursor:pointer}
-.bd-btn.bd-r2v-common-fold{border-color:#3a4a5a;background:#1c2430}
-.bd-btn.bd-r2v-common-toggle:hover,.bd-btn.bd-r2v-common-fold:hover{border-color:#6a9aca;background:#2c3c50}
-.bd-btn.bd-r2v-common-toggle.on{border-color:#7a3a3a;background:#301a1a;color:#f0c0c0}
-.bd-btn.bd-r2v-common-toggle.on:hover{border-color:#a05050;background:#3a2020}
-.bd-panel.bd-r2v-common-panel.bd-r2v-common-collapsed{padding-bottom:10px}
-.bd-panel.bd-r2v-common-panel.bd-r2v-common-collapsed .bd-r2v-common-body{display:none!important}
-.bd-panel.bd-r2v-common-panel .bd-r2v-common-body{min-width:0}
-.bd-panel.bd-r2v-common-panel .bd-refs-col{height:auto;min-height:0}
-.bd-panel.bd-r2v-common-panel .bd-rv2v-layout .bd-ref{min-height:72px}
-.bd-panel.bd-r2v-common-panel .bd-rv2v-layout .bd-ref-audio{min-height:44px}
-.bd-panel.bd-r2v-common-panel .bd-rv2v-layout .bd-ref-video{min-height:0}
 .bd-player{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%}
 .bd-btn{background:#222;color:#e0e0e0;border:1px solid #111;border-radius:4px;padding:6px 12px;font-size:11px;line-height:1.35;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center}
 .bd-actions>.bd-btn{height:29px;min-height:29px}
@@ -1351,12 +1322,8 @@ const STYLES = `
 .bd-rv2v-layout .bd-refs-images-wrap.bd-r2v-section,.bd-rv2v-layout .bd-ref-audios-wrap.bd-r2v-section,.bd-rv2v-layout .bd-ref-videos-wrap.bd-r2v-section{display:flex;flex-direction:column;gap:8px}
 .bd-r2v-section-count:empty{display:none}
 .bd-r2v-section-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.bd-r2v-pick-existing{background:transparent;border:1px solid #3a3a3a;color:#c8c8c8;border-radius:6px;padding:2px 8px;font-size:10px;cursor:pointer;line-height:1.4;white-space:nowrap}
-.bd-r2v-pick-existing:hover{border-color:#4fff8f;color:#4fff8f}
-.bd-r2v-pick-existing:disabled{opacity:.4;cursor:not-allowed;border-color:#333;color:#666}
 .bd-prompt-layout:not(.bd-rv2v-layout) .bd-r2v-section-head{display:contents}
-.bd-prompt-layout:not(.bd-rv2v-layout) .bd-r2v-section-count,
-.bd-prompt-layout:not(.bd-rv2v-layout) .bd-r2v-pick-existing{display:none}
+.bd-prompt-layout:not(.bd-rv2v-layout) .bd-r2v-section-count{display:none}
 .bd-continuous-ref{display:flex;align-items:center;gap:6px;font-size:10px;color:#aaa;user-select:none;margin-left:8px}
 .bd-continuous-ref label{display:flex;align-items:center;gap:4px;cursor:pointer}
 .bd-continuous-ref input[type="checkbox"]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#4fff8f}
@@ -1964,6 +1931,12 @@ function initDirectorEditor(node) {
         return editor;
     } catch (err) {
         console.error("[MiniMax H3Director] UI init failed:", err);
+        if (container && !container.querySelector(":scope > .bd-wrap")) {
+            const pre = document.createElement("pre");
+            pre.style.cssText = "color:#ff8a8a;white-space:pre-wrap;font-size:12px;padding:12px;margin:0";
+            pre.textContent = `MiniMax H3Director UI failed:\n${err?.stack || err}`;
+            container.appendChild(pre);
+        }
         return node._minimaxEditor || null;
     } finally {
         node._minimaxEditorMounting = false;
@@ -2091,7 +2064,7 @@ function parseTimeline(raw, totalFrames, fps) {
         videoClips: [],
         global: {
             taskType: "", prompt: "", refs: [], refAudios: [], referenceVideo: {},
-            continuousReference: false, commonEnabled: false, commonCollapsed: false,
+            continuousReference: false,
         },
         output: {
             // v2v/rv2v default: scale by long edge (preserve aspect). Fixed = center-crop.
@@ -2114,9 +2087,15 @@ function parseTimeline(raw, totalFrames, fps) {
         batchDetailMode: "solo",
         segments: [{ id: uid(), start: 0, length: total, prompt: "", taskType: "", refs: [], refAudios: [], referenceVideo: {} }],
     };
-    if (!raw?.trim()) return base;
+    let data;
     try {
-        const data = JSON.parse(raw);
+        if (raw && typeof raw === "object") {
+            data = raw;
+        } else {
+            const text = String(raw ?? "");
+            if (!text.trim()) return base;
+            data = JSON.parse(text);
+        }
         data.version = data.version || 4;
         data.editMode = data.editMode || "global";
         data.frameRate = coerceTimelineFps(data.frameRate ?? fps ?? 24);
@@ -2129,7 +2108,7 @@ function parseTimeline(raw, totalFrames, fps) {
         data.video.frames = data.video.frames || [];
         data.global = data.global || {
             refs: [], refAudios: [], referenceVideo: {},
-            continuousReference: false, commonEnabled: false, commonCollapsed: false,
+            continuousReference: false,
         };
         data.global.refs = data.global.refs || [];
         data.global.refAudios = data.global.refAudios || data.global.ref_audios || [];
@@ -2139,14 +2118,10 @@ function parseTimeline(raw, totalFrames, fps) {
         }
         data.global.referenceVideo = data.global.referenceVideo || data.global.reference_video || {};
         data.global.continuousReference = !!data.global.continuousReference || !!data.global.continuous_reference;
-        // r2v shared params: default OFF unless explicitly enabled.
-        data.global.commonEnabled = !!(
-            data.global.commonEnabled ?? data.global.common_enabled
-        );
-        // UI fold only — does not affect runtime merge when commonEnabled is true.
-        data.global.commonCollapsed = !!(
-            data.global.commonCollapsed ?? data.global.common_collapsed
-        );
+        delete data.global.commonEnabled;
+        delete data.global.common_enabled;
+        delete data.global.commonCollapsed;
+        delete data.global.common_collapsed;
         const legacyRef = data.referenceVideo || data.reference_video;
         if (legacyRef && (legacyRef.videoFile || legacyRef.fileName)
             && !(data.global.referenceVideo.videoFile || data.global.referenceVideo.fileName)) {
@@ -2324,10 +2299,6 @@ class MiniMaxH3DirectorEditor {
         this._stageSyncMs = 0;
         this._playHandoff = false;
 
-        for (const w of node.widgets || []) {
-            if (HIDDEN_WIDGETS.includes(w.name)) hideWidget(w);
-        }
-
         this.timelineWidget = this.widget("timeline_data");
         this.totalFramesWidget = this.widget("total_frames");
         this.frameRateWidget = this.widget("frame_rate");
@@ -2368,6 +2339,9 @@ class MiniMaxH3DirectorEditor {
         this._observeViewportResize();
         this.syncExternalGroupsTimeline();
         this.scheduleSettleRender();
+        for (const w of node.widgets || []) {
+            if (HIDDEN_WIDGETS.includes(w.name)) hideWidget(w);
+        }
     }
 
     _inputLinkConnected(name) {
@@ -2988,7 +2962,6 @@ class MiniMaxH3DirectorEditor {
                 <div class="bd-actions">
                     <button type="button" class="bd-btn bd-btn-primary hidden" data-a="r2v-add-group" data-i18n="toolbar.addRefGroup" data-i18n-title="tooltip.addRefGroup">添加素材组</button>
                     <button type="button" class="bd-btn bd-btn-primary" data-a="video" data-i18n="toolbar.uploadVideo">上传视频</button>
-                    <button type="button" class="bd-btn" data-a="video-existing" data-i18n="mediaPicker.pickExistingVideo" data-i18n-title="mediaPicker.pickExistingHint">选已有视频</button>
                     <button type="button" class="bd-btn bd-btn-primary hidden" data-a="fl2v-add-shot" data-i18n="toolbar.addShot" data-i18n-title="tooltip.addShot">添加一组</button>
                     <button type="button" class="bd-btn" data-a="video-append" data-i18n="toolbar.appendVideo" data-i18n-title="tooltip.appendVideo">追加视频</button>
                     <button type="button" class="bd-btn" data-a="split" data-i18n="toolbar.split">+ 分割</button>
@@ -3203,50 +3176,27 @@ class MiniMaxH3DirectorEditor {
         bottom.className = "bd-split";
         bottom.innerHTML = `
             <div class="bd-panel" data-r="global-panel">
-                <div class="bd-r2v-common-head" data-r="r2v-common-head">
-                    <div class="bd-r2v-common-titles">
-                        <b data-r="global-panel-title" data-i18n="panel.globalPromptAndRefs">全局提示词 & 参考图 (图片1–9)</b>
-                        <span class="bd-r2v-common-status" data-r="r2v-common-status" data-i18n="panel.r2vCommonOff">未启用 · 各组独立素材与提示词</span>
-                    </div>
-                    <div class="bd-r2v-common-actions">
-                        <button type="button" class="bd-btn bd-r2v-common-fold hidden" data-r="r2v-common-fold" data-i18n="panel.r2vCommonCollapse">收起公共参数</button>
-                        <button type="button" class="bd-btn bd-r2v-common-toggle" data-r="r2v-common-toggle" data-i18n="panel.r2vCommonEnable">启用公共参数</button>
-                    </div>
-                </div>
-                <div class="bd-r2v-common-body" data-r="r2v-common-body">
-                    <div class="bd-meta bd-r2v-common-hint hidden" data-r="r2v-common-hint" data-i18n="panel.r2vCommonHint">公共参考图/视频/音频供各组读取；公共提示词会与每组提示词拼接成完整提示词。同槽位以组内素材优先。</div>
-                    <div class="bd-prompt-layout" data-r="global-prompt-layout">
-                        <div class="bd-refs-col" data-r="global-refs-col">
-                            <div class="bd-refs-images-wrap" data-r="global-refs-images-wrap">
-                                <div class="bd-r2v-section-head" data-r="global-refs-head">
-                                    <span class="bd-label bd-r2v-section-title" data-r="global-refs-label" data-i18n="panel.refImages">参考图 (图片1–9)</span>
-                                    <span class="bd-r2v-section-actions">
-                                        <button type="button" class="bd-r2v-pick-existing" data-r="global-refs-pick" data-i18n="mediaPicker.pickExisting" data-i18n-title="mediaPicker.pickExistingHint">选已有</button>
-                                        <span class="bd-r2v-section-count" data-r="global-refs-count"></span>
-                                    </span>
-                                </div>
-                                <div class="bd-refs" data-r="global-refs"></div>
+                <b data-r="global-panel-title" data-i18n="panel.globalPromptAndRefs">全局提示词 & 参考图 (图片1–9)</b>
+                <div class="bd-prompt-layout" data-r="global-prompt-layout">
+                    <div class="bd-refs-col" data-r="global-refs-col">
+                        <div class="bd-refs-images-wrap" data-r="global-refs-images-wrap">
+                            <div class="bd-r2v-section-head" data-r="global-refs-head">
+                                <span class="bd-label bd-r2v-section-title" data-r="global-refs-label" data-i18n="panel.refImages">参考图 (图片1–9)</span>
+                                <span class="bd-r2v-section-actions">
+                                    <span class="bd-r2v-section-count" data-r="global-refs-count"></span>
+                                </span>
                             </div>
-                            <div class="bd-ref-videos-wrap hidden" data-r="global-ref-videos-wrap">
-                                <div class="bd-r2v-section-head" data-r="global-videos-head">
-                                    <span class="bd-label bd-r2v-section-title" data-i18n="batch.r2v.sectionVideos">参考视频</span>
-                                    <span class="bd-r2v-section-actions">
-                                        <button type="button" class="bd-r2v-pick-existing" data-r="global-videos-pick" data-i18n="mediaPicker.pickExisting" data-i18n-title="mediaPicker.pickExistingHint">选已有</button>
-                                        <span class="bd-r2v-section-count" data-r="global-videos-count"></span>
-                                    </span>
-                                </div>
-                                <div class="bd-ref-videos" data-r="global-ref-videos"></div>
+                            <div class="bd-refs" data-r="global-refs"></div>
+                        </div>
+                        <div class="bd-ref-audios-wrap hidden" data-r="global-ref-audios-wrap">
+                            <div class="bd-r2v-section-head" data-r="global-audios-head">
+                                <span class="bd-label bd-r2v-section-title" data-i18n="batch.r2v.sectionAudios">参考音频</span>
+                                <span class="bd-r2v-section-actions">
+                                    <span class="bd-r2v-section-count" data-r="global-audios-count"></span>
+                                </span>
                             </div>
-                            <div class="bd-ref-audios-wrap hidden" data-r="global-ref-audios-wrap">
-                                <div class="bd-r2v-section-head" data-r="global-audios-head">
-                                    <span class="bd-label bd-r2v-section-title" data-i18n="batch.r2v.sectionAudios">参考音频</span>
-                                    <span class="bd-r2v-section-actions">
-                                        <button type="button" class="bd-r2v-pick-existing" data-r="global-audios-pick" data-i18n="mediaPicker.pickExisting" data-i18n-title="mediaPicker.pickExistingHint">选已有</button>
-                                        <span class="bd-r2v-section-count" data-r="global-audios-count"></span>
-                                    </span>
-                                </div>
-                                <div class="bd-ref-audios" data-r="global-ref-audios"></div>
-                            </div>
+                            <div class="bd-ref-audios" data-r="global-ref-audios"></div>
+                        </div>
                             <div class="bd-ref-video-col hidden" data-r="global-ref-video-col">
                                 <span class="bd-label" data-i18n="panel.refVideo">参考视频（植入内容）</span>
                                 <div class="bd-gen-src" data-r="global-ref-video" data-i18n="panel.uploadRefVideo" data-i18n-title="tooltip.uploadRefVideo">点击上传参考视频</div>
@@ -3272,7 +3222,6 @@ class MiniMaxH3DirectorEditor {
                         <span class="bd-label" data-i18n="panel.defaultSegmentFrames">默认片段帧数</span>
                         <input type="number" class="bd-num" data-r="gen-default-fc" min="1" max="${MAX_GEN_FRAMES}" value="124" style="width:72px">
                     </div>
-                </div>
             </div>
             <div class="bd-panel" data-r="segment-panel" style="display:none">
                 <div class="bd-seg-head">
@@ -3296,7 +3245,6 @@ class MiniMaxH3DirectorEditor {
                             <div class="bd-r2v-section-head" data-r="seg-refs-head">
                                 <span class="bd-label bd-r2v-section-title" data-r="seg-refs-label" data-i18n="panel.segmentRefImages">片段参考图 (图片1–9)</span>
                                 <span class="bd-r2v-section-actions">
-                                    <button type="button" class="bd-r2v-pick-existing" data-r="seg-refs-pick" data-i18n="mediaPicker.pickExisting" data-i18n-title="mediaPicker.pickExistingHint">选已有</button>
                                     <span class="bd-r2v-section-count" data-r="seg-refs-count"></span>
                                 </span>
                             </div>
@@ -3306,7 +3254,6 @@ class MiniMaxH3DirectorEditor {
                             <div class="bd-r2v-section-head" data-r="seg-audios-head">
                                 <span class="bd-label bd-r2v-section-title" data-i18n="batch.r2v.sectionAudios">参考音频</span>
                                 <span class="bd-r2v-section-actions">
-                                    <button type="button" class="bd-r2v-pick-existing" data-r="seg-audios-pick" data-i18n="mediaPicker.pickExisting" data-i18n-title="mediaPicker.pickExistingHint">选已有</button>
                                     <span class="bd-r2v-section-count" data-r="seg-audios-count"></span>
                                 </span>
                             </div>
@@ -3419,12 +3366,6 @@ class MiniMaxH3DirectorEditor {
         this.globalPanel = this.root.querySelector('[data-r="global-panel"]');
         this.globalPanelTitle = this.globalPanel?.querySelector('[data-r="global-panel-title"]')
             || this.globalPanel?.querySelector("b");
-        this.r2vCommonHead = this.root.querySelector('[data-r="r2v-common-head"]');
-        this.r2vCommonBody = this.root.querySelector('[data-r="r2v-common-body"]');
-        this.r2vCommonHint = this.root.querySelector('[data-r="r2v-common-hint"]');
-        this.r2vCommonStatus = this.root.querySelector('[data-r="r2v-common-status"]');
-        this.r2vCommonFold = this.root.querySelector('[data-r="r2v-common-fold"]');
-        this.r2vCommonToggle = this.root.querySelector('[data-r="r2v-common-toggle"]');
         this.segmentPanel = this.root.querySelector('[data-r="segment-panel"]');
         this.globalPrompt = this.root.querySelector('[data-r="global-prompt"]');
         this.globalNegative = this.root.querySelector('[data-r="global-negative"]');
@@ -3443,9 +3384,6 @@ class MiniMaxH3DirectorEditor {
         this.segAudiosCount = this.root.querySelector('[data-r="seg-audios-count"]');
         this.globalRefAudiosWrap = this.root.querySelector('[data-r="global-ref-audios-wrap"]');
         this.globalRefAudiosBox = this.root.querySelector('[data-r="global-ref-audios"]');
-        this.globalRefVideosWrap = this.root.querySelector('[data-r="global-ref-videos-wrap"]');
-        this.globalRefVideosBox = this.root.querySelector('[data-r="global-ref-videos"]');
-        this.globalVideosCount = this.root.querySelector('[data-r="global-videos-count"]');
         this.segRefAudiosWrap = this.root.querySelector('[data-r="seg-ref-audios-wrap"]');
         this.segRefAudiosBox = this.root.querySelector('[data-r="seg-ref-audios"]');
         this.segLabel = this.root.querySelector('[data-r="seg-label"]');
@@ -3475,7 +3413,6 @@ class MiniMaxH3DirectorEditor {
         this.genSegFc = this.root.querySelector('[data-r="gen-seg-fc"]');
         this.controlsBar = this.root.querySelector(".bd-controls");
         this.btnVideo = this.root.querySelector('[data-a="video"]');
-        this.btnVideoExisting = this.root.querySelector('[data-a="video-existing"]');
         this.btnFl2vAddShot = this.root.querySelector('[data-a="fl2v-add-shot"]');
         this.btnVideoAppend = this.root.querySelector('[data-a="video-append"]');
         this.outHint = this.root.querySelector('[data-r="out-hint"]');
@@ -3541,7 +3478,6 @@ class MiniMaxH3DirectorEditor {
             el.onclick = (e) => { stopDomEvent(e); fn(); };
         };
         bind('[data-a="video"]', () => this.pickVideoFile());
-        bind('[data-a="video-existing"]', () => { void this.pickExistingVideoFile(); });
         bind('[data-a="fl2v-add-shot"]', () => openFl2vUpload(this));
         bind('[data-a="r2v-add-group"]', () => addImageBatchGroup(this));
         bind('[data-a="video-append"]', () => this.pickAppendVideoFile());
@@ -3574,9 +3510,11 @@ class MiniMaxH3DirectorEditor {
         this.refreshLiveTaePreviewButton();
         this.updateLiveSamplePanel();
 
-        this.seekBar.oninput = () => {
-            this.seekToFrame(+this.seekBar.value, { fromUi: true });
-        };
+        if (this.seekBar) {
+            this.seekBar.oninput = () => {
+                this.seekToFrame(+this.seekBar.value, { fromUi: true });
+            };
+        }
         if (this.frameInputEl) {
             const applyFrameInput = () => {
                 const total = this.getTotalFrames();
@@ -3685,46 +3623,11 @@ class MiniMaxH3DirectorEditor {
                 this.setRunSelectionAll(this.runSelectAllCb.checked);
             };
         }
-        this.globalTask.onchange = () => this.onGlobalField("taskType", this.globalTask.value);
-        this.globalPrompt.oninput = () => this.onGlobalField("prompt", this.globalPrompt.value);
-        if (this.r2vCommonFold) {
-            this.r2vCommonFold.onclick = (e) => {
-                stopDomEvent(e);
-                if (!this.usesR2vCommonPanel() || !this.isR2vCommonEnabled()) return;
-                this.timeline.global = this.timeline.global || {
-                    refs: [], refAudios: [], prompt: "",
-                    commonEnabled: true, commonCollapsed: false,
-                };
-                this.timeline.global.commonCollapsed = !this.isR2vCommonCollapsed();
-                this.syncR2vCommonCollapse();
-                this.scheduleTimelineSync();
-                this.updateDomWidgetHeight?.();
-            };
+        if (this.globalTask) {
+            this.globalTask.onchange = () => this.onGlobalField("taskType", this.globalTask.value);
         }
-        if (this.r2vCommonToggle) {
-            this.r2vCommonToggle.onclick = (e) => {
-                stopDomEvent(e);
-                if (!this.usesR2vCommonPanel()) return;
-                this.timeline.global = this.timeline.global || {
-                    refs: [], refAudios: [], refVideos: [], prompt: "",
-                    commonEnabled: false, commonCollapsed: false,
-                };
-                this.timeline.global.refs = this.timeline.global.refs || [];
-                this.timeline.global.refAudios = this.timeline.global.refAudios || [];
-                this.timeline.global.refVideos = this.timeline.global.refVideos || [];
-                const nextOn = !this.isR2vCommonEnabled();
-                this.timeline.global.commonEnabled = nextOn;
-                // Enable → expand; disable → collapse and stop runtime merge.
-                this.timeline.global.commonCollapsed = !nextOn;
-                if (nextOn) {
-                    rebaseR2vGroupSlotsForCommon(this);
-                }
-                // Must refresh visibility + render ref/audio slots (they stay empty until first paint).
-                this.updateModeUI();
-                this.renderImageBatchGroups?.();
-                this.scheduleTimelineSync();
-                this.updateDomWidgetHeight?.();
-            };
+        if (this.globalPrompt) {
+            this.globalPrompt.oninput = () => this.onGlobalField("prompt", this.globalPrompt.value);
         }
         if (this.continuousRefCb) {
             this.continuousRefCb.onchange = () => {
@@ -3733,13 +3636,21 @@ class MiniMaxH3DirectorEditor {
                 this.scheduleTimelineSync();
             };
         }
-        this.segPrompt.oninput = () => this.onSegField("prompt", this.segPrompt.value);
-        this.globalNegative.oninput = () => this.onNegativePrompt(this.globalNegative.value);
-        this.segNegative.oninput = () => this.onNegativePrompt(this.segNegative.value);
+        if (this.segPrompt) {
+            this.segPrompt.oninput = () => this.onSegField("prompt", this.segPrompt.value);
+        }
+        if (this.globalNegative) {
+            this.globalNegative.oninput = () => this.onNegativePrompt(this.globalNegative.value);
+        }
+        if (this.segNegative) {
+            this.segNegative.oninput = () => this.onNegativePrompt(this.segNegative.value);
+        }
 
         mountPromptImageMentions(this);
 
-        this.outMode.onchange = () => this.onOutputField("mode", this.outMode.value);
+        if (this.outMode) {
+            this.outMode.onchange = () => this.onOutputField("mode", this.outMode.value);
+        }
         if (this.outAspect) {
             this.outAspect.onchange = () => this.onOutputField("aspectRatio", this.outAspect.value);
         }
@@ -3766,12 +3677,16 @@ class MiniMaxH3DirectorEditor {
             };
             this.outMp.addEventListener("keydown", (e) => e.stopPropagation());
         }
-        this.outLong.onchange = () => this.onOutputField("longEdge", +this.outLong.value);
-        this.outW.onchange = () => this.onOutputField("width", +this.outW.value);
-        this.outH.onchange = () => this.onOutputField("height", +this.outH.value);
+        if (this.outLong) this.outLong.onchange = () => this.onOutputField("longEdge", +this.outLong.value);
+        if (this.outW) this.outW.onchange = () => this.onOutputField("width", +this.outW.value);
+        if (this.outH) this.outH.onchange = () => this.onOutputField("height", +this.outH.value);
 
-        this.outMaxFrames.onchange = () => this.onOutputField("maxExportFrames", +this.outMaxFrames.value);
-        this.outExportMode.onchange = () => this.onOutputField("exportMode", this.outExportMode.value);
+        if (this.outMaxFrames) {
+            this.outMaxFrames.onchange = () => this.onOutputField("maxExportFrames", +this.outMaxFrames.value);
+        }
+        if (this.outExportMode) {
+            this.outExportMode.onchange = () => this.onOutputField("exportMode", this.outExportMode.value);
+        }
         if (this.outAudioMode) {
             this.outAudioMode.onchange = () => this.onOutputField("audioMode", this.outAudioMode.value);
         }
@@ -3820,26 +3735,6 @@ class MiniMaxH3DirectorEditor {
 
         this.genGlobalImg?.addEventListener("click", (e) => { stopDomEvent(e); this.pickGenSrcImage(true); });
         this.genSegImg?.addEventListener("click", (e) => { stopDomEvent(e); this.pickGenSrcImage(false); });
-        this.root.querySelector('[data-r="global-refs-pick"]')?.addEventListener("click", (e) => {
-            stopDomEvent(e);
-            void this.pickExistingRef(true);
-        });
-        this.root.querySelector('[data-r="seg-refs-pick"]')?.addEventListener("click", (e) => {
-            stopDomEvent(e);
-            void this.pickExistingRef(false);
-        });
-        this.root.querySelector('[data-r="global-videos-pick"]')?.addEventListener("click", (e) => {
-            stopDomEvent(e);
-            void this.pickExistingR2vCommonVideo();
-        });
-        this.root.querySelector('[data-r="global-audios-pick"]')?.addEventListener("click", (e) => {
-            stopDomEvent(e);
-            void this.pickExistingRefAudio(true);
-        });
-        this.root.querySelector('[data-r="seg-audios-pick"]')?.addEventListener("click", (e) => {
-            stopDomEvent(e);
-            void this.pickExistingRefAudio(false);
-        });
         this.genDefaultFc?.addEventListener("change", () => this.onGenDefaultFcChange());
         this.genSegFc?.addEventListener("change", () => this.onGenSegFcChange());
 
@@ -4482,7 +4377,6 @@ class MiniMaxH3DirectorEditor {
 
     syncMixedCommonLayout() {
         if (!this.isMixedMode()) return;
-        this.root?.querySelector(".bd-split")?.classList.toggle("hidden", !this.hasMixedR2vGroup());
         this.syncOutputAudioModeUI();
     }
 
@@ -4544,8 +4438,6 @@ class MiniMaxH3DirectorEditor {
             storageWidth: this._storageWidth || 0,
             storageHeight: this._storageHeight || 0,
             globalCommon: {
-                commonEnabled: !!g.commonEnabled,
-                commonCollapsed: !!g.commonCollapsed,
                 prompt: g.prompt || "",
                 refs: cloneJson(g.refs, []),
                 refAudios: cloneJson(g.refAudios || g.ref_audios, []),
@@ -4572,8 +4464,6 @@ class MiniMaxH3DirectorEditor {
         this.timeline.runSelection = Array.isArray(ws.runSelection) ? [...ws.runSelection] : [];
         const gc = ws.globalCommon || {};
         this.timeline.global = this.timeline.global || { refs: [] };
-        this.timeline.global.commonEnabled = !!gc.commonEnabled;
-        this.timeline.global.commonCollapsed = !!gc.commonCollapsed;
         this.timeline.global.prompt = gc.prompt || "";
         this.timeline.global.refs = cloneJson(gc.refs, []);
         this.timeline.global.refAudios = cloneJson(gc.refAudios, []);
@@ -4623,8 +4513,6 @@ class MiniMaxH3DirectorEditor {
         this.timeline.global.refVideos = [];
         this.timeline.global.referenceVideo = {};
         this.timeline.global.continuousReference = false;
-        this.timeline.global.commonEnabled = false;
-        this.timeline.global.commonCollapsed = false;
         if (this.globalPrompt) this.globalPrompt.value = "";
         if (this.globalPromptWidget) this.globalPromptWidget.value = "";
         this.updateVideoNameLabel();
@@ -4660,8 +4548,6 @@ class MiniMaxH3DirectorEditor {
             storageWidth: this._storageWidth || 0,
             storageHeight: this._storageHeight || 0,
             globalCommon: {
-                commonEnabled: !!g.commonEnabled,
-                commonCollapsed: !!g.commonCollapsed,
                 prompt: g.prompt || "",
                 refs: g.refs,
                 refAudios: g.refAudios || g.ref_audios,
@@ -4706,8 +4592,6 @@ class MiniMaxH3DirectorEditor {
                 ? [...this.timeline.runSelection]
                 : [],
             globalCommon: {
-                commonEnabled: !!g.commonEnabled,
-                commonCollapsed: !!g.commonCollapsed,
                 prompt: g.prompt || "",
                 refs: cloneJson(g.refs, []),
                 refAudios: cloneJson(g.refAudios || g.ref_audios, []),
@@ -4724,8 +4608,6 @@ class MiniMaxH3DirectorEditor {
         this.timeline.runSelection = Array.isArray(ws.runSelection) ? [...ws.runSelection] : [];
         const gc = ws.globalCommon || {};
         this.timeline.global = this.timeline.global || { refs: [] };
-        this.timeline.global.commonEnabled = !!gc.commonEnabled;
-        this.timeline.global.commonCollapsed = !!gc.commonCollapsed;
         this.timeline.global.prompt = gc.prompt || "";
         this.timeline.global.refs = cloneJson(gc.refs, []);
         this.timeline.global.refAudios = cloneJson(gc.refAudios, []);
@@ -4747,8 +4629,6 @@ class MiniMaxH3DirectorEditor {
         this.selectedIndex = 0;
         this._clearLiveRunSelection();
         this.timeline.global = this.timeline.global || { refs: [] };
-        this.timeline.global.commonEnabled = false;
-        this.timeline.global.commonCollapsed = false;
         this.timeline.global.prompt = "";
         this.timeline.global.refs = [];
         this.timeline.global.refAudios = [];
@@ -4784,8 +4664,6 @@ class MiniMaxH3DirectorEditor {
             runSelectEnabled: !!this.timeline.runSelectEnabled,
             runSelection: this.timeline.runSelection,
             globalCommon: {
-                commonEnabled: !!g.commonEnabled,
-                commonCollapsed: !!g.commonCollapsed,
                 prompt: g.prompt || "",
                 refs: g.refs,
                 refAudios: g.refAudios || g.ref_audios,
@@ -4901,7 +4779,7 @@ class MiniMaxH3DirectorEditor {
         this.globalPromptLayout?.classList.toggle("bd-v2v-layout", globalV2vStyle);
         this.segPromptLayout?.classList.toggle("bd-v2v-layout", segV2vStyle);
 
-        for (const wrap of [this.globalRefsImagesWrap, this.globalRefAudiosWrap, this.globalRefVideosWrap]) {
+        for (const wrap of [this.globalRefsImagesWrap, this.globalRefAudiosWrap]) {
             wrap?.classList.toggle("bd-r2v-section", globalRefStyle);
         }
         for (const wrap of [this.segRefsImagesWrap, this.segRefAudiosWrap]) {
@@ -4925,23 +4803,18 @@ class MiniMaxH3DirectorEditor {
         const globalKey = this.getTaskKey();
         const showGlobalRefs = !hideTimeline && taskUsesReferenceImages(globalKey);
         const showGlobalRefAudios = !hideTimeline && taskUsesReferenceAudios(globalKey);
-        // r2v common panel: multi-slot ref videos (distinct from ads2v single referenceVideo).
-        const showGlobalR2vVideos = !hideTimeline && this.usesR2vCommonPanel();
         const showGlobalRefVideo = !hideTimeline && taskUsesReferenceVideo(globalKey);
 
         this.globalRefsCol?.classList.toggle(
             "hidden",
-            !showGlobalRefs && !showGlobalRefVideo && !showGlobalRefAudios && !showGlobalR2vVideos,
+            !showGlobalRefs && !showGlobalRefVideo && !showGlobalRefAudios,
         );
         this.globalRefsImagesWrap?.classList.toggle("hidden", !showGlobalRefs);
-        this.globalRefVideosWrap?.classList.toggle("hidden", !showGlobalR2vVideos);
         this.globalRefAudiosWrap?.classList.toggle("hidden", !showGlobalRefAudios);
         this.globalRefVideoCol?.classList.toggle("hidden", !showGlobalRefVideo);
         if (this.globalPanelTitle) {
             let titleKey = "panel.globalPromptOnly";
-            if (this.usesR2vCommonPanel()) {
-                titleKey = "panel.r2vCommonParams";
-            } else if (showGlobalRefVideo) {
+            if (showGlobalRefVideo) {
                 titleKey = "panel.globalPromptAndRefVideo";
             } else if (showGlobalRefs || showGlobalRefAudios) {
                 titleKey = showGlobalRefAudios
@@ -4951,7 +4824,6 @@ class MiniMaxH3DirectorEditor {
             this.globalPanelTitle.textContent = t(titleKey);
             this.globalPanelTitle.setAttribute("data-i18n", titleKey);
         }
-        this.syncR2vCommonCollapse();
 
         const segKey = resolveTaskKey(
             seg?.taskType || this.timeline.global?.taskType || this.globalTask?.value || globalKey,
@@ -4976,7 +4848,6 @@ class MiniMaxH3DirectorEditor {
         }
         this.syncRv2vRefLayoutClasses({ hideTimeline, seg });
         if (showGlobalRefVideo || showSegRefVideo) this.renderRefVideoSlot();
-        if (showGlobalR2vVideos) this.renderR2vCommonVideoSlots();
         if (showGlobalRefAudios || showSegRefAudios) this.renderRefAudioSlots();
     }
 
@@ -5132,7 +5003,6 @@ class MiniMaxH3DirectorEditor {
         const showBatchExport = (isBatch && isVideoBatchTask(taskKey)) || isFl2v;
         // t2v / i2v / r2v: never show source-video upload (fl2v keeps "上传图片").
         this.btnVideo?.classList.toggle("hidden", (hideVideoUpload && !isFl2v) || isR2v || isMixed);
-        this.btnVideoExisting?.classList.toggle("hidden", hideVideoUpload || isFl2v || isR2v || isMixed);
         this.btnVideoAppend?.classList.toggle("hidden", hideVideoUpload || isFl2v || isR2v || isMixed);
         // Playback / seek / zoom are for source-video (v2v). fl2v / t2v / batch have no source clip.
         this.controlsBar?.classList.toggle("hidden", hideTimeline || isBatch || isFl2v);
@@ -5143,9 +5013,7 @@ class MiniMaxH3DirectorEditor {
         this.updateStageVisibility();
         this.updateLiveSamplePanel();
         this.syncExternalGroupsTimeline();
-        // r2v keeps bd-split visible so the shared「公共参数」panel can sit above batch cards.
-        const showR2vSplit = isR2v || (isMixed && this.hasMixedR2vGroup());
-        this.root.querySelector(".bd-split")?.classList.toggle("hidden", (isBatch && !showR2vSplit) || isFl2v);
+        this.root.querySelector(".bd-split")?.classList.toggle("hidden", isBatch || isFl2v);
         this.batchPanel?.classList.toggle("hidden", !isBatch);
         this.root?.classList.toggle("bd-batch-fill", !!isBatch);
         this.fl2vUi?.root?.classList.toggle("hidden", !isFl2v);
@@ -5198,11 +5066,9 @@ class MiniMaxH3DirectorEditor {
             updateR2vToolbarBtns(this);
         }
 
-        // Side ref panels stay hidden for most batch modes (refs live in cards).
-        // r2v shows a collapsible「公共参数」bar; refs only when enabled/expanded.
-        this.syncR2vCommonCollapse();
+        // Side ref panels stay hidden for batch modes (refs live in cards).
         this.updateReferenceImageVisibility({
-            hideTimeline: (isBatch && !this.isR2vCommonEnabled()) || isGen,
+            hideTimeline: isBatch || isGen,
         });
 
         const showGenImg = mode === "gen_image";
@@ -5274,8 +5140,6 @@ class MiniMaxH3DirectorEditor {
         } else if (isBatch) {
             this.timeline.editMode = "segment";
             this.renderImageBatchGroups();
-            // Must refresh globalPanel display — r2v common params stay display:none
-            // if we only ran updateModeUI in the non-batch branch (segment → r2v).
             this.updateModeUI();
             if (showBatchTrack) {
                 this.updateSelectionUI();
@@ -5387,41 +5251,6 @@ class MiniMaxH3DirectorEditor {
             if (input.files?.[0]) this.loadReferenceVideoFile(input.files[0]);
         };
         input.click();
-    }
-
-    async pickExistingReferenceVideo() {
-        if (!taskUsesReferenceVideo(this._activeRefVideoTaskKey())) return;
-        const currentValue = this.getRefVideoTarget()?.referenceVideo?.videoFile || "";
-        const picked = await this.chooseVideoInput({
-            title: t("mediaPicker.pickReferenceVideo"),
-            currentValue,
-        });
-        if (!picked?.relPath) return;
-        const slotEl = this.isGlobalMode() ? this.globalRefVideo : this.segRefVideo;
-        const nameEl = this.isGlobalMode() ? this.globalRefVideoNameEl : this.segRefVideoNameEl;
-        const status = t("upload.inProgress", { name: picked.fileName || picked.relPath });
-        if (slotEl) {
-            slotEl.classList.remove("has-img", "has-video");
-            slotEl.textContent = status;
-        }
-        if (nameEl) nameEl.textContent = status;
-        try {
-            const prep = await this._prepareVideoFrames({
-                fileName: picked.fileName || picked.relPath,
-                relPath: picked.relPath,
-                subfolder: picked.subfolder || "",
-                type: picked.type || "input",
-                statusPrefix: t("parse.refVideo"),
-                syncNativeFps: false,
-            });
-            this.getRefVideoTarget().referenceVideo = this._buildClipRecord(prep);
-            this.renderRefVideoSlot();
-            this.commit(false, { syncTimeline: true });
-        } catch (err) {
-            console.error("[MiniMax H3Director] reference video load failed:", err);
-            if (nameEl) nameEl.textContent = t("upload.refVideoFailed", { err: formatUploadError(err) });
-            this.renderRefVideoSlot();
-        }
     }
 
     clearReferenceVideo() {
@@ -6150,100 +5979,28 @@ class MiniMaxH3DirectorEditor {
 
     isGlobalMode() { return (this.timeline.editMode || "global") === "global"; }
 
-    /** r2v batch: show timeline.global as shared params for all asset groups. */
-    usesR2vCommonPanel() {
-        return !!this.isR2vBatch?.() || !!(this.isMixedMode?.() && this.hasMixedR2vGroup?.());
-    }
-
-    /** Whether shared common params are enabled at run time. Default off. */
-    isR2vCommonEnabled() {
-        if (!this.usesR2vCommonPanel()) return false;
-        return !!(this.timeline?.global?.commonEnabled ?? this.timeline?.global?.common_enabled);
-    }
-
-    /** UI-only fold; when enabled+collapsed, runtime still merges common params. */
-    isR2vCommonCollapsed() {
-        if (!this.isR2vCommonEnabled()) return true;
-        return !!(this.timeline?.global?.commonCollapsed ?? this.timeline?.global?.common_collapsed);
-    }
-
-    /** Global / shared-ref panel owns timeline.global refs + prompt when enabled. */
     usesGlobalRefPanel() {
-        return this.isGlobalMode() || this.isR2vCommonEnabled();
-    }
-
-    syncR2vCommonCollapse() {
-        const r2v = this.usesR2vCommonPanel();
-        const on = this.isR2vCommonEnabled();
-        const folded = this.isR2vCommonCollapsed();
-        const bodyHidden = !on || folded;
-        this.globalPanel?.classList.toggle("bd-r2v-common-panel", r2v);
-        this.globalPanel?.classList.toggle("bd-r2v-common-collapsed", r2v && bodyHidden);
-        this.r2vCommonHint?.classList.toggle("hidden", !r2v || bodyHidden);
-        if (this.r2vCommonFold) {
-            this.r2vCommonFold.classList.toggle("hidden", !r2v || !on);
-            if (r2v && on) {
-                const fkey = folded ? "panel.r2vCommonExpand" : "panel.r2vCommonCollapse";
-                this.r2vCommonFold.textContent = t(fkey);
-                this.r2vCommonFold.setAttribute("data-i18n", fkey);
-                this.r2vCommonFold.title = t(
-                    folded ? "tooltip.r2vCommonExpand" : "tooltip.r2vCommonCollapse",
-                );
-            }
-        }
-        if (this.r2vCommonToggle) {
-            this.r2vCommonToggle.classList.toggle("on", on);
-            const key = on ? "panel.r2vCommonDisable" : "panel.r2vCommonEnable";
-            this.r2vCommonToggle.textContent = t(key);
-            this.r2vCommonToggle.setAttribute("data-i18n", key);
-            this.r2vCommonToggle.title = t(on ? "tooltip.r2vCommonDisable" : "tooltip.r2vCommonEnable");
-        }
-        if (this.r2vCommonStatus) {
-            this.r2vCommonStatus.classList.toggle("on", on);
-            const skey = !on
-                ? "panel.r2vCommonOff"
-                : (folded ? "panel.r2vCommonOnCollapsed" : "panel.r2vCommonOn");
-            this.r2vCommonStatus.textContent = t(skey);
-            this.r2vCommonStatus.setAttribute("data-i18n", skey);
-        }
-        if (r2v && this.globalPrompt) {
-            this.globalPrompt.placeholder = t("placeholder.r2vCommonPrompt");
-            this.globalPrompt.setAttribute("data-i18n-placeholder", "placeholder.r2vCommonPrompt");
-        }
-        // Keep shared layout class in sync so image/audio slot chrome paints correctly.
-        // Layout chrome follows enablement (not UI fold) so group inherit previews stay correct.
-        if (r2v) {
-            this.globalPromptLayout?.classList.toggle("bd-rv2v-layout", on);
-            this.globalPanel?.classList.toggle("bd-rv2v-panel", on);
-        }
+        return this.isGlobalMode();
     }
 
     setEditMode(mode) {
         this.timeline.editMode = mode;
-        this.root.querySelector('[data-a="mode-global"]').classList.toggle("active", mode === "global");
-        this.root.querySelector('[data-a="mode-segment"]').classList.toggle("active", mode === "segment");
+        this.root?.querySelector('[data-a="mode-global"]')?.classList.toggle("active", mode === "global");
+        this.root?.querySelector('[data-a="mode-segment"]')?.classList.toggle("active", mode === "segment");
         this.updateModeUI();
         this.commit();
     }
 
     updateModeUI() {
         const global = this.isGlobalMode();
-        const r2vCommon = this.usesR2vCommonPanel();
-        const r2vOn = this.isR2vCommonEnabled();
-        const mixedNoCommon = this.isMixedMode() && !r2vCommon;
-        this.globalPanel.style.display = (global || r2vCommon) ? "flex" : "none";
-        this.segmentPanel.style.display = (global || r2vCommon || mixedNoCommon) ? "none" : "flex";
-        this.syncR2vCommonCollapse();
+        if (this.globalPanel) this.globalPanel.style.display = global ? "flex" : "none";
+        if (this.segmentPanel) this.segmentPanel.style.display = global ? "none" : "flex";
         this.updateReferenceImageVisibility({
-            // Show shared ref chrome only when r2v common is enabled (expanded).
-            hideTimeline: (this.isImageBatch() && !r2vOn) || this.isGenMode(),
-            seg: (global || r2vOn) ? null : this.timeline.segments[this.selectedIndex],
+            hideTimeline: this.isImageBatch() || this.isGenMode(),
+            seg: global ? null : this.timeline.segments[this.selectedIndex],
         });
-        if (!global && !r2vCommon) this.updateSelectionUI();
-        else {
-            this.updateSelectionUI();
-            if (taskUsesReferenceVideo(this.getTaskKey())) this.renderRefVideoSlot();
-        }
+        this.updateSelectionUI();
+        if (global && taskUsesReferenceVideo(this.getTaskKey())) this.renderRefVideoSlot();
         this.updateLiveSamplePanel();
     }
 
@@ -6304,10 +6061,8 @@ class MiniMaxH3DirectorEditor {
         updateFl2vToolbarBtns?.(this);
         updateR2vToolbarBtns?.(this);
         this.renderImageBatchGroups?.();
-        const r2vOn = this.isR2vCommonEnabled?.();
-        this.syncR2vCommonCollapse?.();
         this.syncRv2vRefLayoutClasses?.({
-            hideTimeline: (this.isImageBatch?.() && !r2vOn) || this.isGenMode?.(),
+            hideTimeline: this.isImageBatch?.() || this.isGenMode?.(),
             seg: this.usesGlobalRefPanel?.() ? null : this.timeline?.segments?.[this.selectedIndex],
         });
         if (this.usesGlobalRefPanel?.() && taskUsesReferenceImages(this.getTaskKey())) {
@@ -6320,7 +6075,6 @@ class MiniMaxH3DirectorEditor {
             }
         }
         if (taskUsesReferenceAudios(this.getTaskKey())) this.renderRefAudioSlots?.();
-        if (this.usesR2vCommonPanel?.()) this.renderR2vCommonVideoSlots?.();
         this.scheduleRender?.();
         this.node?.setDirtyCanvas?.(true, true);
     }
@@ -7669,41 +7423,6 @@ class MiniMaxH3DirectorEditor {
         input.type = "file"; input.accept = "video/*";
         input.onchange = () => { if (input.files?.[0]) this.loadVideoFile(input.files[0]); };
         input.click();
-    }
-
-    async pickExistingVideoFile() {
-        if (this.isFl2vMode()) return;
-        try {
-            const picked = await this.chooseVideoInput({
-                title: t("mediaPicker.pickVideo"),
-                currentValue: this.timeline.video?.videoFile || "",
-            });
-            if (!picked?.relPath) return;
-            const btn = this.root.querySelector('[data-a="video-existing"]');
-            if (btn) { btn.disabled = true; btn.textContent = t("common.analyzing"); }
-            this.videoNameEl.textContent = t("upload.inProgress", { name: picked.fileName || picked.relPath });
-            try {
-                await this._applyLoadedVideo({
-                    fileName: picked.fileName || picked.relPath,
-                    relPath: picked.relPath,
-                    subfolder: picked.subfolder || "",
-                    type: picked.type || "input",
-                    statusPrefix: t("parse.prefix"),
-                });
-            } catch (err) {
-                console.error("[MiniMax H3Director] video load failed:", err);
-                this.videoNameEl.textContent = t("upload.loadFailed", { err: formatUploadError(err) });
-                this.updateVideoNameLabel();
-                this._flushPendingThumbDrops();
-            } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = t("mediaPicker.pickExistingVideo");
-                }
-            }
-        } catch (err) {
-            console.error("[MiniMax H3Director] video pick failed:", err);
-        }
     }
 
     pickAppendVideoFile() {
@@ -10097,10 +9816,7 @@ class MiniMaxH3DirectorEditor {
             const refs = [...(seg.refs || [])].sort(
                 (a, b) => Number(a.index ?? a.slot ?? 0) - Number(b.index ?? b.slot ?? 0),
             );
-            const commonRefs = listCommonImageRefs(this);
-            const imgFile = refs.find((r) => r?.imageFile)?.imageFile
-                || commonRefs.find((r) => r?.imageFile)?.imageFile
-                || "";
+            const imgFile = refs.find((r) => r?.imageFile)?.imageFile || "";
             const previewB64 = seg.previewB64 || (Array.isArray(seg.previewFrames) ? seg.previewFrames[0] : "");
             const vidRef = [...(seg.refVideos || [])]
                 .sort((a, b) => Number(a.index ?? a.slot ?? 0) - Number(b.index ?? b.slot ?? 0))
@@ -10923,8 +10639,7 @@ class MiniMaxH3DirectorEditor {
             }
         }
 
-        const r2vOn = this.isR2vCommonEnabled();
-        const hideTimeline = (this.isImageBatch() && !r2vOn) || this.isGenMode();
+        const hideTimeline = this.isImageBatch() || this.isGenMode();
         const seg = this.usesGlobalRefPanel() ? null : this.timeline.segments[this.selectedIndex];
         this.updateReferenceImageVisibility({ hideTimeline, seg: seg || null });
 
@@ -10935,10 +10650,6 @@ class MiniMaxH3DirectorEditor {
         if (this.usesGlobalRefPanel() && taskUsesReferenceAudios(this.getTaskKey())) {
             this.timeline.global.refAudios = this.timeline.global.refAudios || [];
             this.renderRefAudioSlots();
-        }
-        if (this.usesGlobalRefPanel() && this.usesR2vCommonPanel()) {
-            this.timeline.global.refVideos = this.timeline.global.refVideos || [];
-            this.renderR2vCommonVideoSlots();
         }
         const refVideoKey = this.usesGlobalRefPanel()
             ? this.getTaskKey()
@@ -11014,10 +10725,6 @@ class MiniMaxH3DirectorEditor {
             highestFilled = Math.max(highestFilled, idx);
         }
         if (countEl) countEl.textContent = polished ? `${filled}/${PIC_SLOTS}` : "";
-        this._syncPickExistingDisabled(
-            isGlobal ? '[data-r="global-refs-pick"]' : '[data-r="seg-refs-pick"]',
-            filled >= PIC_SLOTS,
-        );
 
         if (!this._rv2vPicsVisible) this._rv2vPicsVisible = {};
         const visKey = isGlobal ? "global" : `seg:${target?.id ?? this.selectedIndex}`;
@@ -11224,16 +10931,12 @@ class MiniMaxH3DirectorEditor {
         }
         if (isGlobal) {
             this.timeline.global = target;
-            if (this.isR2vCommonEnabled()) rebaseR2vGroupSlotsForCommon(this);
         }
         this.commit();
     }
 
     removeRef(target, index) {
         target.refs = (target.refs || []).filter((r) => Number(r.index ?? r.slot) !== index);
-        if (this.isR2vCommonEnabled() && target === this.timeline.global) {
-            rebaseR2vGroupSlotsForCommon(this);
-        }
         this.commit();
     }
 
@@ -11258,10 +10961,6 @@ class MiniMaxH3DirectorEditor {
             if (r?.audioFile || r?.fileName) filled += 1;
         }
         if (countEl) countEl.textContent = polished ? `${filled}/${MAX_REFERENCE_AUDIOS}` : "";
-        this._syncPickExistingDisabled(
-            isGlobal ? '[data-r="global-audios-pick"]' : '[data-r="seg-audios-pick"]',
-            filled >= MAX_REFERENCE_AUDIOS,
-        );
 
         box.innerHTML = "";
         for (let i = 0; i < MAX_REFERENCE_AUDIOS; i++) {
@@ -11381,9 +11080,6 @@ class MiniMaxH3DirectorEditor {
     removeRefAudio(target, index) {
         if (!target) return;
         target.refAudios = (target.refAudios || []).filter((r) => Number(r.index ?? r.slot) !== index);
-        if (this.isR2vCommonEnabled() && target === this.timeline.global) {
-            rebaseR2vGroupSlotsForCommon(this);
-        }
         this.commit();
         this.renderRefAudioSlots();
     }
@@ -11393,11 +11089,9 @@ class MiniMaxH3DirectorEditor {
         target.refAudios = swapIndexedMedia(target.refAudios || [], fromIndex, toIndex);
         if (isGlobal) {
             this.timeline.global = target;
-            if (this.isR2vCommonEnabled()) rebaseR2vGroupSlotsForCommon(this);
         }
         this.commit();
         this.renderRefAudioSlots();
-        if (isGlobal && this.isR2vCommonEnabled()) this.renderImageBatchGroups?.();
     }
 
     pickRefAudio(target, index) {
@@ -11453,263 +11147,12 @@ class MiniMaxH3DirectorEditor {
                 subfolder: prepared.subfolder || "",
             });
             endSlotLoad(this, key);
-            if (this.isR2vCommonEnabled() && isGlobal) {
-                rebaseR2vGroupSlotsForCommon(this);
-                this.renderImageBatchGroups?.();
-            }
             this.commit();
             this.renderRefAudioSlots();
         } catch (err) {
             endSlotLoad(this, key);
             console.error("[MiniMax H3Director] ref audio upload failed:", err);
             alert(t("upload.refAudioFailed", { err: err?.message || err }));
-        }
-    }
-
-    /** r2v common panel: multi-slot global.refVideos (1–3), merged into groups at run time. */
-    renderR2vCommonVideoSlots() {
-        const box = this.globalRefVideosBox;
-        if (!box || !this.usesR2vCommonPanel()) return;
-        const target = (this.timeline.global = this.timeline.global || {
-            refs: [], refAudios: [], refVideos: [],
-        });
-        target.refVideos = target.refVideos || [];
-        let filled = 0;
-        for (const r of target.refVideos) {
-            if (r?.videoFile || r?.fileName || r?.previewImageFile || r?.previewImageUrl || r?.linked) {
-                filled += 1;
-            }
-        }
-        if (this.globalVideosCount) {
-            this.globalVideosCount.textContent = `${filled}/${MAX_REFERENCE_VIDEOS}`;
-        }
-        this._syncPickExistingDisabled('[data-r="global-videos-pick"]', filled >= MAX_REFERENCE_VIDEOS);
-        box.innerHTML = "";
-        for (let i = 0; i < MAX_REFERENCE_VIDEOS; i++) {
-            const el = document.createElement("div");
-            el.className = "bd-ref-video";
-            el.dataset.videoSlot = String(i);
-            el.dataset.refKind = "video";
-            el.dataset.refIndex = String(i);
-            el.dataset.refScope = "global";
-            const label = refVideoLabel(i);
-            const ref = (target.refVideos || []).find((r) => Number(r.index ?? r.slot) === i);
-            const file = ref?.videoFile || "";
-            const posterSrc = ref?.previewImageUrl
-                || (ref?.previewImageFile ? refViewUrl(ref.previewImageFile) : "");
-            const hasMedia = !!(file || posterSrc || ref?.linked);
-            const titleFile = file || ref?.fileName || ref?.previewImageFile || "";
-            el.title = hasMedia
-                ? t("ref.videoTitleFilled", { label, file: titleFile || label })
-                : t("ref.videoTitleEmpty", { label });
-            const thumb = document.createElement("div");
-            thumb.className = "bd-r2v-thumb bd-r2v-thumb-video";
-            const meta = document.createElement("div");
-            meta.className = "bd-r2v-meta";
-            const tag = document.createElement("span");
-            tag.className = "tag";
-            tag.textContent = label;
-            meta.appendChild(tag);
-            el.appendChild(thumb);
-            el.appendChild(meta);
-            if (file) {
-                el.classList.add("has-video");
-                const video = document.createElement("video");
-                video.preload = "metadata";
-                video.muted = true;
-                video.playsInline = true;
-                video.src = refViewUrl(file);
-                video.className = "bd-r2v-media";
-                thumb.appendChild(video);
-                const playBtn = document.createElement("button");
-                playBtn.type = "button";
-                playBtn.className = "bd-r2v-play";
-                playBtn.title = t("batch.r2v.play");
-                playBtn.textContent = "▶";
-                thumb.appendChild(playBtn);
-                const dur = document.createElement("span");
-                dur.className = "bd-r2v-dur";
-                dur.textContent = ref?.durationSec != null
-                    ? formatMediaDuration(ref.durationSec)
-                    : "--:--";
-                meta.appendChild(dur);
-                bindR2vMediaPlayback(video, playBtn);
-                playBtn.addEventListener("click", () => { video.muted = false; });
-                wireMediaDuration(video, dur, (sec) => {
-                    if (ref) ref.durationSec = sec;
-                });
-                video.addEventListener("loadeddata", () => {
-                    if (video.readyState >= 2 && video.currentTime < 0.05) {
-                        try {
-                            video.currentTime = Math.min(0.1, (video.duration || 1) * 0.05);
-                        } catch (_) { /* ignore */ }
-                    }
-                }, { once: true });
-                const x = document.createElement("span");
-                x.className = "x";
-                x.textContent = "×";
-                x.onclick = (e) => {
-                    e.stopPropagation();
-                    this.removeR2vCommonVideo(i);
-                };
-                el.appendChild(x);
-            } else if (posterSrc) {
-                el.classList.add("has-video");
-                const img = document.createElement("img");
-                img.className = "bd-r2v-media";
-                img.src = posterSrc;
-                img.alt = label;
-                thumb.appendChild(img);
-                const hint = document.createElement("span");
-                hint.className = "name";
-                hint.textContent = t("batch.r2v.externalPoster");
-                meta.appendChild(hint);
-            } else {
-                thumb.textContent = "▶";
-                const hint = document.createElement("span");
-                hint.className = "name";
-                hint.textContent = t("batch.r2v.uploadHint");
-                meta.appendChild(hint);
-            }
-            bindKindSlotDnD(el, {
-                editor: this,
-                kind: "video",
-                scope: "global",
-                segIndex: -1,
-                slotIndex: i,
-                hasMedia,
-                onMove: (from, to) => this.moveR2vCommonVideoSlot(from, to),
-                onDropFile: (f) => this.addR2vCommonVideoFromFile(f, i),
-            });
-            bindSlotActivate(el, {
-                editor: this,
-                hasMedia,
-                onPick: () => this.pickR2vCommonVideo(i),
-                onPreview: () => openSlotPreview({
-                    kind: "video",
-                    src: file ? refViewUrl(file) : posterSrc,
-                    label,
-                    onReplace: () => this.pickR2vCommonVideo(i),
-                }),
-            });
-            box.appendChild(el);
-        }
-        restoreSlotLoadOverlays(this);
-        refreshPromptTokenEditors(this.root || document);
-    }
-
-    moveR2vCommonVideoSlot(fromIndex, toIndex) {
-        const target = this.timeline.global;
-        if (!target || fromIndex === toIndex) return;
-        target.refVideos = swapIndexedMedia(target.refVideos || [], fromIndex, toIndex);
-        if (this.isR2vCommonEnabled()) rebaseR2vGroupSlotsForCommon(this);
-        this.commit();
-        this.renderR2vCommonVideoSlots();
-        if (this.isR2vCommonEnabled()) this.renderImageBatchGroups?.();
-    }
-
-    removeR2vCommonVideo(index) {
-        const target = this.timeline.global;
-        if (!target) return;
-        target.refVideos = (target.refVideos || []).filter((r) => Number(r.index ?? r.slot) !== index);
-        if (this.isR2vCommonEnabled()) {
-            rebaseR2vGroupSlotsForCommon(this);
-            this.renderImageBatchGroups?.();
-        }
-        this.commit();
-        this.renderR2vCommonVideoSlots();
-    }
-
-    pickR2vCommonVideo(index) {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = "video/*,.mp4,.mov,.webm,.mkv";
-        input.onchange = () => {
-            const file = input.files?.[0];
-            if (file) this.addR2vCommonVideoFromFile(file, index);
-        };
-        input.click();
-    }
-
-    async pickExistingR2vCommonVideo() {
-        const target = (this.timeline.global = this.timeline.global || {
-            refs: [], refAudios: [], refVideos: [],
-        });
-        target.refVideos = target.refVideos || [];
-        const index = Array.from({ length: MAX_REFERENCE_VIDEOS }, (_, i) => i)
-            .find((i) => !target.refVideos.some((r) => Number(r.index ?? r.slot) === i && (r.videoFile || r.fileName)));
-        if (index == null) {
-            alert(t("mediaPicker.slotsFull"));
-            return;
-        }
-        try {
-            const picked = await this.chooseVideoInput({
-                title: t("mediaPicker.pickReferenceVideo"),
-            });
-            if (!picked?.relPath) return;
-            target.refVideos = target.refVideos.filter((r) => Number(r.index ?? r.slot) !== index);
-            target.refVideos.push({
-                index,
-                videoFile: picked.relPath,
-                fileName: picked.fileName || picked.relPath,
-                type: picked.type || "input",
-                subfolder: picked.subfolder || "",
-            });
-            if (this.isR2vCommonEnabled()) {
-                rebaseR2vGroupSlotsForCommon(this);
-                this.renderImageBatchGroups?.();
-            }
-            this.commit();
-            this.renderR2vCommonVideoSlots();
-        } catch (err) {
-            console.error("[MiniMax H3Director] common ref video pick failed:", err);
-            alert(t("upload.refVideoBatchFailed", { err: err?.message || err }));
-        }
-    }
-
-    async addR2vCommonVideoFromFile(file, slotIndex = null) {
-        if (!file) return;
-        const target = (this.timeline.global = this.timeline.global || {
-            refs: [], refAudios: [], refVideos: [],
-        });
-        target.refVideos = target.refVideos || [];
-        let index = slotIndex;
-        if (index == null) {
-            index = Array.from({ length: MAX_REFERENCE_VIDEOS }, (_, i) => i)
-                .find((i) => !target.refVideos.some((r) => Number(r.index ?? r.slot) === i));
-            if (index == null) return;
-        }
-        const key = slotLoadKey({ scope: "global", segId: "", kind: "video", index });
-        beginSlotLoad(this, key, t("slot.loading.upload"));
-        try {
-            const uploaded = await uploadToInputSmart(file, (ratio, cur, total) => {
-                updateSlotLoad(this, key, {
-                    status: t("slot.loading.upload"),
-                    ratio,
-                    cur,
-                    total,
-                });
-            });
-            const relPath = videoRelativePath(uploaded);
-            target.refVideos = target.refVideos.filter((r) => Number(r.index ?? r.slot) !== index);
-            target.refVideos.push({
-                index,
-                videoFile: relPath,
-                fileName: uploaded?.name || file.name,
-                type: "input",
-                subfolder: uploaded?.subfolder || "",
-            });
-            endSlotLoad(this, key);
-            if (this.isR2vCommonEnabled()) {
-                rebaseR2vGroupSlotsForCommon(this);
-                this.renderImageBatchGroups?.();
-            }
-            this.commit();
-            this.renderR2vCommonVideoSlots();
-        } catch (err) {
-            endSlotLoad(this, key);
-            console.error("[MiniMax H3Director] common ref video upload failed:", err);
-            alert(t("upload.refVideoBatchFailed", { err: err?.message || err }));
         }
     }
 
@@ -11721,126 +11164,6 @@ class MiniMaxH3DirectorEditor {
             if (file) this.addRefFromFile(file, target, index, isGlobal);
         };
         input.click();
-    }
-
-    _nextEmptyMediaSlot(items, max, hasFn) {
-        for (let i = 0; i < max; i++) {
-            const hit = (items || []).find((r) => Number(r.index ?? r.slot) === i);
-            if (!hasFn(hit)) return i;
-        }
-        return -1;
-    }
-
-    _syncPickExistingDisabled(selector, disabled) {
-        const btn = this.root?.querySelector(selector);
-        if (!btn) return;
-        btn.disabled = !!disabled;
-        btn.title = disabled ? t("mediaPicker.slotsFull") : t("mediaPicker.pickExistingHint");
-    }
-
-    async pickExistingRef(isGlobal) {
-        const target = isGlobal
-            ? (this.timeline.global = this.timeline.global || { refs: [] })
-            : this.timeline.segments[this.selectedIndex];
-        if (!target) return;
-        target.refs = target.refs || [];
-        const index = this._nextEmptyMediaSlot(
-            target.refs,
-            MAX_REFERENCE_IMAGES,
-            (r) => !!(r?.imageFile || r?.imageB64),
-        );
-        if (index < 0) {
-            alert(t("mediaPicker.slotsFull"));
-            return;
-        }
-        try {
-            const picked = await this.chooseImageInput({
-                title: t("mediaPicker.pickReferenceImage"),
-            });
-            if (!picked?.imageFile) return;
-            target.refs = target.refs.filter((r) => Number(r.index ?? r.slot) !== index);
-            target.refs.push({ index, imageFile: picked.imageFile, imageB64: "" });
-            if (isGlobal) {
-                this.timeline.global = target;
-                if (this.isR2vCommonEnabled()) {
-                    rebaseR2vGroupSlotsForCommon(this);
-                    this.renderImageBatchGroups?.();
-                }
-            }
-            this.commit();
-            this.renderRefSlots(
-                target.refs,
-                isGlobal ? this.globalRefsBox : this.segRefsBox,
-                isGlobal,
-            );
-        } catch (err) {
-            console.error("[MiniMax H3Director] ref pick failed:", err);
-        }
-    }
-
-    async pickExistingRefAudio(isGlobal) {
-        const target = isGlobal
-            ? (this.timeline.global = this.timeline.global || { refs: [], refAudios: [] })
-            : this.timeline.segments[this.selectedIndex];
-        if (!target) return;
-        target.refAudios = target.refAudios || [];
-        const index = this._nextEmptyMediaSlot(
-            target.refAudios,
-            MAX_REFERENCE_AUDIOS,
-            (r) => !!(r?.audioFile || r?.fileName),
-        );
-        if (index < 0) {
-            alert(t("mediaPicker.slotsFull"));
-            return;
-        }
-        const key = slotLoadKey({
-            scope: isGlobal ? "global" : "seg",
-            segId: isGlobal ? "" : target?.id ?? this.selectedIndex,
-            kind: "audio",
-            index,
-        });
-        try {
-            beginSlotLoad(this, key, t("slot.loading.prepare"));
-            const picked = await this.chooseAudioInput({
-                title: t("mediaPicker.pickReferenceAudio"),
-                onProgress: (ratio, cur, total, phase) => {
-                    updateSlotLoad(this, key, {
-                        status: phase === "extract" ? t("slot.loading.extractAudio") : t("slot.loading.upload"),
-                        ratio,
-                        cur,
-                        total,
-                    });
-                },
-            });
-            if (!picked?.relPath) {
-                endSlotLoad(this, key);
-                return;
-            }
-            if (hasDuplicateReferenceAudio(target.refAudios, picked.relPath, index)) {
-                endSlotLoad(this, key);
-                alert(t("ref.audioDuplicate"));
-                return;
-            }
-            target.refAudios = target.refAudios.filter((r) => Number(r.index ?? r.slot) !== index);
-            target.refAudios.push({
-                index,
-                audioFile: picked.relPath,
-                fileName: picked.fileName || picked.relPath,
-                type: picked.type || "input",
-                subfolder: picked.subfolder || "",
-            });
-            endSlotLoad(this, key);
-            if (this.isR2vCommonEnabled() && isGlobal) {
-                rebaseR2vGroupSlotsForCommon(this);
-                this.renderImageBatchGroups?.();
-            }
-            this.commit();
-            this.renderRefAudioSlots();
-        } catch (err) {
-            endSlotLoad(this, key);
-            console.error("[MiniMax H3Director] ref audio pick failed:", err);
-            alert(t("upload.refAudioFailed", { err: err?.message || err }));
-        }
     }
 
     async addRefFromFile(file, target, slotIndex = null, isGlobal = null) {
@@ -11866,10 +11189,6 @@ class MiniMaxH3DirectorEditor {
             endSlotLoad(this, key);
             if (isGlobal) {
                 this.timeline.global = target;
-                if (this.isR2vCommonEnabled()) {
-                    rebaseR2vGroupSlotsForCommon(this);
-                    this.renderImageBatchGroups?.();
-                }
             }
             this.commit();
         } catch (err) {

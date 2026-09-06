@@ -236,29 +236,6 @@ def apply_lora_trigger_words(plan, trigger: str | None):
     return plan
 
 
-def concat_common_segment_prompt(common: str | None, segment: str | None) -> str:
-    """Join shared (common) prompt with per-group prompt.
-
-    Both non-empty → ``common + blank line + segment``.
-    Only one side → that side alone (replaces legacy ``segment or common`` fallback).
-    """
-    common_s = (common or "").strip()
-    segment_s = (segment or "").strip()
-    if common_s and segment_s:
-        return f"{common_s}\n\n{segment_s}"
-    return common_s or segment_s
-
-
-def merge_indexed_refs(common: list, segment: list) -> list:
-    """Merge common + per-group refs by slot index; segment wins on conflict."""
-    by_idx: dict[int, object] = {}
-    for item in common or []:
-        by_idx[int(getattr(item, "index", 0))] = item
-    for item in segment or []:
-        by_idx[int(getattr(item, "index", 0))] = item
-    return sorted(by_idx.values(), key=lambda r: int(getattr(r, "index", 0)))
-
-
 @dataclass
 class SegmentPlan:
     index: int

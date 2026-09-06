@@ -352,10 +352,6 @@ def build_plan_from_external_groups(
         SegmentRef,
         SegmentRefAudio,
         SegmentRefVideo,
-        _load_ref_audios,
-        _load_refs,
-        concat_common_segment_prompt,
-        merge_indexed_refs,
         reinforce_r2v_prompt,
         resolve_ref_image_size,
         resolve_segment_pass_mode,
@@ -370,11 +366,6 @@ def build_plan_from_external_groups(
     fallback_prompt = (
         (global_block.get("prompt") or global_prompt or "")
     ).strip()
-    common_enabled = bool(
-        global_block.get("commonEnabled")
-        if global_block.get("commonEnabled") is not None
-        else global_block.get("common_enabled")
-    )
 
     indices = _run_selection_filter(timeline, len(groups))
     if not indices:
@@ -403,17 +394,6 @@ def build_plan_from_external_groups(
         timeline, width, height, ref_max_size, sample_img
     )
 
-    common_refs_raw = (
-        _load_refs(global_block.get("refs") or []) if (family == "r2v" and common_enabled) else []
-    )
-    common_audios_raw = (
-        _load_ref_audios(
-            global_block.get("refAudios") or global_block.get("ref_audios") or []
-        )
-        if (family == "r2v" and common_enabled)
-        else []
-    )
-
     from .segment_continuity import (
         resolve_segment_continuity_from_prev,
         timeline_row_for_index,
@@ -423,10 +403,7 @@ def build_plan_from_external_groups(
     cursor = 0
     for plan_idx, (src_index, g) in enumerate(all_indexed):
         group_prompt = (g.get("prompt") or "").strip()
-        if family == "r2v" and common_enabled:
-            prompt = concat_common_segment_prompt(fallback_prompt, group_prompt)
-        else:
-            prompt = group_prompt or fallback_prompt
+        prompt = group_prompt or fallback_prompt
         try:
             dur = float(g.get("duration_sec") or DEFAULT_FL2V_DURATION_SEC)
         except (TypeError, ValueError):
@@ -513,31 +490,13 @@ def build_plan_from_external_groups(
                 )
             )
         else:
-            # r2v — per-group media + Director timeline.global common media/prompt
+            # r2v — per-group media from the wired Group node
             refs = []
             for idx, tensor in sorted((g.get("ref_images") or {}).items()):
                 fitted = _fit_image(
                     tensor, width=seg_w, height=seg_h, output_mode=seg_mode, ref_max_size=ref_max
                 )
                 refs.append(SegmentRef(index=int(idx), tensor=fitted[:1].clone()))
-            if common_refs_raw:
-                common_fitted = []
-                for cref in common_refs_raw:
-                    fitted = _fit_image(
-                        cref.tensor,
-                        width=seg_w,
-                        height=seg_h,
-                        output_mode=seg_mode,
-                        ref_max_size=ref_max,
-                    )
-                    common_fitted.append(
-                        SegmentRef(
-                            index=int(cref.index),
-                            tensor=fitted[:1].clone(),
-                            image_file=getattr(cref, "image_file", "") or "",
-                        )
-                    )
-                refs = merge_indexed_refs(common_fitted, refs)
             ref_videos = []
             for idx, frames in sorted((g.get("ref_videos") or {}).items()):
                 fitted = _fit_image(
@@ -550,8 +509,6 @@ def build_plan_from_external_groups(
                 SegmentRefAudio(index=int(idx), audio=aud, audio_file="")
                 for idx, aud in sorted((g.get("ref_audios") or {}).items())
             ]
-            if common_audios_raw:
-                ref_audios = merge_indexed_refs(common_audios_raw, ref_audios)
             ref_video_audios = [
                 SegmentRefAudio(index=int(idx), audio=aud, audio_file="")
                 for idx, aud in sorted((g.get("ref_video_audios") or {}).items())

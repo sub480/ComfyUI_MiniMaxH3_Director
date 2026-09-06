@@ -32,7 +32,7 @@ Director has in-node second pass; an external Refine node is no longer required.
 
 ### LoRA trigger words
 
-Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (common prompt + trigger). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
+Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (including trigger words). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
 
 ### Per-group first / second pass
 
@@ -92,7 +92,7 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 | **Multi-segment timeline** | Upload video in-node; split, equal-split, smart shot-split (PySceneDetect), append; selectable/deletable split points; visual timeline with thumbs |
 | **Task modes** | `t2v`, `i2v`, `fl2v` (first/last frame), `r2v` (reference material groups), `v2v` (video-to-video), `rv2v` (reference-guided source edit) |
 | **First/last frame (fl2v)** | Dedicated shot groups: prompt-only (text-to-video), or start and/or end (official FL2VA allows end-only). With segment continuity + From prev, an empty shot pins the previous tail (N context frames) for motion/audio handoff; drag edges for duration; run-select per group |
-| **Reference groups (r2v)** | fl2v-style groups: top **Common params** share refs/audio and a common prompt (concatenated with each group prompt); each group may add images 1–9 / audios 1–3 / videos 1–3; prompt tags `<Picture N>` / `<Video K>` / `<Audio J>` (or `@` picker); timeline preview synced with card selection |
+| **Reference groups (r2v)** | fl2v-style groups: each group has its own images 1–9 / audios 1–3 / videos 1–3 and shot prompt; prompt tags `<Picture N>` / `<Video K>` / `<Audio J>` (or `@` picker); timeline preview synced with card selection |
 | **Source-video edit (v2v / rv2v)** | Bernini-style source timeline; each segment bound as `<Video 1>`; `rv2v` adds optional refs (images 1–9, audios 1–3) |
 | **Run select** | Sample only checked segments/groups; unselected may use cache or source passthrough when exporting all |
 | **External multi-group inputs** | `Director Group (Image to Video)` / `(Reference to Video)` + `Groups Combine`; wire into `i2v_groups` / `r2v_groups` for external-priority batches with run-select |
@@ -122,7 +122,7 @@ Toolbar **Import pack / Export pack** writes `*.mmxpack.zip`. Paths are ASCII on
 
 | English UI | Pack path |
 |------|------|
-| Shared params | `shared_params/` |
+| Global refs (v2v / rv2v) | `shared_params/` |
 | Asset group 1 | `asset_groups/01/` |
 | Picture 1–9 | `Picture1.png` … `Picture9.webp` |
 | Video 1–3 | `Video1.mp4` |
@@ -135,13 +135,13 @@ pack.json
 shared_params/shared_params.json
 shared_params/Picture1.png
 asset_groups/01/group.json
-asset_groups/01/Picture4.png
+asset_groups/01/Picture1.png
 timeline.json
 ```
 
 - `timeline.json` is written on Director export for lossless round-trip (including other-task drafts).
 - A converter may write only `pack.json` + `shared_params/` + `asset_groups/` and omit `timeline.json`.
-- Slot numbers match the UI: if Shared params occupy Picture 1–3, group folders continue from `Picture4` — do not rename the group’s first image to `Picture1`.
+- Slot numbers match the UI: group `Picture1` is prompt `<Picture 1>` — do not rename slots.
 - Models (UNET / CLIP / VAE) are not included. Import replaces the current node timeline (with confirmation). Media is copied to ComfyUI `input/minimax_director_packs/`.
 
 ## Requirements
@@ -232,10 +232,9 @@ This repo ships examples under `example_workflows/`:
 ### Reference groups (r2v) — short guide
 
 1. Set task type to **Reference to Video (r2v)** (**ref2va** UNET + audio_vae)
-2. Click **Enable common params** (collapsed/off by default); upload shared refs/audio and write a common prompt (e.g. character lock / `subject_definitions`); when enabled it is concatenated with each group prompt
-3. Click **Add material group**; write per-shot prompts and optionally add group-only assets (same slot overrides common)
-4. In prompts use `<Picture N>` / `<Video K>` / `<Audio J>`, or type `@` (with common params on, picker includes common + group assets)
-5. Timeline previews group duration/thumbs; Run-select stays in sync with group checkboxes
+2. Click **Add material group**; write per-shot prompts and attach that group’s images / audio / video
+3. In prompts use `<Picture N>` / `<Video K>` / `<Audio J>`, or type `@` to mention group assets
+4. Timeline previews group duration/thumbs; Run-select stays in sync with group checkboxes
 
 ### Source video (v2v / rv2v) — short guide
 

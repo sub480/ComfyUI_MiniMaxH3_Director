@@ -94,105 +94,10 @@ export function slotKindSpec(kind) {
     return SLOT_KINDS[kind] || null;
 }
 
-export function commonUsedIndices(editor, kind) {
-    const spec = slotKindSpec(kind);
-    if (!spec || !editor?.isR2vCommonEnabled?.()) return new Set();
-    return usedRefIndices(editor.timeline?.global?.[spec.listKey], spec.hasFn, spec.max);
-}
-
-export function groupFreeIndices(editor, kind) {
+export function groupFreeIndices(_editor, kind) {
     const spec = slotKindSpec(kind);
     if (!spec) return [];
-    if (!editor?.isR2vCommonEnabled?.()) {
-        return freeRefIndices(new Set(), spec.max);
-    }
-    return freeRefIndices(commonUsedIndices(editor, kind), spec.max);
-}
-
-export function listCommonRefs(editor, kind) {
-    const spec = slotKindSpec(kind);
-    if (!spec || !editor?.isR2vCommonEnabled?.()) return [];
-    return [...(editor.timeline?.global?.[spec.listKey] || [])]
-        .filter(spec.hasFn)
-        .sort((a, b) => Number(a.index ?? a.slot ?? 0) - Number(b.index ?? b.slot ?? 0));
-}
-
-export function listCommonImageRefs(editor) {
-    return listCommonRefs(editor, "image");
-}
-
-export function listCommonVideoRefs(editor) {
-    return listCommonRefs(editor, "video");
-}
-
-export function occupiedSlotLabels(editor, kind) {
-    const spec = slotKindSpec(kind);
-    if (!spec) return "";
-    return [...commonUsedIndices(editor, kind)]
-        .sort((a, b) => a - b)
-        .map((i) => spec.labelFn(i))
-        .join("、");
-}
-
-function rebaseListOffUsed(list, hasFn, usedByCommon, maxSlots) {
-    if (!Array.isArray(list) || !list.length || !usedByCommon.size) {
-        return { list, changed: false };
-    }
-    const keep = [];
-    const colliding = [];
-    for (const r of list) {
-        if (!hasFn(r)) {
-            keep.push(r);
-            continue;
-        }
-        const i = Number(r.index ?? r.slot);
-        if (!Number.isFinite(i) || i < 0 || i >= maxSlots || usedByCommon.has(i)) {
-            colliding.push(r);
-        } else {
-            keep.push(r);
-        }
-    }
-    if (!colliding.length) return { list, changed: false };
-    const used = new Set(usedByCommon);
-    for (const r of keep) {
-        if (!hasFn(r)) continue;
-        const i = Number(r.index ?? r.slot);
-        if (Number.isFinite(i)) used.add(i);
-    }
-    let changed = false;
-    for (const r of colliding) {
-        let next = -1;
-        for (let i = 0; i < maxSlots; i++) {
-            if (!used.has(i)) {
-                next = i;
-                break;
-            }
-        }
-        changed = true;
-        if (next < 0) continue;
-        used.add(next);
-        keep.push({ ...r, index: next, slot: undefined });
-    }
-    return { list: keep, changed };
-}
-
-export function rebaseR2vGroupSlotsForCommon(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return false;
-    let changed = false;
-    for (const kind of ["image", "audio", "video"]) {
-        const spec = SLOT_KINDS[kind];
-        const used = commonUsedIndices(editor, kind);
-        if (!used.size) continue;
-        for (const seg of editor.timeline?.segments || []) {
-            if (!Array.isArray(seg[spec.listKey]) || !seg[spec.listKey].length) continue;
-            const r = rebaseListOffUsed(seg[spec.listKey], spec.hasFn, used, spec.max);
-            if (r.changed) {
-                seg[spec.listKey] = r.list;
-                changed = true;
-            }
-        }
-    }
-    return changed;
+    return freeRefIndices(new Set(), spec.max);
 }
 
 export function swapIndexedMedia(list, fromSlot, toSlot) {
