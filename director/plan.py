@@ -418,6 +418,27 @@ def _load_refs(ref_list: list[dict]) -> list[SegmentRef]:
     return sorted(refs, key=lambda r: r.index)
 
 
+def _ref_metadata(ref_list: list[dict]) -> list[SegmentRef]:
+    """Build reference identities without decoding image pixels.
+
+    Used by informational cache-status requests.  The placeholder tensor is
+    never consumed by that path; execution still uses ``_load_refs``.
+    """
+    refs: list[SegmentRef] = []
+    for item in ref_list or []:
+        if not isinstance(item, dict):
+            continue
+        index = int(item.get("index", item.get("slot", len(refs))))
+        if index < 0 or index >= MAX_REFERENCE_IMAGES:
+            continue
+        image_file = str(
+            item.get("imageFile") or item.get("image_file") or item.get("fileName") or ""
+        ).replace("\\", "/").strip()
+        if image_file or item.get("imageB64"):
+            refs.append(SegmentRef(index=index, tensor=torch.empty(0), image_file=image_file))
+    return sorted(refs, key=lambda r: r.index)
+
+
 def _reference_audio_file(item: dict) -> tuple[str, str]:
     """Return (timeline-relative identity, absolute input path)."""
     rel = str(
@@ -733,6 +754,7 @@ def build_director_plan(
     width: int,
     height: int,
     ref_max_size: int,
+    load_media: bool = True,
 ) -> DirectorPlan:
     timeline: dict = {}
     if timeline_data and timeline_data.strip():
@@ -749,7 +771,14 @@ def build_director_plan(
 
     task_type = global_block.get("taskType") or global_task_type or "v2v — 视频转视频(Video to Video)"
     prompt = global_block.get("prompt") or global_prompt or ""
-    global_refs = _load_refs(global_block.get("refs") or [])
+    if load_media:
+        global_refs = _load_refs(global_block.get("refs") or [])
+    else:
+        # Cache-status requests only need file identities.  Decoding every
+        # reference image here makes a harmless UI refresh compete with the
+        # generation process (and can allocate tensors on the intermediate
+        # device).
+        global_refs = _ref_metadata(global_block.get("refs") or [])
     global_ref_audios = _load_ref_audios(
         global_block.get("refAudios") or global_block.get("ref_audios") or []
     )
@@ -798,12 +827,17 @@ def build_director_plan(
             "No source video in MiniMax H3 Director. Upload a video inside the node timeline UI before running."
         )
 
-    try:
-        probe = load_timeline_segment(load_timeline, 0, 1)
-        loaded_h = int(probe.shape[1])
-        loaded_w = int(probe.shape[2])
-    except Exception as exc:
-        log.warning("Could not probe source video frame: %s", exc)
+    if load_media:
+        try:
+            probe = load_timeline_segment(load_timeline, 0, 1)
+            loaded_h = int(probe.shape[1])
+            loaded_w = int(probe.shape[2])
+        except Exception as exc:
+            log.warning("Could not probe source video frame: %s", exc)
+            video_meta = load_timeline.get("video") or {}
+            loaded_w = int(video_meta.get("width") or width)
+            loaded_h = int(video_meta.get("height") or height)
+    else:
         video_meta = load_timeline.get("video") or {}
         loaded_w = int(video_meta.get("width") or width)
         loaded_h = int(video_meta.get("height") or height)
@@ -847,7 +881,10 @@ def build_director_plan(
             seg_prompt = (seg_data.get("prompt") or "").strip() or prompt
             seg_task = seg_data.get("taskType") or seg_data.get("task_type") or task_type
             # Segment mode: only this segment's refs — never inherit global.refs / refAudios.
-            seg_refs = _load_refs(seg_data.get("refs") or [])
+            if load_media:
+                seg_refs = _load_refs(seg_data.get("refs") or [])
+            else:
+                seg_refs = _ref_metadata(seg_data.get("refs") or [])
             seg_ref_audios = _load_ref_audios(
                 seg_data.get("refAudios") or seg_data.get("ref_audios") or []
             )

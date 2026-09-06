@@ -549,7 +549,15 @@ def execute_director_plan_core(
         will_refine = refine_will_sample(plan, seg)
         pass_mode = resolve_segment_pass_mode(seg)
         run_refine = will_refine and pass_mode == "second"
-        pre_cache = load_first_pass_cache(node_id, seg, plan)
+        # A normal one-pass cache hit only needs the AV latent.  The encoded
+        # pixel frames are required for refine output or live preview; loading
+        # them unconditionally adds a large CPU/disk copy to every segment.
+        pre_cache = load_first_pass_cache(
+            node_id,
+            seg,
+            plan,
+            load_frames=bool(will_refine or live_tae_preview),
+        )
         skip_first_sample = isinstance(pre_cache, dict)
         if not skip_first_sample:
             pre_cache = {}

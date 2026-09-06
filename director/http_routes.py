@@ -554,6 +554,7 @@ async def minimax_first_pass_cache_status(request):
             width=int(body.get("width") or 864),
             height=int(body.get("height") or 480),
             ref_max_size=int(body.get("ref_max_size") or 864),
+            load_media=False,
         )
         plan = apply_lora_trigger_words(plan, body.get("lora_trigger_words"))
         plan.sample_seed = int(body.get("seed") or 0)

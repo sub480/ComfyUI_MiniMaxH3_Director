@@ -33,6 +33,9 @@ SOURCE_VIDEO_FP_KEY = "source_video"
 
 def source_video_identity(plan: DirectorPlan) -> list[str]:
     """Stable source-clip identity: relative path + size + mtime (overwrite-safe)."""
+    cached = getattr(plan, "_source_video_identity_cache", None)
+    if isinstance(cached, list):
+        return cached
     from ..lib.video_io import resolve_video_path, video_clips_from_timeline
 
     clips = video_clips_from_timeline((plan.raw or {}) if plan is not None else {})
@@ -50,6 +53,7 @@ def source_video_identity(plan: DirectorPlan) -> list[str]:
             tokens.append(f"{rel}:{st.st_size}:{mtime_ns}")
         except Exception:
             tokens.append(f"{rel}:missing")
+    setattr(plan, "_source_video_identity_cache", tokens)
     return tokens
 
 
@@ -741,6 +745,8 @@ def load_first_pass_cache(
     node_id: str | None,
     seg: SegmentPlan,
     plan: DirectorPlan,
+    *,
+    load_frames: bool = True,
 ) -> dict[str, Any] | None:
     """Load first-pass cache only on exact fingerprint match. Never stale."""
     if not node_id:
@@ -775,7 +781,7 @@ def load_first_pass_cache(
         if not isinstance(payload, dict) or "samples" not in payload:
             return None
         frames = None
-        if frames_path.is_file():
+        if load_frames and frames_path.is_file():
             try:
                 loaded = torch.load(frames_path, map_location="cpu", weights_only=True)
                 if isinstance(loaded, torch.Tensor) and loaded.numel() > 0:

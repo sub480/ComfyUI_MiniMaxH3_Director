@@ -11,7 +11,6 @@ import { t } from "./minimax_i18n.js";
 import {
     applyDirectorRefinePassDefaults,
     directorRefineActive,
-    scheduleDirectorPassCacheRefresh,
 } from "./minimax_image_batch.js";
 
 const REFINE_CLASS = "MiniMaxH3DirectorRefine";
@@ -895,14 +894,12 @@ app.registerExtension({
             const onWidgetChanged = nodeType.prototype.onWidgetChanged;
             nodeType.prototype.onWidgetChanged = function (...args) {
                 const result = onWidgetChanged?.apply(this, args);
-                scheduleDirectorPassCacheRefresh(this);
                 refreshAllRefineNodes();
                 return result;
             };
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (...args) {
                 const result = onConnectionsChange?.apply(this, args);
-                scheduleDirectorPassCacheRefresh(this);
                 refreshAllRefineNodes();
                 syncDirectorBuiltinRefineWidgets(this);
                 maybeApplyDirectorPassDefaults(this);
@@ -927,13 +924,6 @@ app.registerExtension({
         nodeType.prototype.onConnectionsChange = function (...args) {
             const r = onConnectionsChange?.apply(this, args);
             syncRefineWidgetVisibility(this);
-            const director = this.graph?._nodes?.find?.((n) => {
-                const inp = n?.inputs?.find((item) => item?.name === "refine");
-                if (inp?.link == null) return false;
-                const link = this.graph?.links?.[inp.link] ?? this.graph?._links?.[inp.link];
-                return String(link?.origin_id) === String(this.id);
-            });
-            if (director) scheduleDirectorPassCacheRefresh(director);
             return r;
         };
     },

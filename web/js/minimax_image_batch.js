@@ -167,7 +167,13 @@ export function wireMediaDuration(mediaEl, durEl, onReady) {
         durEl.textContent = formatMediaDuration(mediaEl.duration);
         onReady?.(mediaEl.duration);
     };
+    // Chromium may deliver duration after loadedmetadata for Range-served
+    // local MP4 files.  Listen to all metadata-ready transitions instead of
+    // leaving a filled slot stuck at --:--.
     mediaEl.addEventListener("loadedmetadata", apply);
+    mediaEl.addEventListener("durationchange", apply);
+    mediaEl.addEventListener("loadeddata", apply);
+    mediaEl.addEventListener("canplay", apply);
     if (mediaEl.readyState >= 1) apply();
 }
 
@@ -389,6 +395,8 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-pass-status.mismatch{background:#f0bd58}
 .bd-batch-pass-status.error{background:#ef7777}
 .bd-batch-pass-status.pending{background:#666}
+.bd-batch-pass-status.checking{background:#55aaff;box-shadow:0 0 0 0 rgba(85,170,255,.65);animation:bd-pass-checking 1.1s ease-in-out infinite}
+@keyframes bd-pass-checking{50%{box-shadow:0 0 0 4px rgba(85,170,255,0)}}
 .bd-batch-pass-clear{background:transparent;border:1px solid #553;color:#f88;border-radius:4px;padding:3px 6px;font-size:10px;cursor:pointer}
 .bd-batch-pass-clear:hover{background:#3a1515}
 .bd-batch-pass-pop{position:fixed;z-index:10000;max-width:300px;padding:8px 10px;background:#1a1a1a;border:1px solid #444;border-radius:8px;color:#ddd;font:12px/1.45 sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.45);white-space:pre-wrap;word-break:break-word}
@@ -1120,8 +1128,14 @@ async function assignSegRefFromFile(editor, index, slot, file) {
         const uploaded = await uploadImage(file);
         const seg = editor.timeline.segments[index];
         if (!seg) return false;
+        const imageFile = relPath(uploaded);
+        if (hasDuplicateGroupMedia(seg.refs, imageFile, slot)) {
+            endSlotLoad(editor, key);
+            alert(t("ref.mediaDuplicate"));
+            return false;
+        }
         seg.refs = (seg.refs || []).filter((r) => Number(r.index ?? r.slot) !== slot);
-        seg.refs.push({ index: slot, imageFile: relPath(uploaded), imageB64: "" });
+        seg.refs.push({ index: slot, imageFile, imageB64: "" });
         endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit();
@@ -1243,6 +1257,11 @@ async function assignSegVideoFromFile(editor, index, slot, file) {
         const seg = editor.timeline.segments[index];
         if (!seg) return false;
         const videoFile = relPath(uploaded);
+        if (hasDuplicateGroupMedia(seg.refVideos, videoFile, slot)) {
+            endSlotLoad(editor, key);
+            alert(t("ref.mediaDuplicate"));
+            return false;
+        }
         seg.refVideos = (seg.refVideos || []).filter((r) => Number(r.index ?? r.slot) !== slot);
         seg.refVideos.push({
             index: slot,
@@ -2562,18 +2581,24 @@ function syncBatchPassButtons(editor) {
 
 async function refreshBatchPassCacheStatus(editor) {
     if (!editor?.node || !editor.batchList?.querySelector("[data-batch-pass-status]")) return;
+    // A status refresh is only informational.  Never let an older filesystem
+    // scan remain in flight while a newer one is requested after UI edits.
+    editor._mmxPassCacheAbort?.abort();
+    const controller = new AbortController();
+    editor._mmxPassCacheAbort = controller;
     const seq = (editor._mmxPassCacheSeq || 0) + 1;
     editor._mmxPassCacheSeq = seq;
     const payload = passCachePayload(editor);
     if (!payload) return;
     for (const el of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
-        el.className = "bd-batch-pass-status pending";
-        el.title = t("batch.pass.status.pending");
+        el.className = "bd-batch-pass-status checking";
+        el.title = t("batch.pass.status.checking");
     }
     try {
         const response = await api.fetchApi("/minimax/director/first_pass_cache_status", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
             body: JSON.stringify(payload),
         });
         const data = await response.json();
@@ -2583,6 +2608,7 @@ async function refreshBatchPassCacheStatus(editor) {
         }
         paintPassCacheStatus(editor, data);
     } catch (error) {
+        if (error?.name === "AbortError") return;
         if (seq !== editor._mmxPassCacheSeq) return;
         paintPassCacheStatus(editor, { error: error?.message || String(error), segments: [] });
     }
@@ -2593,8 +2619,22 @@ export function scheduleDirectorPassCacheRefresh(nodeOrEditor, delay = 120) {
     if (!editor?.batchList) return;
     closePassCachePopover();
     syncBatchPassButtons(editor);
+    for (const el of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
+        el.className = "bd-batch-pass-status checking";
+        el.title = t("batch.pass.status.checking");
+    }
     clearTimeout(editor._mmxPassCacheTimer);
     editor._mmxPassCacheTimer = setTimeout(() => refreshBatchPassCacheStatus(editor), delay);
+}
+
+function hasDuplicateGroupMedia(list, mediaPath, slot) {
+    const target = String(mediaPath || "").replace(/\\/g, "/").toLowerCase();
+    if (!target) return false;
+    return (list || []).some((item) => {
+        if (Number(item?.index ?? item?.slot) === Number(slot)) return false;
+        const path = item?.imageFile || item?.videoFile || item?.audioFile || "";
+        return String(path).replace(/\\/g, "/").toLowerCase() === target;
+    });
 }
 
 function commitSegmentPassMode(editor, index, mode) {
@@ -2666,17 +2706,18 @@ function appendBatchPassControls(meta, editor, seg, index) {
     status.setAttribute("data-batch-pass-status", "");
     status.setAttribute("data-batch-pass-index", String(index));
     status.title = t("batch.pass.status.pending");
+    status.onmouseenter = () => {
+        const row = status._mmxPassRow || passCacheRowForIndex(editor._mmxPassCache, index);
+        showPassCachePopover(status, row);
+    };
+    status.onmouseleave = () => {
+        closePassCachePopover();
+    };
     status.onclick = (e) => {
         e.stopPropagation();
-        const open = () => {
-            const row = status._mmxPassRow || passCacheRowForIndex(editor._mmxPassCache, index);
-            showPassCachePopover(status, row);
-        };
-        if (status.classList.contains("pending")) {
-            open();
-            return;
-        }
-        void refreshBatchPassCacheStatus(editor).then(open);
+        // Hover is informational; an explicit click always refreshes the
+        // filesystem-backed status and does not open a stale popover.
+        scheduleDirectorPassCacheRefresh(editor, 0);
     };
     const clearBtn = document.createElement("button");
     clearBtn.type = "button";
@@ -2762,7 +2803,14 @@ export function renderImageBatchGroups(editor) {
     editor.updateDomWidgetHeight?.();
     closePassCachePopover();
     syncBatchPassButtons(editor);
-    scheduleDirectorPassCacheRefresh(editor, 80);
+    // Re-rendering the batch cards recreates the status buttons.  Reapply the
+    // last completed scan instead of leaving newly-created buttons gray until
+    // the next filesystem request.
+    if (editor._mmxPassCache) {
+        paintPassCacheStatus(editor, editor._mmxPassCache);
+    }
+    // Cache status is refreshed when the cache popover is opened or after an
+    // explicit cache operation, not after every repaint of the batch panel.
     restoreSlotLoadOverlays(editor);
 }
 
