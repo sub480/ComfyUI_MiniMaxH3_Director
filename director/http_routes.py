@@ -419,7 +419,7 @@ async def minimax_list_vae_approx(request):
         })
     except Exception as exc:
         log.warning("MiniMax H3 Director list vae_approx failed: %s", exc)
-        return web.Response(status=500, text=str(exc))
+        return web.json_response({"error": str(exc)}, status=500)
 
 
 async def minimax_list_input_media(request):

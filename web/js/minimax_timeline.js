@@ -70,6 +70,7 @@ import {
     LIVE_PREVIEW_SPEED_MIN,
     LIVE_PREVIEW_SPEED_STEP,
     clampLivePreviewSpeed,
+    clearAllDirectorCache,
     formatLivePreviewSpeed,
     restartLivePreviewAnims,
     setR2vToolbar,
@@ -973,13 +974,15 @@ const STYLES = `
    clipping the editor or forcing its height back to auto. */
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card{flex:1 1 auto;min-height:0;align-self:stretch}
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-r2v{
-  display:flex;flex-direction:column;flex:0 0 auto!important;min-height:100%;height:auto!important
+  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;height:auto
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo .bd-batch-r2v-body{
-  flex:0 0 auto;min-height:280px;max-height:none;align-self:stretch
+  /* Match the solo-card fill behavior of t2v/i2v/fl2v while retaining the
+     reference column's minimum height. */
+  flex:1 1 auto;height:auto;min-height:420px;max-height:none;align-self:stretch
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo .bd-batch-r2v-main{
-  flex:0 0 auto;min-height:0;height:auto;max-height:none
+  flex:1 1 auto;min-height:0;height:auto;max-height:none
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo .bd-batch-prompts{
   flex:1 1 auto;min-height:140px;max-height:none;overflow:hidden
@@ -988,7 +991,7 @@ const STYLES = `
   flex:1 1 auto;min-height:120px;max-height:none;height:auto;overflow:hidden
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo .bd-token-editor{
-  flex:1 1 auto;min-height:120px;max-height:none;height:auto;overflow:auto;resize:none
+  flex:1 1 auto;min-height:120px;max-height:none;height:auto;overflow:auto;resize:vertical
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-plain,
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-source,
@@ -1154,6 +1157,8 @@ const STYLES = `
 .bd-output .bd-btn-live-preview{background:#222;border-color:#333;color:#aaa;white-space:nowrap;height:29px;min-height:29px;padding:4px 12px}
 .bd-output .bd-btn-live-preview:hover{background:#2a2a2a;border-color:#555;color:#ddd}
 .bd-output .bd-btn-live-preview.active{background:#1a3a2a;color:#4fff8f;border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.35)}
+.bd-output .bd-btn-clear-cache{background:#2a1818;border-color:#6b3838;color:#f0a0a0;white-space:nowrap;height:29px;min-height:29px;padding:4px 10px}
+.bd-output .bd-btn-clear-cache:hover{background:#3a2020;border-color:#e66;color:#fcc}
 .bd-live-sample{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:10px 12px;background:linear-gradient(165deg,#1a1a1a 0%,#121212 100%);border:1px solid #333;border-radius:10px;flex-shrink:0}
 .bd-live-sample.hidden{display:none!important}
 .bd-live-sample.receiving{border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.35)}
@@ -1260,7 +1265,8 @@ const STYLES = `
 .bd-rv2v-layout .bd-ref:hover .x,.bd-rv2v-layout .bd-ref:focus-within .x{display:flex}
 .bd-rv2v-layout .bd-ref.bd-r2v-pic-hidden{display:none!important}
 .bd-rv2v-layout .bd-refs-images-wrap,.bd-rv2v-layout .bd-ref-audios-wrap,.bd-rv2v-layout .bd-ref-videos-wrap{margin-top:0}
-.bd-select{background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:4px 6px;font-size:11px;max-width:240px;box-sizing:border-box}
+.bd-select{background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:4px 6px;font-size:11px;max-width:240px;box-sizing:border-box;color-scheme:dark}
+.bd-select option{background:#181818;color:#eee;font:inherit}
 .bd-actions>.bd-select{padding:6px 10px;font-size:11px;line-height:1.35;height:29px;min-height:29px;max-width:min(480px,55vw)}
 .bd-ref img{width:100%;height:100%;object-fit:cover}
 .bd-ref .x{position:absolute;top:1px;right:3px;color:#f88;font-size:12px;line-height:1;display:none}
@@ -2335,6 +2341,10 @@ class MiniMaxH3DirectorEditor {
 
         const initTotal = Math.max(0, parseInt(this.totalFramesWidget?.value || 124, 10));
         const storedFps = peekStoredTimelineFps(this.timelineWidget?.value, this.frameRateWidget?.value);
+        // Keep the last value chosen in this editor instance.  ComfyUI may
+        // reconfigure the node after an interrupt and feed us the old
+        // timeline_data; that must not undo an explicit UI choice.
+        this._userLivePreviewSpeed = null;
         this.timeline = parseTimeline(this.timelineWidget?.value, initTotal, H3_FPS);
         this._pendingH3FpsLock = storedFps;
         this.buildDOM();
@@ -3145,6 +3155,7 @@ class MiniMaxH3DirectorEditor {
             </span>
             <span class="bd-live-preview-tools">
                 <button type="button" class="bd-btn bd-btn-live-preview" data-a="live-tae-preview" data-i18n="toolbar.liveTaePreview" data-i18n-title="tooltip.liveTaePreview">预览</button>
+                <button type="button" class="bd-btn bd-btn-clear-cache" data-a="clear-all-cache" data-i18n="batch.cache.clearAll" data-i18n-title="batch.cache.clearAllTooltip">清理全部缓存</button>
             </span>`;
         this.mainBody.appendChild(outputBar);
         this.outputBarEl = outputBar;
@@ -3521,6 +3532,7 @@ class MiniMaxH3DirectorEditor {
         bind('[data-a="play"]', () => this.togglePlay());
         bind('[data-a="loop"]', () => this.toggleLoop());
         bind('[data-a="live-tae-preview"]', () => this.togglePreviewPanel());
+        bind('[data-a="clear-all-cache"]', () => void clearAllDirectorCache(this));
         if (this.livePreviewEnableCb) {
             this.livePreviewEnableCb.addEventListener("change", () => {
                 this.setLiveTaePreview(!!this.livePreviewEnableCb.checked);
@@ -3969,6 +3981,7 @@ class MiniMaxH3DirectorEditor {
         const initTotal = Math.max(0, parseInt(this.totalFramesWidget?.value || data.totalFrames || 124, 10));
         const storedFps = parseStoredFps(data.frameRate || this.frameRateWidget?.value || H3_FPS);
         this.timeline = parseTimeline(this.timelineWidget?.value, initTotal, H3_FPS);
+        this._restoreUserLivePreviewSpeed();
         if (this.globalPrompt && this.timeline.global?.prompt != null) {
             this.globalPrompt.value = this.timeline.global.prompt;
         }
@@ -11311,6 +11324,11 @@ class MiniMaxH3DirectorEditor {
         return clampLivePreviewSpeed(this.timeline?.livePreviewSpeed);
     }
 
+    _restoreUserLivePreviewSpeed() {
+        if (this._userLivePreviewSpeed == null || !this.timeline) return;
+        this.timeline.livePreviewSpeed = clampLivePreviewSpeed(this._userLivePreviewSpeed);
+    }
+
     syncLivePreviewSpeedUI() {
         const speed = this.livePreviewSpeed();
         const on = this.isLiveTaePreviewEnabled();
@@ -11326,6 +11344,7 @@ class MiniMaxH3DirectorEditor {
     setLivePreviewSpeed(value) {
         const speed = clampLivePreviewSpeed(value);
         const prev = this.livePreviewSpeed();
+        this._userLivePreviewSpeed = speed;
         if (this.timeline) this.timeline.livePreviewSpeed = speed;
         this.syncLivePreviewSpeedUI();
         if (speed !== prev) {
@@ -11333,7 +11352,9 @@ class MiniMaxH3DirectorEditor {
             if (this._liveSampleFrames?.length > 1) {
                 this._startLiveSampleAnim(this._liveSampleFrames, this._liveSampleBaseFps || 16);
             }
-            this.scheduleTimelineSync();
+            // Do not leave this behind the debounce timer: an interrupt can
+            // cause ComfyUI to restore the node before the timer fires.
+            this.flushTimelineSync();
         }
     }
 
@@ -13045,6 +13066,7 @@ app.registerExtension({
                 const initTotal = Math.max(0, parseInt(ed.totalFramesWidget?.value || 124, 10));
                 const storedFps = peekStoredTimelineFps(ed.timelineWidget?.value, ed.frameRateWidget?.value);
                 ed.timeline = parseTimeline(ed.timelineWidget?.value, initTotal, H3_FPS);
+                ed._restoreUserLivePreviewSpeed?.();
                 ed._directorMode = ed.getDirectorMode();
                 if (ed._directorMode === "video") {
                     ed.restoreVideoFromTimeline();

@@ -225,6 +225,45 @@ def _safe_unlink(path: Path) -> bool:
         return False
 
 
+def _recycle_file(path: Path) -> bool:
+    """Move a user-requested cache deletion to the OS recycle bin."""
+    try:
+        from send2trash import send2trash
+    except ImportError:
+        send2trash = None
+    try:
+        if path.is_file() or path.is_symlink():
+            if send2trash is not None:
+                send2trash(str(path))
+            elif os.name == "nt":
+                import ctypes
+                from ctypes import wintypes
+
+                class _SHFILEOPSTRUCTW(ctypes.Structure):
+                    _fields_ = [
+                        ("hwnd", wintypes.HWND),
+                        ("wFunc", wintypes.UINT),
+                        ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR),
+                        ("fFlags", wintypes.WORD),
+                        ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", wintypes.LPVOID),
+                        ("lpszProgressTitle", wintypes.LPCWSTR),
+                    ]
+
+                operation = _SHFILEOPSTRUCTW(
+                    None, 3, str(path) + "\0\0", None, 0x0040 | 0x0010, False, None, None
+                )
+                result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+                if result != 0 or operation.fAnyOperationsAborted:
+                    return False
+            else:
+                raise RuntimeError("清理缓存需要安装 send2trash，以便将文件移入回收站。")
+        return True
+    except OSError:
+        return False
+
+
 def _atomic_publish(tmp: Path, dest: Path) -> None:
     """Move ``tmp`` 鈫?``dest``, tolerating clouds that block same-name overwrite."""
     try:
@@ -403,6 +442,56 @@ def _align_cache_fingerprint(stored: Any, expected: dict[str, Any]) -> tuple[Any
 def _cache_fingerprint_matches(stored: Any, expected: dict[str, Any]) -> bool:
     stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
     return isinstance(stored_cmp, dict) and stored_cmp == expected_cmp
+
+
+def inspect_segment_cache(
+    node_id: str | None,
+    seg: SegmentPlan,
+    plan: DirectorPlan,
+    *,
+    require_audio: bool = False,
+) -> dict[str, Any]:
+    """Return a non-loading, strict cache diagnosis for final export.
+
+    ``status`` is one of ``exact cache hit``, ``stale rejected`` or
+    ``missing``.  The diagnosis deliberately never falls back to stale data;
+    callers use it to gate ``export=all`` before assembling a timeline.
+    """
+    result: dict[str, Any] = {
+        "segment": int(seg.index) + 1,
+        "status": "missing",
+        "audio_status": "missing" if require_audio else "not required",
+        "diff_keys": [],
+    }
+    if not node_id:
+        return result
+    root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+    tensor_path = root / f"seg_{seg.index:04d}.pt"
+    meta_path = root / f"seg_{seg.index:04d}.meta.json"
+    audio_path = root / f"seg_{seg.index:04d}.audio.pt"
+    if not tensor_path.is_file() or not meta_path.is_file():
+        return result
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+        expected = segment_cache_fingerprint(seg, plan)
+        stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
+        if stored_cmp != expected_cmp:
+            result["status"] = "stale rejected"
+            result["diff_keys"] = _fingerprint_diff_keys(stored_cmp, expected_cmp)
+            log.info(
+                "Segment %d stale cache rejected for final export (diff=%s).",
+                seg.index + 1, result["diff_keys"][:8],
+            )
+            return result
+        result["status"] = "exact cache hit"
+        if require_audio:
+            result["audio_status"] = "exact cache hit" if audio_path.is_file() else "missing"
+        return result
+    except Exception as exc:
+        result["status"] = "stale rejected"
+        result["diff_keys"] = ["<invalid-meta>"]
+        log.info("Segment %d cache metadata rejected for final export: %s", seg.index + 1, exc)
+        return result
 
 
 def load_segment_handoff_meta(
@@ -1047,7 +1136,7 @@ def clear_segment_cache(
             continue
         if kind == "final" and is_pre:
             continue
-        if _safe_unlink(path):
+        if _recycle_file(path):
             removed += 1
     if removed:
         if segment_index is None:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import comfy.samplers
 
 from ..director.executor_core import execute_director_plan_core
@@ -17,6 +20,64 @@ from .director_refine import director_refine_widget_inputs
 _CATEGORY = "MiniMaxH3"
 
 _DEFAULT_GLOBAL_PROMPT = "A cinematic scene with natural motion and synchronized ambience"
+
+
+_DIRECTOR_LINKED_INPUTS = frozenset({
+    "model",
+    "model_r2v",
+    "video_vae",
+    "audio_vae",
+    "clip",
+    "refine_model",
+    "upscale_model",
+    "sigmas",
+    "refine_sigmas",
+})
+
+
+def _director_is_changed_value(value):
+    """Convert ordinary Director inputs into a stable, compact cache value.
+
+    ``IS_CHANGED`` replaces ComfyUI's default input hashing.  Keep this
+    intentionally limited to JSON-like values: linked model/latent objects are
+    invalidated by their upstream nodes, while their repr often contains a
+    process-specific address and would make every queue a cache miss.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _director_is_changed_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = [_director_is_changed_value(item) for item in value]
+        return sorted(items, key=lambda item: repr(item)) if isinstance(value, (set, frozenset)) else items
+    # External group packs are normally dataclasses/simple objects.  Include
+    # their data without hashing model/tensor payloads embedded in them.
+    attrs = getattr(value, "__dict__", None)
+    if isinstance(attrs, dict):
+        return {
+            "type": f"{type(value).__module__}.{type(value).__qualname__}",
+            "data": _director_is_changed_value(attrs),
+        }
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def _director_input_signature(kwargs: dict, pre_cache_signature: str) -> str:
+    inputs = {
+        key: _director_is_changed_value(value)
+        for key, value in kwargs.items()
+        if key not in _DIRECTOR_LINKED_INPUTS
+    }
+    payload = json.dumps(
+        {"inputs": inputs, "pre_cache": pre_cache_signature},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _live_tae_vae_choices():
@@ -261,12 +322,15 @@ class MiniMaxH3Director:
 
     @classmethod
     def IS_CHANGED(cls, unique_id=None, **kwargs):
-        # Fingerprint .pre cache files so clearing / rewriting 一采 cache
-        # invalidates Comfy's execution cache even when widgets are unchanged.
-        del kwargs
+        # Fingerprint both execution inputs and .pre cache files.  The old
+        # implementation discarded kwargs and therefore returned the same
+        # value when only timeline_data/runSelection changed; ComfyUI then
+        # reused the previous node output, making preview and exported MP4
+        # appear to come from the previous run.
         from ..director.segment_cache import first_pass_cache_disk_signature
 
-        return first_pass_cache_disk_signature(unique_id)
+        pre_cache_signature = first_pass_cache_disk_signature(unique_id)
+        return _director_input_signature(kwargs, pre_cache_signature)
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "IMAGE", "STRING", "IMAGE")
     RETURN_NAMES = ("images", "audio", "fps", "frame_count", "source_images", "report", "images_pre_refine")

@@ -61,6 +61,7 @@ from .h3_motion_context import (
     trim_export_tail,
 )
 from .segment_cache import (
+    inspect_segment_cache,
     load_first_pass_cache,
     load_first_pass_frames_stale,
     load_segment_audio,
@@ -492,6 +493,50 @@ def execute_director_plan_core(
             f"(indices {[i + 1 for i in run_list]}; skipped {skipped or 'none'})"
         )
 
+    # ``export=all`` must never silently turn a partial run into a mixed
+    # timeline.  Validate every unselected slot before sampling so the error is
+    # deterministic and no output can be assembled from stale disk renders.
+    partial_all = plan.export_mode == "all" and len(run_indices) < len(all_segments)
+    if partial_all:
+        need_cached_audio = audio_mode == AUDIO_MODE_GENERATE
+        invalid_cache: list[dict[str, Any]] = []
+        for candidate in all_segments:
+            if candidate.index in run_indices:
+                continue
+            diagnosis = inspect_segment_cache(
+                node_id, candidate, plan, require_audio=need_cached_audio
+            )
+            reports.append(
+                f"Segment {candidate.index + 1}: {diagnosis['status']}"
+                + (
+                    f"; audio {diagnosis['audio_status']}"
+                    if need_cached_audio else ""
+                )
+            )
+            if (
+                diagnosis["status"] != "exact cache hit"
+                or (
+                    need_cached_audio
+                    and diagnosis["audio_status"] != "exact cache hit"
+                )
+            ):
+                invalid_cache.append(diagnosis)
+        if invalid_cache:
+            details = ", ".join(
+                f"#{item['segment']} ({item['status']}"
+                + (
+                    f", audio {item['audio_status']}"
+                    if need_cached_audio else ""
+                )
+                + ")"
+                for item in invalid_cache
+            )
+            raise ValueError(
+                "全部导出已阻止：未运行片段的当前缓存不可用："
+                f"{details}。当前选择运行范围为 {[i + 1 for i in sorted(run_indices)]}。"
+                "请将这些片段加入「选择运行」，或切换为「分段导出」。"
+            )
+
     if plan.continuity_enabled:
         pinned = [
             seg.index + 1
@@ -652,21 +697,21 @@ def execute_director_plan_core(
             prev_av = completed_av_latents.get(prev_idx)
             if prev_av is None and prev_seg is not None:
                 prev_av = load_segment_av_latent(
-                    node_id, prev_seg, plan, allow_stale=True
+                    node_id, prev_seg, plan
                 )
                 if prev_av is not None:
                     completed_av_latents[prev_idx] = prev_av
             prev_handoff = completed_av_handoff.get(prev_idx)
             if prev_handoff is None and prev_seg is not None:
                 prev_handoff = load_segment_handoff_meta(
-                    node_id, prev_seg, plan, allow_stale=True
+                    node_id, prev_seg, plan
                 )
                 if prev_handoff is not None:
                     completed_av_handoff[prev_idx] = prev_handoff
             prev_audio = completed_audios.get(prev_idx)
             if prev_audio is None and prev_seg is not None:
                 prev_audio = load_segment_audio(
-                    node_id, prev_seg, plan, allow_stale=True
+                    node_id, prev_seg, plan
                 )
                 if prev_audio is not None:
                     completed_audios[prev_idx] = prev_audio
@@ -845,13 +890,13 @@ def execute_director_plan_core(
                     )
                     if prev_seg_lazy is not None:
                         prev_chunk = load_segment_cache(
-                            node_id, prev_seg_lazy, plan, allow_stale=True
+                            node_id, prev_seg_lazy, plan
                         )
                         if prev_chunk is not None:
                             completed_outputs[prev_idx] = prev_chunk
                             if prev_idx not in completed_audios:
                                 lazy_aud = load_segment_audio(
-                                    node_id, prev_seg_lazy, plan, allow_stale=True
+                                    node_id, prev_seg_lazy, plan
                                 )
                                 if lazy_aud is not None:
                                     completed_audios[prev_idx] = lazy_aud
@@ -1371,7 +1416,7 @@ def execute_director_plan_core(
             cleanup_segment_vram(enabled=True)
 
         reports.append(
-            f"Segment {ui_idx + 1}/{timeline_seg_total}: {task_hint} "
+            f"Segment {ui_idx + 1}/{timeline_seg_total}: fresh — {task_hint} "
             f"({target_len} frames, seed={seed}"
             f"{', ' + refine_note if refine_note else ''})"
         )
@@ -1443,13 +1488,8 @@ def execute_director_plan_core(
         if plan.export_mode != "all":
             continue
 
-        # Prefer exact cache; pipeline-stale disk render is ok. A different
-        # source video is rejected so v2v/rv2v can passthrough the new clip.
+        # Only exact current-timeline cache may fill an unselected slot.
         cached = load_segment_cache(node_id, seg, plan)
-        used_stale = False
-        if cached is None:
-            cached = load_segment_cache(node_id, seg, plan, allow_stale=True)
-            used_stale = cached is not None
         if cached is not None:
             cached = cached.float()
             completed_outputs[seg.index] = cached
@@ -1464,26 +1504,25 @@ def execute_director_plan_core(
                 pre_fill if pre_fill is not None else cached
             )
             cached_audio = load_segment_audio(
-                node_id, seg, plan, allow_stale=used_stale
+                node_id, seg, plan
             )
             if cached_audio is not None:
                 completed_audios[seg.index] = cached_audio
             # Continuity for later sampled segments may need AV latent / handoff.
             cached_av = load_segment_av_latent(
-                node_id, seg, plan, allow_stale=used_stale
+                node_id, seg, plan
             )
             if cached_av is not None:
                 completed_av_latents[seg.index] = cached_av
             cached_handoff = load_segment_handoff_meta(
-                node_id, seg, plan, allow_stale=used_stale
+                node_id, seg, plan
             )
             if cached_handoff is not None:
                 completed_av_handoff[seg.index] = cached_handoff
             audio_note = ", +audio" if cached_audio is not None else ", no audio cache"
-            stale_note = ", stale fingerprint" if used_stale else ""
             reports.append(
-                f"Segment {seg.index + 1}/{len(all_segments)}: loaded from cache "
-                f"({cached.shape[0]} frames{audio_note}{stale_note})"
+                f"Segment {seg.index + 1}/{len(all_segments)}: exact cache hit "
+                f"({cached.shape[0]} frames{audio_note})"
             )
             output_chunks.append(cached)
             output_pre_chunks.append(completed_pre_refine[seg.index])
@@ -1560,6 +1599,12 @@ def execute_director_plan_core(
             f"{missing_audio} — those slots are silent in the merge. "
             "Re-run them once (or run all) to refresh audio cache."
         )
+        if audio_mode == AUDIO_MODE_GENERATE:
+            raise ValueError(
+                "全部导出已阻止：片段 "
+                f"{missing_audio} 的生成音频缓存缺失或已过期。"
+                "请将这些片段加入「选择运行」，或切换为「分段导出」。"
+            )
     export_frame_counts = [int(c.shape[0]) for c in export_chunks]
     # segment_outputs path (分段导出 / image batch): keep run-order audios.
     if plan.export_mode == "all" and output_chunks:

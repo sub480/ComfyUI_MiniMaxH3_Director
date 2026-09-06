@@ -316,9 +316,9 @@ def resolve_prev_segment_output(
     if prev_idx in completed:
         return completed[prev_idx]
     prev_seg = all_segments[prev_idx]
-    # Pipeline-stale is ok; a different source video is not (load_segment_cache
-    # refuses source-stale even with allow_stale=True).
-    cached = load_segment_cache(node_id, prev_seg, plan, allow_stale=True)
+    # Continuity context has a different safety requirement from legacy export
+    # fill: never pin a known stale render after timeline/pack content changes.
+    cached = load_segment_cache(node_id, prev_seg, plan)
     if cached is not None:
         return cached
     if not plan.continuity_enabled:

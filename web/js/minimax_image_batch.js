@@ -2631,7 +2631,7 @@ async function refreshBatchPassCacheStatus(editor) {
             signal: controller.signal,
             body: JSON.stringify(payload),
         });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (seq !== editor._mmxPassCacheSeq) return;
         if (!response.ok || data?.error) {
             throw new Error(data?.error || `HTTP ${response.status}`);
@@ -2693,7 +2693,7 @@ async function clearGroupFirstPassCache(editor, index) {
                 index,
             }),
         });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (!response.ok || data?.error) {
             throw new Error(data?.error || `HTTP ${response.status}`);
         }
@@ -2701,6 +2701,24 @@ async function clearGroupFirstPassCache(editor, index) {
         scheduleDirectorPassCacheRefresh(editor, 80);
     } catch (error) {
         window.alert(`${t("batch.pass.clear")}: ${error?.message || error}`);
+    }
+}
+
+export async function clearAllDirectorCache(editor) {
+    const node = editor?.node;
+    if (!node || !window.confirm(t("batch.cache.clearAllConfirm"))) return;
+    try {
+        const response = await api.fetchApi("/minimax/director/clear_segment_cache", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ node_id: String(node.id), kind: "all" }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data?.error) throw new Error(data?.error || `HTTP ${response.status}`);
+        scheduleDirectorPassCacheRefresh(editor, 80);
+        editor.renderImageBatchGroups?.();
+    } catch (error) {
+        window.alert(`${t("batch.cache.clearAll")}: ${error?.message || error}`);
     }
 }
 
