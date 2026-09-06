@@ -46,6 +46,7 @@ def report_director_progress(
     task_key: str = "",
     timeline_segment_index: int | None = None,
     timeline_segment_total: int | None = None,
+    cache_status: str | None = None,
 ) -> None:
     if not node_id:
         return
@@ -91,6 +92,8 @@ def report_director_progress(
         "frames_label": frames_label,
         "task_key": task_key,
     }
+    if cache_status:
+        payload["first_pass_cache"] = str(cache_status)
 
     try:
         from server import PromptServer

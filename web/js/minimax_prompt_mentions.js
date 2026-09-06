@@ -51,21 +51,8 @@ const MENTION_STYLES = `
 .bd-token-editor:focus{border-color:#4a7a5a;box-shadow:0 0 0 1px rgba(79,255,143,.18)}
 .bd-token-editor:empty:before{content:attr(data-placeholder);color:#666;pointer-events:none}
 .bd-token-resize-handle{
-  position:absolute;left:50%;bottom:0;z-index:4;width:96px;max-width:40%;height:18px;
-  transform:translateX(-50%);display:flex;align-items:flex-end;justify-content:center;
-  padding:0;border:0;background:transparent;outline:none;border-radius:8px 8px 0 0;
-  cursor:ns-resize;touch-action:none;user-select:none
+  display:none
 }
-.bd-token-resize-handle::after{
-  content:"";width:54px;max-width:72%;height:3px;margin-bottom:3px;border-radius:999px;
-  background:#52665a;box-shadow:0 -4px 0 rgba(82,102,90,.65)
-}
-.bd-token-resize-handle:hover::after,
-.bd-token-resize-handle:focus-visible::after,
-.bd-token-wrap.bd-token-resizing .bd-token-resize-handle::after{
-  background:#4fff8f;box-shadow:0 -4px 0 rgba(79,255,143,.45)
-}
-body.bd-token-resizing{cursor:ns-resize!important;user-select:none!important}
 .bd-rv2v-layout .bd-token-editor,.bd-v2v-layout .bd-token-editor{
   min-height:220px;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
 }
@@ -782,10 +769,6 @@ function ensureTokenShell(textarea) {
         editor.classList.add(cls);
     }
     wrap.appendChild(editor);
-    // R2V uses the growable card/list layout; other modes keep their existing flex sizing.
-    if (textarea.closest(".bd-batch-r2v")) {
-        installTokenResizeHandle(wrap, editor);
-    }
     textarea.__bdTokenEditor = editor;
     textarea.__bdTokenWrap = wrap;
 

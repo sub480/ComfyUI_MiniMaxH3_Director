@@ -559,14 +559,24 @@ def execute_director_plan_core(
             load_frames=bool(will_refine or live_tae_preview),
         )
         skip_first_sample = isinstance(pre_cache, dict)
-        if not skip_first_sample:
-            pre_cache = {}
         meta = {
             "frames_label": frames_label(seg),
             "task_key": seg.task_key,
             "timeline_segment_index": ui_idx,
             "timeline_segment_total": timeline_seg_total,
         }
+        report_director_progress(
+            node_id,
+            segment_index=progress_index,
+            segment_total=seg_total,
+            phase="prepare",
+            phase_value=0,
+            phase_max=1,
+            cache_status="hit" if skip_first_sample else "miss",
+            **meta,
+        )
+        if not skip_first_sample:
+            pre_cache = {}
 
         report_director_progress(
             node_id, segment_index=progress_index, segment_total=seg_total,

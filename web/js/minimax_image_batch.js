@@ -484,13 +484,14 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-r2v .bd-batch-audio:hover .x,.bd-batch-r2v .bd-batch-video:hover .x{display:flex}
 .bd-batch-prompts{display:flex;flex-direction:column;gap:4px;min-width:0}
 .bd-batch-prompts .bd-label{color:#888;font-size:10px}
-.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;flex:1 1 auto;min-height:380px;display:flex;flex-direction:column}
+.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;flex:0 0 auto;min-height:140px;display:flex;flex-direction:column}
 .bd-batch-r2v .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .bd-batch-prompts textarea,.bd-batch-prompts .bd-token-wrap{width:100%;min-height:88px;box-sizing:border-box}
 .bd-batch-prompts textarea{background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:6px;resize:none;overflow-y:auto;font-size:11px;font-family:inherit;line-height:1.35}
 .bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,
 .bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;resize:vertical;overflow-y:auto}
-.bd-batch-r2v .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{min-height:120px;height:auto;flex:1 1 auto;resize:none;overflow:auto}
+.bd-batch-r2v .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{min-height:120px;height:auto;flex:0 0 auto;overflow:auto}
+.bd-batch-r2v .bd-batch-prompts .bd-token-editor{resize:vertical}
 .bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-preview{background:#0d0d0d;border:1px solid #333;border-radius:4px;min-height:100px;display:flex;flex-direction:column;align-items:stretch;justify-content:center;overflow:hidden;color:#555;font-size:10px;text-align:center;padding:4px;box-sizing:border-box}
 .bd-batch-plain .bd-preview-col .bd-batch-preview,.bd-batch-source .bd-preview-col .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-preview-col .bd-batch-preview{width:100%;max-width:none;min-height:0;justify-self:stretch}
@@ -1799,8 +1800,8 @@ function renderR2vRefSlot(el, ref, slot, index, editor) {
     el.classList.toggle("has-img", has);
     el.innerHTML = "";
     el.title = ref?.imageFile
-        ? `${label}: ${ref.imageFile}`
-        : t("ref.clickUploadMove", { label });
+        ? t("ref.imageTitleFilled", { label, file: ref.imageFile })
+        : t("ref.imageTitleEmpty", { label });
     if (has) {
         const img = document.createElement("img");
         img.src = viewUrl(ref.imageFile);
@@ -1841,8 +1842,8 @@ function renderRefSlot(el, ref, slot, index, editor) {
     el.classList.toggle("has-img", !!ref?.imageFile);
     el.innerHTML = "";
     el.title = ref?.imageFile
-        ? `${label}: ${ref.imageFile}`
-        : t("ref.clickUploadMove", { label });
+        ? t("ref.imageTitleFilled", { label, file: ref.imageFile })
+        : t("ref.imageTitleEmpty", { label });
     if (ref?.imageFile) {
         const img = document.createElement("img");
         img.src = viewUrl(ref.imageFile);
@@ -3143,6 +3144,23 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 };
             });
         }
+        const resizeTarget = promptEl.__bdTokenEditor || promptEl;
+        const resizeObserver = new ResizeObserver(() => {
+                const height = resizeTarget.getBoundingClientRect().height;
+                if (!Number.isFinite(height) || height <= 0) return;
+                const live = (editor.timeline.segments || []).find((s) => s?.id && s.id === segId)
+                    || editor.timeline.segments?.[segIndex];
+                if (live) live.promptHeight = height;
+                const card = resizeTarget.closest(".bd-batch-card");
+                if (card) {
+                    card.style.minHeight = "0";
+                    card.style.height = "auto";
+                }
+                const body = resizeTarget.closest(".bd-batch-r2v-body");
+                if (body) body.style.minHeight = `${Math.max(420, height + 48)}px`;
+                editor.updateDomWidgetHeight?.();
+        });
+        resizeObserver.observe(resizeTarget);
 
         const preview = document.createElement("div");
         preview.className = "bd-batch-preview";

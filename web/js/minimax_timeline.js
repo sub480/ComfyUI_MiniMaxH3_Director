@@ -62,6 +62,7 @@ import {
     flushBatchDurationInputs,
     normalizeImageBatchSegments,
     renderImageBatchGroups,
+    scheduleDirectorPassCacheRefresh,
     setImageBatchPreview,
     patchGroupLivePreview,
     LIVE_PREVIEW_SPEED_DEFAULT,
@@ -10783,11 +10784,11 @@ class MiniMaxH3DirectorEditor {
             el.dataset.refIndex = String(i);
             el.dataset.refScope = isGlobal ? "global" : "seg";
             const label = refImageLabel(i);
+            const ref = (refs || []).find((r) => Number(r.index ?? r.slot) === i);
             const refFile = ref?.fileName || ref?.imageFile || "";
             el.title = refFile
-                ? `${label}: ${refFile}`
-                : t("ref.slotTitle", { label });
-            const ref = (refs || []).find((r) => Number(r.index ?? r.slot) === i);
+                ? t("ref.imageTitleFilled", { label, file: refFile })
+                : t("ref.imageTitleEmpty", { label });
             const tag = document.createElement("span");
             tag.className = polished ? "cap" : "bd-ref-tag";
             tag.textContent = label;
@@ -11727,6 +11728,22 @@ class MiniMaxH3DirectorEditor {
 
     setRunProgress(detail) {
         if (!this.runStatusEl) return;
+        if (this.isImageBatch() && detail?.first_pass_cache) {
+            const target = Number(detail.timeline_segment ?? detail.segment ?? 1) - 1;
+            for (const el of this.batchList?.querySelectorAll("[data-batch-pass-status]") || []) {
+                if (Number(el.getAttribute("data-batch-pass-index")) !== target) continue;
+                const hit = detail.first_pass_cache === "hit";
+                // A miss only describes the decision made by the executor; it
+                // does not replace the filesystem inspection result. Preserve
+                // the known missing/mismatch state while the new cache is
+                // being generated. A hit can safely promote the indicator.
+                if (hit) {
+                    el.className = "bd-batch-pass-status valid";
+                    el.title = t("batch.pass.status.valid");
+                }
+                break;
+            }
+        }
         const timelineTotal = this.timeline?.segments?.length || 0;
         const runTotal = Math.max(detail.segment_total || this.getRunProgressSegmentTotal(), 1);
         const runSeg = Math.max(1, detail.segment || 1);
@@ -11760,8 +11777,12 @@ class MiniMaxH3DirectorEditor {
             this._runProgressSegKey = null;
             this._followRunSelection(timelineSeg);
             this.updateRunSelectUI();
-            if (this.isImageBatch()) this.renderImageBatchGroups();
-            else this.scheduleRender();
+            if (this.isImageBatch()) {
+                this.renderImageBatchGroups();
+                // Re-rendering recreates the status buttons. Schedule the
+                // post-run inspection afterwards so it updates the live DOM.
+                scheduleDirectorPassCacheRefresh(this, 500);
+            } else this.scheduleRender();
             return;
         }
 
@@ -12725,6 +12746,17 @@ app.registerExtension({
             const orig = app.queuePrompt.bind(app);
             app.queuePrompt = function (...args) {
                 flushDirectors();
+                // Refresh the cache indicators from the exact serialized
+                // inputs immediately before ComfyUI snapshots the prompt.
+                // The executor's later hit/miss event then uses this result
+                // instead of replacing a known mismatch with a gray state.
+                const graph = app.graph ?? app.canvas?.graph;
+                for (const node of graph?._nodes ?? graph?.nodes ?? []) {
+                    const editor = node?._minimaxEditor;
+                    if (editor?.isImageBatch?.()) {
+                        scheduleDirectorPassCacheRefresh(editor, 0);
+                    }
+                }
                 clearAllDirectorRunStatus();
                 return orig(...args);
             };
@@ -12753,8 +12785,10 @@ app.registerExtension({
             editor.syncLiveSampleToSelection?.();
             if (editor.isImageBatch?.()) {
                 for (const seg of editor.timeline.segments || []) {
-                    seg.previewB64 = "";
-                    seg.previewFrames = [];
+                    // Keep the last usable frame while a new run starts.  The
+                    // progress event can arrive before the first preview event
+                    // (or when live preview is unavailable); clearing these
+                    // fields makes the preview area flash/disappear.
                     seg.previewLive = false;
                     seg.previewStep = null;
                     seg.previewTotalSteps = null;
