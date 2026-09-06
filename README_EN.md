@@ -17,6 +17,12 @@ New `task_type=mixed`. After adding a group, each group can switch type (`t2v` /
 
 `fl2v` groups accept start-only, end-only, both, or neither (text-to-video). Filling one end does **not** copy that picture onto the other.
 
+### r2v groups and asset slots
+
+The current r2v UI no longer has **Common params**. Each material group owns its prompt, images 1–9, videos 1–3, and audio 1–3. `<Picture N>` / `<Video K>` / `<Audio J>` refer only to that group, and typing `@` opens only that group’s asset menu. Wired `Director Group (Reference to Video)` inputs are also per-group; Director global reference media and prompts are no longer merged into them.
+
+Asset slots use one consistent same-kind workflow: click an empty slot to upload/choose, click a filled slot to preview, and drag to swap same-kind slots. The same path is not added twice to one group. Reference videos show a first-frame poster; reference audio accepts local audio or video, with the video’s audio track extracted.
+
 ### Built-in second pass
 
 Director has in-node second pass; an external Refine node is no longer required. First-pass / second-pass / preview knobs move from native Comfy widgets into the output bar. The three panels are exclusive (only one open at a time):
@@ -32,7 +38,7 @@ Director has in-node second pass; an external Refine node is no longer required.
 
 ### LoRA trigger words
 
-Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (including trigger words). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
+Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (including that group’s prompt and trigger words). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
 
 ### Per-group first / second pass
 
@@ -80,6 +86,18 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 - Tail-frame continuity handoff fix; end-only fl2v no longer locks the same picture as the first frame
 - New widgets are saved by name so old graphs keep widget values after the Second pass group is inserted
 - Between-segment VRAM clear is always on (the old toggle is gone)
+
+### Cache and status checks
+
+- First-pass cache fingerprints include only image / video / audio slots actually referenced by `<Picture N>`, `<Video K>`, or `<Audio J>`; changing an unused slot does not invalidate the group
+- Source videos are identified by path, file size, and modification time; replacing a source file prevents the old cache from being reused as output
+- Cache-status queries read asset identities without decoding reference images or source video again, so refreshing card status does not compete for VRAM
+- Reference images reuse decoded tensors by file identity; cache read/write failures only disable caching and never abort normal sampling
+
+### Director packs and compatibility
+
+- r2v group assets start at `Picture1` / `Video1` / `Audio1` inside each group; they no longer continue from `Picture4` because of the removed Common params slots
+- Older workflows still load; legacy common-reference fields are ignored, and r2v execution uses each group’s assets
 
 ## Features
 
