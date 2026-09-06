@@ -462,6 +462,9 @@ export const IMAGE_BATCH_STYLES = `
 .bd-r2v-play:hover{background:rgba(20,20,20,.82);color:#4fff8f}
 .bd-batch-r2v .has-audio .bd-r2v-thumb,.bd-batch-r2v .has-video .bd-r2v-thumb{border-color:#3a5a45;color:#8fdfb0;background:#152018}
 .bd-r2v-meta{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.bd-media-file-name{display:none!important}
+.bd-media-file-name.can-scroll:hover{text-overflow:clip;animation:bd-media-file-marquee var(--bd-file-scroll,2.8s) linear infinite alternate}
+@keyframes bd-media-file-marquee{from{transform:translateX(0)}to{transform:translateX(calc(-1 * var(--bd-file-overflow,0px)))}}
 .bd-batch-r2v .bd-batch-video .bd-r2v-meta,.bd-batch-r2v .bd-batch-audio .bd-r2v-meta{flex-direction:row;align-items:center;justify-content:space-between;gap:4px}
 .bd-r2v-meta .tag{color:#cfcfcf;font-size:11px;font-weight:650}
 .bd-r2v-dur{flex-shrink:0;min-width:2.6em;text-align:right;font-size:11px;color:#8a9;font-variant-numeric:tabular-nums}
@@ -1301,6 +1304,22 @@ function fileBaseName(path) {
     return s.split("/").pop() || s;
 }
 
+function makeMediaFileName(path) {
+    const name = document.createElement("span");
+    name.className = "bd-media-file-name";
+    name.textContent = fileBaseName(path);
+    name.title = String(path || "");
+    requestAnimationFrame(() => {
+        const overflow = Math.max(0, name.scrollWidth - name.clientWidth);
+        if (overflow > 2) {
+            name.style.setProperty("--bd-file-overflow", `${overflow}px`);
+            name.style.setProperty("--bd-file-scroll", `${Math.max(2.4, overflow / 24)}s`);
+            name.classList.add("can-scroll");
+        }
+    });
+    return name;
+}
+
 function countFilledRefs(seg, { picFree = [], audFree = [], vidFree = [] } = {}) {
     return {
         imgs: countFilledOnIndices(seg.refs, picFree, refHasImage),
@@ -1391,6 +1410,7 @@ function renderAudioSlot(el, ref, slot, index, editor, { r2v = false } = {}) {
         tag.className = "tag";
         tag.textContent = label;
         meta.appendChild(tag);
+        if (file) meta.appendChild(makeMediaFileName(file));
         el.appendChild(thumb);
         el.appendChild(meta);
         if (file) {
@@ -1439,8 +1459,9 @@ function renderAudioSlot(el, ref, slot, index, editor, { r2v = false } = {}) {
         tag.textContent = label;
         el.appendChild(tag);
         const name = document.createElement("span");
-        name.className = "name";
+        name.className = "name bd-media-file-name";
         name.textContent = fileBaseName(file);
+        name.title = file;
         el.appendChild(name);
         const x = document.createElement("span");
         x.className = "x";
@@ -1475,6 +1496,7 @@ function renderVideoSlot(el, ref, slot, index, editor, { r2v = false } = {}) {
         tag.className = "tag";
         tag.textContent = label;
         meta.appendChild(tag);
+        if (file) meta.appendChild(makeMediaFileName(file));
         el.appendChild(thumb);
         el.appendChild(meta);
         if (file) {
@@ -1559,8 +1581,9 @@ function renderVideoSlot(el, ref, slot, index, editor, { r2v = false } = {}) {
         tag.textContent = label;
         el.appendChild(tag);
         const name = document.createElement("span");
-        name.className = "name";
+        name.className = "name bd-media-file-name";
         name.textContent = fileBaseName(file);
+        name.title = file;
         el.appendChild(name);
         const x = document.createElement("span");
         x.className = "x";
@@ -1775,7 +1798,9 @@ function renderR2vRefSlot(el, ref, slot, index, editor) {
     const has = !!ref?.imageFile;
     el.classList.toggle("has-img", has);
     el.innerHTML = "";
-    el.title = t("ref.clickUploadMove", { label });
+    el.title = ref?.imageFile
+        ? `${label}: ${ref.imageFile}`
+        : t("ref.clickUploadMove", { label });
     if (has) {
         const img = document.createElement("img");
         img.src = viewUrl(ref.imageFile);
@@ -1788,6 +1813,7 @@ function renderR2vRefSlot(el, ref, slot, index, editor) {
         cap.className = "cap";
         cap.textContent = label;
         el.appendChild(cap);
+        el.appendChild(makeMediaFileName(ref.imageFile));
         const x = document.createElement("span");
         x.className = "x";
         x.textContent = "×";
@@ -1814,12 +1840,15 @@ function renderRefSlot(el, ref, slot, index, editor) {
     const label = refImageLabel(slot);
     el.classList.toggle("has-img", !!ref?.imageFile);
     el.innerHTML = "";
-    el.title = t("ref.clickUploadMove", { label });
+    el.title = ref?.imageFile
+        ? `${label}: ${ref.imageFile}`
+        : t("ref.clickUploadMove", { label });
     if (ref?.imageFile) {
         const img = document.createElement("img");
         img.src = viewUrl(ref.imageFile);
         img.draggable = false;
         el.appendChild(img);
+        el.appendChild(makeMediaFileName(ref.imageFile));
         const x = document.createElement("span");
         x.className = "x";
         x.textContent = "×";
@@ -2812,6 +2841,16 @@ export function renderImageBatchGroups(editor) {
     // Cache status is refreshed when the cache popover is opened or after an
     // explicit cache operation, not after every repaint of the batch panel.
     restoreSlotLoadOverlays(editor);
+    // Perform one status scan when the Director UI is first materialized after
+    // opening a workflow.  The guard prevents ordinary card re-renders from
+    // turning into repeated filesystem scans.
+    if (
+        !editor._mmxPassCacheInitialCheckStarted
+        && editor.batchList.querySelector("[data-batch-pass-status]")
+    ) {
+        editor._mmxPassCacheInitialCheckStarted = true;
+        scheduleDirectorPassCacheRefresh(editor, 250);
+    }
 }
 
 function appendBatchCard(list, editor, seg, index, ctx) {

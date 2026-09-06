@@ -29,6 +29,17 @@ from .plan import DirectorPlan, SegmentPlan, resolve_ref_image_size
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.cache")
 
 SOURCE_VIDEO_FP_KEY = "source_video"
+_PROMPT_REF_TAG_RE = {
+    "image": re.compile(r"<\s*picture\s+(\d+)\s*>", re.IGNORECASE),
+    "video": re.compile(r"<\s*video\s+(\d+)\s*>", re.IGNORECASE),
+    "audio": re.compile(r"<\s*audio\s+(\d+)\s*>", re.IGNORECASE),
+}
+
+
+def _prompt_ref_slots(prompt: str, kind: str) -> set[int]:
+    """Return 0-based reference slots explicitly used by the prompt."""
+    pattern = _PROMPT_REF_TAG_RE[kind]
+    return {int(match) - 1 for match in pattern.findall(str(prompt or "")) if int(match) > 0}
 
 
 def source_video_identity(plan: DirectorPlan) -> list[str]:
@@ -117,17 +128,24 @@ def _segment_uses_motion_context(seg: SegmentPlan, plan: DirectorPlan) -> bool:
 
 def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Identity that affects first-pass sampling (no Refine settings)."""
+    prompt = str(getattr(seg, "prompt", "") or "")
+    used_images = _prompt_ref_slots(prompt, "image")
+    used_videos = _prompt_ref_slots(prompt, "video")
+    used_audios = _prompt_ref_slots(prompt, "audio")
     ref_files = sorted(
         f"img{ref.index}:{(getattr(ref, 'image_file', '') or '')}"
         for ref in seg.refs
+        if int(getattr(ref, "index", -1)) in used_images
     )
     ref_audio_files = sorted(
         f"aud{getattr(a, 'index', i)}:{(getattr(a, 'audio_file', '') or '')}"
         for i, a in enumerate(getattr(seg, "ref_audios", None) or [])
+        if int(getattr(a, "index", i)) in used_audios
     )
     ref_video_files = sorted(
         f"vid{getattr(v, 'index', i)}:{(getattr(v, 'video_file', '') or '')}"
         for i, v in enumerate(getattr(seg, "ref_videos", None) or [])
+        if int(getattr(v, "index", i)) in used_videos
     )
     ref_video_file = (
         seg.reference_video_meta.get("videoFile")

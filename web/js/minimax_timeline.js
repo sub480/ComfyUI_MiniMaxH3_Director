@@ -1316,7 +1316,10 @@ const STYLES = `
 .bd-rv2v-layout .bd-ref-audio .bd-r2v-meta,.bd-rv2v-layout .bd-ref-video .bd-r2v-meta{flex-direction:row;align-items:center;justify-content:space-between;gap:4px}
 .bd-rv2v-layout .bd-ref-audio audio.bd-r2v-media{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
 .bd-rv2v-layout .bd-ref-video video.bd-r2v-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
-.bd-ref-audio .bd-ref-audio-name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9ad;font-size:9px;padding:0 2px}
+ .bd-media-file-name{display:none!important}
+ .bd-media-file-name.can-scroll:hover{text-overflow:clip;animation:bd-media-file-marquee var(--bd-file-scroll,2.8s) linear infinite alternate}
+ @keyframes bd-media-file-marquee{from{transform:translateX(0)}to{transform:translateX(calc(-1 * var(--bd-file-overflow,0px)))} }
+ .bd-ref-audio .bd-ref-audio-name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9ad;font-size:9px;padding:0 2px}
 .bd-rv2v-layout .bd-ref-audio .bd-ref-audio-name,.bd-rv2v-layout .bd-ref-audio .name,.bd-rv2v-layout .bd-ref-video .name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#666;font-size:10px;padding:0}
 .bd-ref-audio .x,.bd-ref-video .x{position:absolute;top:1px;right:3px;color:#f88;font-size:12px;line-height:1;display:none}
 .bd-rv2v-layout .bd-ref-audio .x,.bd-rv2v-layout .bd-ref-video .x{top:8px;right:8px;width:20px;height:20px;border-radius:6px;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);color:#ff9a9a;font-size:14px;font-weight:700;z-index:3}
@@ -2253,6 +2256,23 @@ function parseTimeline(raw, totalFrames, fps) {
     } catch {
         return base;
     }
+}
+
+function makeTimelineFileName(path) {
+    const name = document.createElement("span");
+    const raw = String(path || "").replace(/\\/g, "/");
+    name.className = "bd-media-file-name";
+    name.textContent = raw.split("/").pop() || raw;
+    name.title = raw;
+    requestAnimationFrame(() => {
+        const overflow = Math.max(0, name.scrollWidth - name.clientWidth);
+        if (overflow > 2) {
+            name.style.setProperty("--bd-file-overflow", `${overflow}px`);
+            name.style.setProperty("--bd-file-scroll", `${Math.max(2.4, overflow / 24)}s`);
+            name.classList.add("can-scroll");
+        }
+    });
+    return name;
 }
 
 class MiniMaxH3DirectorEditor {
@@ -10763,7 +10783,10 @@ class MiniMaxH3DirectorEditor {
             el.dataset.refIndex = String(i);
             el.dataset.refScope = isGlobal ? "global" : "seg";
             const label = refImageLabel(i);
-            el.title = t("ref.slotTitle", { label });
+            const refFile = ref?.fileName || ref?.imageFile || "";
+            el.title = refFile
+                ? `${label}: ${refFile}`
+                : t("ref.slotTitle", { label });
             const ref = (refs || []).find((r) => Number(r.index ?? r.slot) === i);
             const tag = document.createElement("span");
             tag.className = polished ? "cap" : "bd-ref-tag";
@@ -10775,6 +10798,7 @@ class MiniMaxH3DirectorEditor {
                 img.src = refViewUrl(ref.imageFile);
                 img.draggable = false;
                 el.appendChild(img);
+                el.appendChild(makeTimelineFileName(ref.fileName || ref.imageFile));
                 if (polished) {
                     const dot = document.createElement("span");
                     dot.className = "dot";
@@ -10794,6 +10818,7 @@ class MiniMaxH3DirectorEditor {
                 img.src = ref.imageB64.startsWith("data:") ? ref.imageB64 : `data:image/png;base64,${ref.imageB64}`;
                 img.draggable = false;
                 el.appendChild(img);
+                if (ref.fileName) el.appendChild(makeTimelineFileName(ref.fileName));
                 if (polished) {
                     const dot = document.createElement("span");
                     dot.className = "dot";
@@ -11050,7 +11075,7 @@ class MiniMaxH3DirectorEditor {
                 tag.textContent = label;
                 el.appendChild(tag);
                 const name = document.createElement("span");
-                name.className = "bd-ref-audio-name";
+                name.className = "bd-ref-audio-name bd-media-file-name";
                 name.textContent = file.split("/").pop() || file;
                 el.appendChild(name);
                 const x = document.createElement("span");
