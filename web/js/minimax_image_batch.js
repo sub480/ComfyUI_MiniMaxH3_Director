@@ -43,8 +43,34 @@ import { t } from "./minimax_i18n.js";
 import {
     hasDuplicateReferenceAudio,
     isReferenceAudioSourceFile,
+    isReferenceAudioVideoFile,
     prepareLocalReferenceAudio,
 } from "./minimax_ref_audio.js";
+import {
+    SLOT_UI_STYLES,
+    beginSlotLoad,
+    bindKindSlotDnD,
+    bindSlotActivate,
+    countFilledOnIndices,
+    endSlotLoad,
+    groupFreeIndices,
+    isSlotBusy,
+    isSlotDnD,
+    listCommonImageRefs,
+    listCommonVideoRefs,
+    mediaSrcFromRef,
+    nextEmptySlot,
+    occupiedSlotLabels,
+    openSlotPreview,
+    rebaseR2vGroupSlotsForCommon,
+    refHasAudio,
+    refHasImage,
+    refHasVideo,
+    restoreSlotLoadOverlays,
+    slotLoadKey,
+    swapIndexedMedia,
+    updateSlotLoad,
+} from "./minimax_ref_slots.js";
 
 const _players = new WeakMap();
 /** r2v picture grid: 9 slots in 3×3; reveal 3 → 6 → 9. */
@@ -56,162 +82,15 @@ function clamp(n, lo, hi) {
     return Math.max(lo, Math.min(hi, n));
 }
 
-function _refHasImage(r) {
-    return !!(r?.imageFile || r?.imageB64);
-}
+const _refHasImage = refHasImage;
+const _refHasAudio = refHasAudio;
+const _refHasVideo = refHasVideo;
 
-function _refHasAudio(r) {
-    return !!(r?.audioFile || r?.fileName);
-}
-
-function _refHasVideo(r) {
-    return !!(r?.videoFile || r?.fileName || r?.previewImageFile || r?.previewImageUrl || r?.linked);
-}
-
-/** Highest filled absolute index + 1 (0 when empty). */
-export function nextRefIndexAfter(refs, hasFn) {
-    let max = -1;
-    for (const r of refs || []) {
-        if (!hasFn(r)) continue;
-        const idx = Number(r.index ?? r.slot);
-        if (Number.isFinite(idx) && idx >= 0) max = Math.max(max, idx);
-    }
-    return max + 1;
-}
-
-/** When common params are on, group picture slots start after common's last filled index. */
-export function r2vCommonPicOffset(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return 0;
-    return Math.min(
-        R2V_PICTURE_SLOTS,
-        nextRefIndexAfter(editor.timeline?.global?.refs, _refHasImage),
-    );
-}
-
-export function r2vCommonAudioOffset(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return 0;
-    return Math.min(
-        MAX_REFERENCE_AUDIOS,
-        nextRefIndexAfter(editor.timeline?.global?.refAudios, _refHasAudio),
-    );
-}
-
-export function r2vCommonVideoOffset(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return 0;
-    return Math.min(
-        MAX_REFERENCE_VIDEOS,
-        nextRefIndexAfter(editor.timeline?.global?.refVideos, _refHasVideo),
-    );
-}
-
-export function listCommonImageRefs(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return [];
-    return [...(editor.timeline?.global?.refs || [])]
-        .filter(_refHasImage)
-        .sort((a, b) => Number(a.index ?? a.slot ?? 0) - Number(b.index ?? b.slot ?? 0));
-}
-
-export function listCommonVideoRefs(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return [];
-    return [...(editor.timeline?.global?.refVideos || [])]
-        .filter(_refHasVideo)
-        .sort((a, b) => Number(a.index ?? a.slot ?? 0) - Number(b.index ?? b.slot ?? 0));
-}
-
-/**
- * Keep group slots from colliding with common indices.
- * - Legacy (all group pics still 图片1…): shift the block up by picOff.
- * - Partial collisions (common grew into a group index): bump each colliding
- *   slot to the next free absolute index >= offset.
- */
-function _rebaseIndexedMedia(list, hasFn, offset, maxSlots) {
-    if (offset <= 0 || !Array.isArray(list) || !list.length) {
-        return { list, changed: false };
-    }
-    const items = list.filter(hasFn);
-    if (!items.length) return { list, changed: false };
-    const idxs = items.map((r) => Number(r.index ?? r.slot));
-    const hasLow = idxs.some((i) => Number.isFinite(i) && i < offset);
-    if (!hasLow) return { list, changed: false };
-    const hasHigh = idxs.some((i) => Number.isFinite(i) && i >= offset);
-
-    // Legacy: entire group still uses 图片1…N → move as a block.
-    if (!hasHigh) {
-        return {
-            changed: true,
-            list: list.map((r) => {
-                if (!hasFn(r)) return r;
-                const i = Number(r.index ?? r.slot);
-                if (!Number.isFinite(i)) return r;
-                const next = i + offset;
-                if (next >= maxSlots) return null;
-                return { ...r, index: next, slot: undefined };
-            }).filter(Boolean),
-        };
-    }
-
-    // Mixed: only bump colliding (low) entries into free high slots.
-    const used = new Set(
-        idxs.filter((i) => Number.isFinite(i) && i >= offset),
-    );
-    let nextFree = offset;
-    const takeFree = () => {
-        while (nextFree < maxSlots && used.has(nextFree)) nextFree += 1;
-        if (nextFree >= maxSlots) return null;
-        const n = nextFree;
-        used.add(n);
-        nextFree += 1;
-        return n;
-    };
-    let changed = false;
-    const out = list.map((r) => {
-        if (!hasFn(r)) return r;
-        const i = Number(r.index ?? r.slot);
-        if (!Number.isFinite(i) || i >= offset) return r;
-        const n = takeFree();
-        if (n == null) return null;
-        changed = true;
-        return { ...r, index: n, slot: undefined };
-    }).filter(Boolean);
-    return { list: out, changed };
-}
-
-export function rebaseR2vGroupSlotsForCommon(editor) {
-    if (!editor?.isR2vCommonEnabled?.()) return false;
-    const picOff = r2vCommonPicOffset(editor);
-    const audOff = r2vCommonAudioOffset(editor);
-    const vidOff = r2vCommonVideoOffset(editor);
-    if (picOff <= 0 && audOff <= 0 && vidOff <= 0) return false;
-    let changed = false;
-    for (const seg of editor.timeline?.segments || []) {
-        if (Array.isArray(seg.refs) && seg.refs.length) {
-            const r = _rebaseIndexedMedia(seg.refs, _refHasImage, picOff, R2V_PICTURE_SLOTS);
-            if (r.changed) {
-                seg.refs = r.list;
-                changed = true;
-            }
-        }
-        if (Array.isArray(seg.refAudios) && seg.refAudios.length) {
-            const r = _rebaseIndexedMedia(
-                seg.refAudios, _refHasAudio, audOff, MAX_REFERENCE_AUDIOS,
-            );
-            if (r.changed) {
-                seg.refAudios = r.list;
-                changed = true;
-            }
-        }
-        if (Array.isArray(seg.refVideos) && seg.refVideos.length) {
-            const r = _rebaseIndexedMedia(
-                seg.refVideos, _refHasVideo, vidOff, MAX_REFERENCE_VIDEOS,
-            );
-            if (r.changed) {
-                seg.refVideos = r.list;
-                changed = true;
-            }
-        }
-    }
-    return changed;
-}
+export {
+    listCommonImageRefs,
+    listCommonVideoRefs,
+    rebaseR2vGroupSlotsForCommon,
+};
 
 export function formatMediaDuration(sec) {
     if (!Number.isFinite(sec) || sec < 0) return "--:--";
@@ -667,7 +546,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-refs:not(.bd-batch-r2v){grid-template-columns:1fr}
 .bd-batch-r2v .bd-batch-refs{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
-`;
+` + SLOT_UI_STYLES;
 
 const BATCH_CHUNK_SIZE = 8 * 1024 * 1024;
 const BATCH_UPLOAD_SOFT_LIMIT = 95 * 1024 * 1024;
@@ -683,11 +562,12 @@ async function uploadImage(file) {
     return resp.json();
 }
 
-async function uploadChunked(file) {
+async function uploadChunked(file, onProgress) {
     const filename = safeUploadFilename(file?.name, file?.type);
     const uploadId = crypto.randomUUID();
     const totalChunks = Math.ceil(file.size / BATCH_CHUNK_SIZE);
     for (let i = 0; i < totalChunks; i++) {
+        onProgress?.(i / totalChunks, i, totalChunks);
         const start = i * BATCH_CHUNK_SIZE;
         const end = Math.min(start + BATCH_CHUNK_SIZE, file.size);
         const body = new FormData();
@@ -699,21 +579,25 @@ async function uploadChunked(file) {
         const resp = await api.fetchApi("/minimax/director/upload_chunk", { method: "POST", body });
         if (!resp.ok) throw new Error(await resp.text() || t("upload.chunkFailed", { status: resp.status }));
         const data = await resp.json();
+        onProgress?.((i + 1) / totalChunks, i + 1, totalChunks);
         if (data.name) return data;
     }
     throw new Error(t("upload.chunkIncomplete"));
 }
 
-async function uploadMedia(file) {
+async function uploadMedia(file, onProgress) {
     if (file.size <= BATCH_UPLOAD_SOFT_LIMIT) {
         try {
-            return await uploadImage(file);
+            onProgress?.(0, 0, 1);
+            const uploaded = await uploadImage(file);
+            onProgress?.(1, 1, 1);
+            return uploaded;
         } catch (err) {
             const msg = String(err?.message || err || "");
             if (!/too large|size|413/i.test(msg)) throw err;
         }
     }
-    return uploadChunked(file);
+    return uploadChunked(file, onProgress);
 }
 
 function relPath(upload) {
@@ -1019,7 +903,7 @@ function isBatchVideoFile(file) {
 function bindOsFileDrop(el, onFiles) {
     el.addEventListener("dragover", (e) => {
         const types = [...(e.dataTransfer?.types || [])];
-        if (types.includes("application/x-minimax-ref-slot")) {
+        if (isSlotDnD(types)) {
             e.preventDefault();
             e.stopPropagation();
             return;
@@ -1030,7 +914,7 @@ function bindOsFileDrop(el, onFiles) {
     });
     el.addEventListener("drop", (e) => {
         const types = [...(e.dataTransfer?.types || [])];
-        if (types.includes("application/x-minimax-ref-slot")) {
+        if (isSlotDnD(types)) {
             e.preventDefault();
             e.stopPropagation();
             return;
@@ -1288,18 +1172,45 @@ function readImageDimensions(file) {
     });
 }
 
+function groupSlotKey(editor, index, kind, slot) {
+    const seg = editor.timeline?.segments?.[index];
+    return slotLoadKey({
+        scope: "group",
+        segId: seg?.id ?? index,
+        kind,
+        index: slot,
+    });
+}
+
+function audioLoadProgress(editor, key) {
+    return (ratio, cur, total, phase) => {
+        updateSlotLoad(editor, key, {
+            status: phase === "extract" ? t("slot.loading.extractAudio") : t("slot.loading.upload"),
+            ratio,
+            cur,
+            total,
+        });
+    };
+}
+
 async function assignSegRefFromFile(editor, index, slot, file) {
-    if (!file?.type?.startsWith("image/")) return;
+    if (!isBatchImageFile(file)) return false;
+    const key = groupSlotKey(editor, index, "image", slot);
+    beginSlotLoad(editor, key, t("slot.loading.upload"));
     try {
         const uploaded = await uploadImage(file);
         const seg = editor.timeline.segments[index];
-        if (!seg) return;
+        if (!seg) return false;
         seg.refs = (seg.refs || []).filter((r) => Number(r.index ?? r.slot) !== slot);
         seg.refs.push({ index: slot, imageFile: relPath(uploaded), imageB64: "" });
+        endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit();
+        return true;
     } catch (err) {
+        endSlotLoad(editor, key);
         console.error("[MiniMax H3Director] batch ref upload failed:", err);
+        return false;
     }
 }
 
@@ -1317,10 +1228,12 @@ async function assignSegRefFromPicked(editor, index, slot, picked) {
     editor.commit();
 }
 
-async function pickExistingSegRef(editor, index, offset, slots) {
+async function pickExistingSegRef(editor, index, freeIndices) {
     const seg = editor.timeline.segments[index];
     if (!seg) return;
-    const slot = nextEmptyGroupSlot(seg.refs, offset, slots, (r) => r?.imageFile || r?.imageB64);
+    const slot = nextEmptySlot(
+        seg.refs, freeIndices, refHasImage, editor, "group", seg.id ?? index, "image",
+    );
     if (slot < 0) {
         alert(t("mediaPicker.slotsFull"));
         return;
@@ -1336,67 +1249,37 @@ async function pickExistingSegRef(editor, index, offset, slots) {
     }
 }
 
-function moveBatchRefSlot(editor, segIndex, fromSlot, toSlot) {
+function moveBatchKindSlot(editor, kind, segIndex, fromSlot, toSlot) {
     if (fromSlot === toSlot) return;
     const seg = editor.timeline.segments[segIndex];
     if (!seg) return;
-    const refs = [...(seg.refs || [])];
-    const fromRef = refs.find((r) => Number(r.index ?? r.slot) === fromSlot);
-    if (!fromRef) return;
-    const toRef = refs.find((r) => Number(r.index ?? r.slot) === toSlot);
-    seg.refs = refs.filter((r) => {
-        const idx = Number(r.index ?? r.slot);
-        return idx !== fromSlot && idx !== toSlot;
-    });
-    seg.refs.push({ ...fromRef, index: toSlot, slot: undefined });
-    if (toRef) {
-        seg.refs.push({ ...toRef, index: fromSlot, slot: undefined });
-    }
+    const listKey = kind === "image" ? "refs" : kind === "audio" ? "refAudios" : "refVideos";
+    seg[listKey] = swapIndexedMedia(seg[listKey] || [], fromSlot, toSlot);
     editor.renderImageBatchGroups();
     editor.commit();
 }
 
-function bindBatchRefDrop(slot, editor, index, slotIndex) {
-    const hasImg = slot.classList.contains("has-img");
-    slot.draggable = hasImg;
-    slot.addEventListener("dragstart", (e) => {
-        if (!hasImg) {
-            e.preventDefault();
-            return;
-        }
-        editor._batchRefDragMoved = false;
-        const payload = JSON.stringify({ segIndex: index, from: slotIndex });
-        e.dataTransfer.setData("application/x-minimax-ref-slot", payload);
-        e.dataTransfer.setData("text/plain", payload);
-        e.dataTransfer.effectAllowed = "move";
+function bindBatchKindSlot(slotEl, editor, index, kind, slotIndex, hasMedia, onDropFile, onPick, previewSrc, label) {
+    bindKindSlotDnD(slotEl, {
+        editor,
+        kind,
+        scope: "group",
+        segIndex: index,
+        slotIndex,
+        hasMedia,
+        onMove: (from, to) => moveBatchKindSlot(editor, kind, index, from, to),
+        onDropFile,
     });
-    slot.addEventListener("dragend", () => {
-        setTimeout(() => { editor._batchRefDragMoved = false; }, 0);
-    });
-    slot.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const types = [...(e.dataTransfer?.types || [])];
-        e.dataTransfer.dropEffect = types.includes("application/x-minimax-ref-slot")
-            ? "move"
-            : "copy";
-    });
-    slot.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const raw = e.dataTransfer.getData("application/x-minimax-ref-slot")
-            || e.dataTransfer.getData("text/plain");
-        if (raw) {
-            try {
-                const data = JSON.parse(raw);
-                if (Number(data.segIndex) !== index) return;
-                editor._batchRefDragMoved = true;
-                moveBatchRefSlot(editor, index, Number(data.from), slotIndex);
-                return;
-            } catch (_) { /* fall through */ }
-        }
-        const f = e.dataTransfer.files?.[0];
-        if (f) assignSegRefFromFile(editor, index, slotIndex, f);
+    bindSlotActivate(slotEl, {
+        editor,
+        hasMedia,
+        onPick,
+        onPreview: () => openSlotPreview({
+            kind,
+            src: previewSrc,
+            label,
+            onReplace: onPick,
+        }),
     });
 }
 
@@ -1410,11 +1293,15 @@ function removeSegRef(editor, index, slot) {
 
 async function assignSegAudioFromFile(editor, index, slot, file) {
     if (!isReferenceAudioSourceFile(file)) return false;
+    const key = groupSlotKey(editor, index, "audio", slot);
+    const extracting = isReferenceAudioVideoFile(file);
+    beginSlotLoad(editor, key, extracting ? t("slot.loading.extractAudio") : t("slot.loading.upload"));
     try {
-        const prepared = await prepareLocalReferenceAudio(file);
+        const prepared = await prepareLocalReferenceAudio(file, audioLoadProgress(editor, key));
         const seg = editor.timeline.segments[index];
         if (!seg) return false;
         if (hasDuplicateReferenceAudio(seg.refAudios, prepared.relPath, slot)) {
+            endSlotLoad(editor, key);
             alert(t("ref.audioDuplicate"));
             return false;
         }
@@ -1426,10 +1313,12 @@ async function assignSegAudioFromFile(editor, index, slot, file) {
             type: prepared.type || "input",
             subfolder: prepared.subfolder || "",
         });
+        endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit();
         return true;
     } catch (err) {
+        endSlotLoad(editor, key);
         console.error("[MiniMax H3Director] batch audio upload failed:", err);
         alert(t("upload.refAudioFailed", { err: err?.message || err }));
         return false;
@@ -1452,8 +1341,17 @@ function removeSegAudio(editor, index, slot) {
 
 async function assignSegVideoFromFile(editor, index, slot, file) {
     if (!isBatchVideoFile(file)) return false;
+    const key = groupSlotKey(editor, index, "video", slot);
+    beginSlotLoad(editor, key, t("slot.loading.upload"));
     try {
-        const uploaded = await uploadMedia(file);
+        const uploaded = await uploadMedia(file, (ratio, cur, total) => {
+            updateSlotLoad(editor, key, {
+                status: t("slot.loading.upload"),
+                ratio,
+                cur,
+                total,
+            });
+        });
         const seg = editor.timeline.segments[index];
         if (!seg) return false;
         const videoFile = relPath(uploaded);
@@ -1465,10 +1363,12 @@ async function assignSegVideoFromFile(editor, index, slot, file) {
             type: "input",
             subfolder: uploaded?.subfolder || "",
         });
+        endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit();
         return true;
     } catch (err) {
+        endSlotLoad(editor, key);
         console.error("[MiniMax H3Director] batch video upload failed:", err);
         alert(t("upload.refVideoBatchFailed", { err: err?.message || err }));
         return false;
@@ -1481,10 +1381,12 @@ async function uploadSegVideo(editor, index, slot) {
     });
 }
 
-async function pickExistingSegVideo(editor, index, offset, slots) {
+async function pickExistingSegVideo(editor, index, freeIndices) {
     const seg = editor.timeline.segments[index];
     if (!seg) return;
-    const slot = nextEmptyGroupSlot(seg.refVideos, offset, slots, (r) => r?.videoFile || r?.fileName);
+    const slot = nextEmptySlot(
+        seg.refVideos, freeIndices, refHasVideo, editor, "group", seg.id ?? index, "video",
+    );
     if (slot < 0) {
         alert(t("mediaPicker.slotsFull"));
         return;
@@ -1512,22 +1414,34 @@ async function pickExistingSegVideo(editor, index, offset, slots) {
     }
 }
 
-async function pickExistingSegAudio(editor, index, offset, slots) {
+async function pickExistingSegAudio(editor, index, freeIndices) {
     const seg = editor.timeline.segments[index];
     if (!seg) return;
-    const slot = nextEmptyGroupSlot(seg.refAudios, offset, slots, (r) => r?.audioFile || r?.fileName);
+    const slot = nextEmptySlot(
+        seg.refAudios, freeIndices, refHasAudio, editor, "group", seg.id ?? index, "audio",
+    );
     if (slot < 0) {
         alert(t("mediaPicker.slotsFull"));
         return;
     }
+    const key = groupSlotKey(editor, index, "audio", slot);
     try {
+        beginSlotLoad(editor, key, t("slot.loading.prepare"));
         const picked = await editor.chooseAudioInput({
             title: t("mediaPicker.pickReferenceAudio"),
+            onProgress: audioLoadProgress(editor, key),
         });
-        if (!picked?.relPath) return;
+        if (!picked?.relPath) {
+            endSlotLoad(editor, key);
+            return;
+        }
         const live = editor.timeline.segments[index];
-        if (!live) return;
+        if (!live) {
+            endSlotLoad(editor, key);
+            return;
+        }
         if (hasDuplicateReferenceAudio(live.refAudios, picked.relPath, slot)) {
+            endSlotLoad(editor, key);
             alert(t("ref.audioDuplicate"));
             return;
         }
@@ -1539,9 +1453,11 @@ async function pickExistingSegAudio(editor, index, offset, slots) {
             type: picked.type || "input",
             subfolder: picked.subfolder || "",
         });
+        endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit();
     } catch (err) {
+        endSlotLoad(editor, key);
         console.error("[MiniMax H3Director] batch audio pick failed:", err);
         alert(t("upload.refAudioFailed", { err: err?.message || err }));
     }
@@ -1560,82 +1476,55 @@ function fileBaseName(path) {
     return s.split("/").pop() || s;
 }
 
-function countFilledRefs(seg, { picOffset = 0, audOffset = 0, vidOffset = 0 } = {}) {
-    let imgs = 0;
-    let videos = 0;
-    let audios = 0;
-    for (const r of seg.refs || []) {
-        const idx = Number(r.index ?? r.slot);
-        if (
-            r?.imageFile
-            && Number.isFinite(idx)
-            && idx >= picOffset
-            && idx < R2V_PICTURE_SLOTS
-        ) {
-            imgs += 1;
-        }
-    }
-    for (const r of seg.refVideos || []) {
-        const idx = Number(r.index ?? r.slot);
-        if (
-            _refHasVideo(r)
-            && Number.isFinite(idx)
-            && idx >= vidOffset
-            && idx < MAX_REFERENCE_VIDEOS
-        ) {
-            videos += 1;
-        }
-    }
-    for (const r of seg.refAudios || []) {
-        const idx = Number(r.index ?? r.slot);
-        if (
-            (r?.audioFile || r?.fileName)
-            && Number.isFinite(idx)
-            && idx >= audOffset
-            && idx < MAX_REFERENCE_AUDIOS
-        ) {
-            audios += 1;
-        }
-    }
-    return { imgs, videos, audios };
+function countFilledRefs(seg, { picFree = [], audFree = [], vidFree = [] } = {}) {
+    return {
+        imgs: countFilledOnIndices(seg.refs, picFree, refHasImage),
+        videos: countFilledOnIndices(seg.refVideos, vidFree, refHasVideo),
+        audios: countFilledOnIndices(seg.refAudios, audFree, refHasAudio),
+    };
 }
 
-function nextEmptyGroupSlot(items, offset, slots, hasFn) {
-    for (let local = 0; local < slots; local++) {
-        const abs = offset + local;
-        const hit = (items || []).find((r) => Number(r.index ?? r.slot) === abs);
-        if (!hasFn(hit)) return abs;
-    }
-    return -1;
-}
-
-async function dropFilesIntoGroupSlots(editor, index, files, e, {
+function dropFilesIntoGroupSlots(editor, index, files, e, {
     isFile,
     slotSelector,
-    offset,
-    slots,
+    freeIndices,
     itemsKey,
     hasFn,
+    kind,
     assignFile,
 }) {
     const matching = files.filter(isFile);
     if (!matching.length) return;
     const hit = e.target.closest?.(slotSelector);
     const hitIndex = hit ? Number(hit.dataset.refIndex) : NaN;
-    const replaceFirst = Number.isFinite(hitIndex) && hitIndex >= offset && hitIndex < offset + slots;
+    const freeSet = new Set(freeIndices);
+    const replaceFirst = Number.isFinite(hitIndex) && freeSet.has(hitIndex);
+    const reserved = new Set();
+    const jobs = [];
     for (let i = 0; i < matching.length; i++) {
         const seg = editor.timeline.segments[index];
         if (!seg) return;
-        const target = (i === 0 && replaceFirst)
+        const target = (i === 0 && replaceFirst && !reserved.has(hitIndex)
+            && !isSlotBusy(editor, "group", seg.id ?? index, kind, hitIndex))
             ? hitIndex
-            : nextEmptyGroupSlot(seg[itemsKey], offset, slots, hasFn);
+            : nextEmptySlot(
+                seg[itemsKey],
+                freeIndices,
+                hasFn,
+                editor,
+                "group",
+                seg.id ?? index,
+                kind,
+                reserved,
+            );
         if (target < 0) {
-            alert(t("mediaPicker.slotsFull"));
-            return;
+            if (i === 0) alert(t("mediaPicker.slotsFull"));
+            break;
         }
-        const ok = await assignFile(editor, index, target, matching[i]);
-        if (!ok) return;
+        reserved.add(target);
+        jobs.push(assignFile(editor, index, target, matching[i]));
     }
+    void Promise.all(jobs);
 }
 
 function createR2vSection(title, countText, { onPickExisting, pickDisabled = false } = {}) {
@@ -1872,89 +1761,74 @@ function renderVideoSlot(el, ref, slot, index, editor, { r2v = false } = {}) {
     }
 }
 
+function slotPreviewSrc(ref, kind) {
+    const raw = mediaSrcFromRef(ref, kind);
+    if (!raw) return "";
+    if (kind === "image" && String(raw).startsWith("data:")) return raw;
+    return viewUrl(raw);
+}
+
+function appendRemainHint(section, editor, kind) {
+    const labels = occupiedSlotLabels(editor, kind);
+    if (!labels) return;
+    const hint = document.createElement("p");
+    hint.className = "bd-r2v-slot-hint";
+    hint.textContent = t("batch.r2v.slotRemainHint", { labels });
+    section.appendChild(hint);
+}
+
 /**
  * r2v layout: left = pictures/videos/audio · right = prompt + preview (returned).
+ * Group slots are the unused indices not occupied by shared/global refs.
  * @returns {HTMLElement} main column for prompt/preview
  */
 function appendR2vMediaSections(card, seg, index, editor) {
-    const picOffset = r2vCommonPicOffset(editor);
-    const audOffset = r2vCommonAudioOffset(editor);
-    const vidOffset = r2vCommonVideoOffset(editor);
-    const picSlots = Math.max(0, R2V_PICTURE_SLOTS - picOffset);
-    const audSlots = Math.max(0, MAX_REFERENCE_AUDIOS - audOffset);
-    const vidSlots = Math.max(0, MAX_REFERENCE_VIDEOS - vidOffset);
-    const counts = countFilledRefs(seg, { picOffset, audOffset, vidOffset });
-    const commonImgs = listCommonImageRefs(editor);
-    const commonVids = listCommonVideoRefs(editor);
+    const picFree = groupFreeIndices(editor, "image");
+    const audFree = groupFreeIndices(editor, "audio");
+    const vidFree = groupFreeIndices(editor, "video");
+    const picSlots = picFree.length;
+    const audSlots = audFree.length;
+    const vidSlots = vidFree.length;
+    const counts = countFilledRefs(seg, { picFree, audFree, vidFree });
     const body = document.createElement("div");
     body.className = "bd-batch-r2v-body";
 
     const assets = document.createElement("div");
     assets.className = "bd-batch-r2v-assets";
 
-    // Inherited common pictures (read-only preview) so groups still "see" shared cast.
-    if (commonImgs.length) {
-        const inherit = createR2vSection(
-            t("batch.r2v.commonInheritPics"),
-            `${commonImgs.length}`,
-        );
-        inherit.classList.add("bd-r2v-common-inherit");
-        const inheritGrid = document.createElement("div");
-        inheritGrid.className = "bd-batch-refs";
-        for (const ref of commonImgs) {
-            const abs = Number(ref.index ?? ref.slot ?? 0);
-            const slot = document.createElement("div");
-            slot.className = "bd-batch-ref has-img";
-            slot.title = t("batch.r2v.commonInheritTip", { label: refImageLabel(abs) });
-            const img = document.createElement("img");
-            img.src = viewUrl(ref.imageFile);
-            img.draggable = false;
-            slot.appendChild(img);
-            const cap = document.createElement("span");
-            cap.className = "cap";
-            cap.textContent = refImageLabel(abs);
-            slot.appendChild(cap);
-            inheritGrid.appendChild(slot);
-        }
-        inherit.appendChild(inheritGrid);
-        assets.appendChild(inherit);
-    }
-
-    const groupPicTitle = picOffset > 0
-        ? t("batch.r2v.sectionPicturesFrom", { n: picOffset + 1 })
-        : t("batch.r2v.sectionPictures");
     const imgSection = createR2vSection(
-        groupPicTitle,
+        t("batch.r2v.sectionPictures"),
         picSlots > 0 ? `${counts.imgs}/${picSlots}` : "0/0",
         picSlots > 0
             ? {
-                onPickExisting: () => pickExistingSegRef(editor, index, picOffset, picSlots),
+                onPickExisting: () => pickExistingSegRef(editor, index, picFree),
                 pickDisabled: counts.imgs >= picSlots,
             }
             : {},
     );
-    if (picOffset > 0) {
-        const hint = document.createElement("p");
-        hint.className = "bd-r2v-slot-hint";
-        hint.textContent = t("batch.r2v.slotContinueHint", {
-            from: picOffset + 1,
-            common: picOffset,
-        });
-        imgSection.appendChild(hint);
-    }
+    appendRemainHint(imgSection, editor, "image");
     const refs = document.createElement("div");
     refs.className = "bd-batch-refs";
+    if (picSlots > 0) {
+        bindOsFileDrop(refs, (files, e) => dropFilesIntoGroupSlots(editor, index, files, e, {
+            isFile: isBatchImageFile,
+            slotSelector: ".bd-batch-ref",
+            freeIndices: picFree,
+            itemsKey: "refs",
+            hasFn: refHasImage,
+            kind: "image",
+            assignFile: assignSegRefFromFile,
+        }));
+    }
     if (!editor._r2vPicsVisible) editor._r2vPicsVisible = {};
     const segKey = String(seg.id ?? index);
-    let highestLocal = -1;
-    for (const r of seg.refs || []) {
-        const idx = Number(r.index ?? r.slot);
-        if (r?.imageFile && Number.isFinite(idx) && idx >= picOffset) {
-            highestLocal = Math.max(highestLocal, idx - picOffset);
-        }
-    }
-    const minVisible = highestLocal >= 0
-        ? Math.min(picSlots, Math.ceil((highestLocal + 1) / R2V_PICTURE_STEP) * R2V_PICTURE_STEP)
+    let highestPos = -1;
+    picFree.forEach((abs, pos) => {
+        const ref = (seg.refs || []).find((r) => Number(r.index ?? r.slot) === abs);
+        if (refHasImage(ref)) highestPos = pos;
+    });
+    const minVisible = highestPos >= 0
+        ? Math.min(picSlots, Math.ceil((highestPos + 1) / R2V_PICTURE_STEP) * R2V_PICTURE_STEP)
         : Math.min(picSlots, R2V_PICTURE_STEP);
     let visible = Number(editor._r2vPicsVisible[segKey]) || Math.min(picSlots, R2V_PICTURE_STEP);
     visible = Math.max(0, Math.min(picSlots, visible));
@@ -1976,25 +1850,29 @@ function appendR2vMediaSections(card, seg, index, editor) {
         empty.textContent = t("batch.r2v.noGroupPicSlots");
         imgSection.appendChild(empty);
     } else {
-        for (let local = 0; local < picSlots; local++) {
-            const abs = picOffset + local;
+        picFree.forEach((abs, local) => {
             const ref = (seg.refs || []).find((r) => Number(r.index ?? r.slot) === abs);
             const slot = document.createElement("div");
             slot.className = "bd-batch-ref";
             slot.dataset.refKind = "image";
             slot.dataset.refIndex = String(abs);
+            slot.dataset.refScope = "group";
             if (local >= visible) slot.classList.add("bd-r2v-pic-hidden");
             renderR2vRefSlot(slot, ref, abs, index, editor);
-            slot.onclick = () => {
-                if (editor._batchRefDragMoved) {
-                    editor._batchRefDragMoved = false;
-                    return;
-                }
-                uploadSegRef(editor, index, abs);
-            };
-            bindBatchRefDrop(slot, editor, index, abs);
+            bindBatchKindSlot(
+                slot,
+                editor,
+                index,
+                "image",
+                abs,
+                refHasImage(ref),
+                (file) => void assignSegRefFromFile(editor, index, abs, file),
+                () => uploadSegRef(editor, index, abs),
+                slotPreviewSrc(ref, "image"),
+                refImageLabel(abs),
+            );
             refs.appendChild(slot);
-        }
+        });
         imgSection.appendChild(refs);
 
         if (picSlots > R2V_PICTURE_STEP) {
@@ -2027,129 +1905,106 @@ function appendR2vMediaSections(card, seg, index, editor) {
     }
     assets.appendChild(imgSection);
 
-    if (commonVids.length) {
-        const inheritVids = createR2vSection(
-            t("batch.r2v.commonInheritVideos"),
-            `${commonVids.length}`,
-        );
-        inheritVids.classList.add("bd-r2v-common-inherit");
-        const inheritGrid = document.createElement("div");
-        inheritGrid.className = "bd-batch-videos";
-        for (const ref of commonVids) {
-            const abs = Number(ref.index ?? ref.slot ?? 0);
-            const slot = document.createElement("div");
-            renderVideoSlot(slot, ref, abs, index, editor, { r2v: true });
-            // Read-only inherit: strip remove control and upload click.
-            slot.querySelector(".x")?.remove();
-            slot.title = t("batch.r2v.commonInheritTip", { label: refVideoLabel(abs) });
-            slot.onclick = (e) => {
-                if (e.target.closest?.(".bd-r2v-play, .bd-r2v-dur, video")) return;
-                if (e.target.closest?.(".bd-r2v-thumb")) {
-                    slot.querySelector(".bd-r2v-play")?.click();
-                }
-            };
-            inheritGrid.appendChild(slot);
-        }
-        inheritVids.appendChild(inheritGrid);
-        assets.appendChild(inheritVids);
-    }
-
-    const groupVidTitle = vidOffset > 0
-        ? t("batch.r2v.sectionVideosFrom", { n: vidOffset + 1 })
-        : t("batch.r2v.sectionVideos");
     const videoSection = createR2vSection(
-        groupVidTitle,
+        t("batch.r2v.sectionVideos"),
         vidSlots > 0 ? `${counts.videos}/${vidSlots}` : "0/0",
         vidSlots > 0
             ? {
-                onPickExisting: () => pickExistingSegVideo(editor, index, vidOffset, vidSlots),
+                onPickExisting: () => pickExistingSegVideo(editor, index, vidFree),
                 pickDisabled: counts.videos >= vidSlots,
             }
             : {},
     );
+    appendRemainHint(videoSection, editor, "video");
     const videos = document.createElement("div");
     videos.className = "bd-batch-videos";
     if (vidSlots > 0) {
         bindOsFileDrop(videos, (files, e) => dropFilesIntoGroupSlots(editor, index, files, e, {
             isFile: isBatchVideoFile,
             slotSelector: ".bd-batch-video",
-            offset: vidOffset,
-            slots: vidSlots,
+            freeIndices: vidFree,
             itemsKey: "refVideos",
-            hasFn: _refHasVideo,
+            hasFn: refHasVideo,
+            kind: "video",
             assignFile: assignSegVideoFromFile,
         }));
     }
-    if (vidSlots <= 0 && vidOffset > 0) {
+    if (vidSlots <= 0) {
         const empty = document.createElement("p");
         empty.className = "bd-r2v-slot-hint";
         empty.textContent = t("batch.r2v.noGroupVideoSlots");
         videoSection.appendChild(empty);
     } else {
-        for (let local = 0; local < vidSlots; local++) {
-            const abs = vidOffset + local;
+        for (const abs of vidFree) {
             const ref = (seg.refVideos || []).find((r) => Number(r.index ?? r.slot) === abs);
             const slot = document.createElement("div");
+            slot.dataset.refScope = "group";
             renderVideoSlot(slot, ref, abs, index, editor, { r2v: true });
-            slot.onclick = (e) => {
-                if (e.target.closest?.(".bd-r2v-play, .bd-r2v-dur, .bd-r2v-progress, .x, video, audio")) return;
-                if (ref && e.target.closest?.(".bd-r2v-thumb")) {
-                    slot.querySelector(".bd-r2v-play")?.click();
-                    return;
-                }
-                uploadSegVideo(editor, index, abs);
-            };
+            bindBatchKindSlot(
+                slot,
+                editor,
+                index,
+                "video",
+                abs,
+                refHasVideo(ref),
+                (file) => void assignSegVideoFromFile(editor, index, abs, file),
+                () => uploadSegVideo(editor, index, abs),
+                slotPreviewSrc(ref, "video"),
+                refVideoLabel(abs),
+            );
             videos.appendChild(slot);
         }
         videoSection.appendChild(videos);
     }
     assets.appendChild(videoSection);
 
-    const groupAudTitle = audOffset > 0
-        ? t("batch.r2v.sectionAudiosFrom", { n: audOffset + 1 })
-        : t("batch.r2v.sectionAudios");
     const audioSection = createR2vSection(
-        groupAudTitle,
+        t("batch.r2v.sectionAudios"),
         audSlots > 0 ? `${counts.audios}/${audSlots}` : "0/0",
         audSlots > 0
             ? {
-                onPickExisting: () => pickExistingSegAudio(editor, index, audOffset, audSlots),
+                onPickExisting: () => pickExistingSegAudio(editor, index, audFree),
                 pickDisabled: counts.audios >= audSlots,
             }
             : {},
     );
+    appendRemainHint(audioSection, editor, "audio");
     const audios = document.createElement("div");
     audios.className = "bd-batch-audios";
     if (audSlots > 0) {
         bindOsFileDrop(audios, (files, e) => dropFilesIntoGroupSlots(editor, index, files, e, {
             isFile: isReferenceAudioSourceFile,
             slotSelector: ".bd-batch-audio",
-            offset: audOffset,
-            slots: audSlots,
+            freeIndices: audFree,
             itemsKey: "refAudios",
-            hasFn: _refHasAudio,
+            hasFn: refHasAudio,
+            kind: "audio",
             assignFile: assignSegAudioFromFile,
         }));
     }
-    if (audSlots <= 0 && audOffset > 0) {
+    if (audSlots <= 0) {
         const empty = document.createElement("p");
         empty.className = "bd-r2v-slot-hint";
         empty.textContent = t("batch.r2v.noGroupAudioSlots");
         audioSection.appendChild(empty);
     } else {
-        for (let local = 0; local < audSlots; local++) {
-            const abs = audOffset + local;
+        for (const abs of audFree) {
             const ref = (seg.refAudios || []).find((r) => Number(r.index ?? r.slot) === abs);
             const slot = document.createElement("div");
+            slot.dataset.refScope = "group";
             renderAudioSlot(slot, ref, abs, index, editor, { r2v: true });
-            slot.onclick = (e) => {
-                if (e.target.closest?.(".bd-r2v-play, .bd-r2v-dur, .bd-r2v-progress, .x, video, audio")) return;
-                if (ref && e.target.closest?.(".bd-r2v-thumb")) {
-                    slot.querySelector(".bd-r2v-play")?.click();
-                    return;
-                }
-                uploadSegAudio(editor, index, abs);
-            };
+            bindBatchKindSlot(
+                slot,
+                editor,
+                index,
+                "audio",
+                abs,
+                refHasAudio(ref),
+                (file) => void assignSegAudioFromFile(editor, index, abs, file),
+                () => uploadSegAudio(editor, index, abs),
+                slotPreviewSrc(ref, "audio"),
+                refAudioLabel(abs),
+            );
             audios.appendChild(slot);
         }
         audioSection.appendChild(audios);
@@ -3189,6 +3044,7 @@ export function renderImageBatchGroups(editor) {
     closePassCachePopover();
     syncBatchPassButtons(editor);
     scheduleDirectorPassCacheRefresh(editor, 80);
+    restoreSlotLoadOverlays(editor);
 }
 
 function appendBatchCard(list, editor, seg, index, ctx) {
@@ -3205,6 +3061,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                     : (variant === "refs" ? "bd-batch-refs" : "bd-batch-plain")));
         card.className = `bd-batch-card ${layoutClass}`;
         card.dataset.batchIndex = String(index);
+        if (seg.id) card.dataset.batchSegId = String(seg.id);
         const runSelectOn = !!(editor.isRunSelectEnabled?.() && editor.supportsRunSelect?.());
         const runEnabled = !runSelectOn || !!editor.isSegmentRunEnabled?.(index);
         // r2v / mixed: always show focus selected. t2v/i2v: only run-select participation chrome.
@@ -3434,15 +3291,20 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 slot.className = "bd-batch-ref";
                 slot.dataset.refKind = "image";
                 slot.dataset.refIndex = String(i);
+                slot.dataset.refScope = "group";
                 renderRefSlot(slot, ref, i, index, editor);
-                slot.onclick = () => {
-                    if (editor._batchRefDragMoved) {
-                        editor._batchRefDragMoved = false;
-                        return;
-                    }
-                    uploadSegRef(editor, index, i);
-                };
-                bindBatchRefDrop(slot, editor, index, i);
+                bindBatchKindSlot(
+                    slot,
+                    editor,
+                    index,
+                    "image",
+                    i,
+                    refHasImage(ref),
+                    (file) => void assignSegRefFromFile(editor, index, i, file),
+                    () => uploadSegRef(editor, index, i),
+                    slotPreviewSrc(ref, "image"),
+                    refImageLabel(i),
+                );
                 refs.appendChild(slot);
             }
             media.appendChild(refs);
@@ -3480,7 +3342,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 const live = (editor.timeline.segments || []).find((s) => s?.id && s.id === segId)
                     || editor.timeline.segments?.[segIndex]
                     || seg;
-                // Absolute indices: common 图片1…N + group 图片N+1… (no renumber clash).
+                // Absolute indices: shared occupied slots + remaining group slots.
                 return {
                     refs: on ? mergeMediaByIndex(g.refs || [], live.refs || []) : (live.refs || []),
                     audios: on

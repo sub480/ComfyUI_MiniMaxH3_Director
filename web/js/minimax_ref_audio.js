@@ -41,7 +41,9 @@ export async function prepareLocalReferenceAudio(file, onProgress) {
     if (!isReferenceAudioSourceFile(file)) {
         throw new Error("Please select an audio or video file.");
     }
+    const extracting = isReferenceAudioVideoFile(file);
     if (isReferenceAudioFile(file) && file.size <= COMFY_UPLOAD_SOFT_LIMIT) {
+        onProgress?.(0, 0, 1, "upload");
         const uploadFile = fileForComfyUpload(file);
         const body = new FormData();
         body.append("image", uploadFile, uploadFile.name);
@@ -54,7 +56,7 @@ export async function prepareLocalReferenceAudio(file, onProgress) {
         }
         const prepared = normalizePreparedAudio(await response.json(), uploadFile.name);
         prepared.sourceKind = "audio";
-        onProgress?.(1, 1, 1);
+        onProgress?.(1, 1, 1, "upload");
         return prepared;
     }
 
@@ -63,6 +65,10 @@ export async function prepareLocalReferenceAudio(file, onProgress) {
     for (let index = 0; index < totalChunks; index++) {
         const start = index * CHUNK_SIZE;
         const end = Math.min(file.size, start + CHUNK_SIZE);
+        const isLast = index + 1 >= totalChunks;
+        const phase = isLast && extracting ? "extract" : "upload";
+        if (isLast && extracting) onProgress?.(index / totalChunks, index, totalChunks, "extract");
+        else onProgress?.((index) / totalChunks, index, totalChunks, "upload");
         const body = new FormData();
         body.append("upload_id", uploadId);
         body.append("chunk_index", String(index));
@@ -78,7 +84,7 @@ export async function prepareLocalReferenceAudio(file, onProgress) {
             throw new Error(message || `Audio preparation failed (${response.status}).`);
         }
         const data = await response.json();
-        onProgress?.((index + 1) / totalChunks, index + 1, totalChunks);
+        onProgress?.((index + 1) / totalChunks, index + 1, totalChunks, phase);
         if (data?.relPath) return normalizePreparedAudio(data, file.name || "");
     }
     throw new Error("Audio preparation did not finish.");

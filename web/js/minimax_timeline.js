@@ -89,8 +89,21 @@ import { closePassPanels, mountDirectorRefinePanel, mountDirectorSamplePanel } f
 import {
     extractReferenceAudioFromExistingVideo,
     hasDuplicateReferenceAudio,
+    isReferenceAudioVideoFile,
     prepareLocalReferenceAudio,
 } from "./minimax_ref_audio.js";
+import {
+    beginSlotLoad,
+    bindKindSlotDnD,
+    bindSlotActivate,
+    endSlotLoad,
+    isSlotDnD,
+    openSlotPreview,
+    restoreSlotLoadOverlays,
+    slotLoadKey,
+    swapIndexedMedia,
+    updateSlotLoad,
+} from "./minimax_ref_slots.js";
 import {
     FL2V_STYLES,
     bindFl2vEvents,
@@ -3947,10 +3960,10 @@ class MiniMaxH3DirectorEditor {
             e.preventDefault();
             // Slot-to-slot moves are handled on .bd-ref; don't also treat as new upload.
             const types = [...(e.dataTransfer?.types || [])];
-            if (types.includes("application/x-minimax-ref-slot")) return;
+            if (isSlotDnD(types)) return;
             if (types.includes("application/x-minimax-fl2v-slot")) return;
             if (types.includes("application/x-minimax-fl2v-shot")) return;
-            if (e.target.closest?.(".bd-ref, .bd-batch-ref, .bd-batch-src, .bd-batch-video, .bd-batch-audio, .bd-batch-videos, .bd-batch-audios, .bd-fl2v-slot, .bd-fl2v-shot")) return;
+            if (e.target.closest?.(".bd-ref, .bd-ref-audio, .bd-ref-video, .bd-batch-ref, .bd-batch-src, .bd-batch-video, .bd-batch-audio, .bd-batch-videos, .bd-batch-audios, .bd-fl2v-slot, .bd-fl2v-shot")) return;
             const f = e.dataTransfer.files?.[0];
             if (f?.type.startsWith("video/")) this.loadVideoFile(f);
             else if (f?.type.startsWith("image/")) {
@@ -8598,10 +8611,13 @@ class MiniMaxH3DirectorEditor {
         });
         if (!choice) return null;
         if (choice.source === "file" && choice.file) {
-            return prepareLocalReferenceAudio(choice.file);
+            return prepareLocalReferenceAudio(choice.file, opts.onProgress);
         }
         if (choice.mediaKind === "video") {
-            return extractReferenceAudioFromExistingVideo(choice);
+            opts.onProgress?.(0, 0, 1, "extract");
+            const extracted = await extractReferenceAudioFromExistingVideo(choice);
+            opts.onProgress?.(1, 1, 1, "extract");
+            return extracted;
         }
         return {
             relPath: choice.relPath,
@@ -11071,16 +11087,37 @@ class MiniMaxH3DirectorEditor {
                 };
                 el.appendChild(x);
             }
-            this._bindRefSlotDnD(el, target, i, isGlobal);
-            el.onclick = () => {
-                if (this._refDragMoved) {
-                    this._refDragMoved = false;
-                    return;
-                }
-                this.pickRef(target, i, isGlobal);
-            };
+            const previewSrc = ref?.imageFile
+                ? refViewUrl(ref.imageFile)
+                : (ref?.imageB64
+                    ? (String(ref.imageB64).startsWith("data:") ? ref.imageB64 : `data:image/png;base64,${ref.imageB64}`)
+                    : "");
+            bindKindSlotDnD(el, {
+                editor: this,
+                kind: "image",
+                scope: isGlobal ? "global" : "seg",
+                segIndex: isGlobal ? -1 : this.selectedIndex,
+                slotIndex: i,
+                hasMedia: !!(ref?.imageFile || ref?.imageB64),
+                onMove: (from, to) => this.moveRefSlot(target, from, to, isGlobal),
+                onDropFile: (f) => {
+                    if (f?.type?.startsWith("image/")) this.addRefFromFile(f, target, i, isGlobal);
+                },
+            });
+            bindSlotActivate(el, {
+                editor: this,
+                hasMedia: !!(ref?.imageFile || ref?.imageB64),
+                onPick: () => this.pickRef(target, i, isGlobal),
+                onPreview: () => openSlotPreview({
+                    kind: "image",
+                    src: previewSrc,
+                    label,
+                    onReplace: () => this.pickRef(target, i, isGlobal),
+                }),
+            });
             box.appendChild(el);
         }
+        restoreSlotLoadOverlays(this);
 
         wrap?.querySelectorAll(".bd-r2v-pics-toggle").forEach((btn) => btn.remove());
         if (polished && wrap) {
@@ -11233,6 +11270,7 @@ class MiniMaxH3DirectorEditor {
             el.dataset.audioSlot = String(i);
             el.dataset.refKind = "audio";
             el.dataset.refIndex = String(i);
+            el.dataset.refScope = isGlobal ? "global" : "seg";
             const label = refAudioLabel(i);
             const ref = (target.refAudios || []).find((r) => Number(r.index ?? r.slot) === i);
             const file = ref?.audioFile || ref?.fileName || "";
@@ -11313,12 +11351,30 @@ class MiniMaxH3DirectorEditor {
             } else {
                 el.textContent = t("ref.audioUpload", { label });
             }
-            el.onclick = (e) => {
-                if (e.target?.closest?.(".bd-r2v-play, .bd-r2v-progress, .x")) return;
-                this.pickRefAudio(target, i);
-            };
+            bindKindSlotDnD(el, {
+                editor: this,
+                kind: "audio",
+                scope: isGlobal ? "global" : "seg",
+                segIndex: isGlobal ? -1 : this.selectedIndex,
+                slotIndex: i,
+                hasMedia: !!file,
+                onMove: (from, to) => this.moveRefAudioSlot(target, from, to, isGlobal),
+                onDropFile: (f) => this.addRefAudioFromFile(f, target, i),
+            });
+            bindSlotActivate(el, {
+                editor: this,
+                hasMedia: !!file,
+                onPick: () => this.pickRefAudio(target, i),
+                onPreview: () => openSlotPreview({
+                    kind: "audio",
+                    src: file ? refViewUrl(file) : "",
+                    label,
+                    onReplace: () => this.pickRefAudio(target, i),
+                }),
+            });
             box.appendChild(el);
         }
+        restoreSlotLoadOverlays(this);
         refreshPromptTokenEditors(this.root || document);
     }
 
@@ -11330,6 +11386,18 @@ class MiniMaxH3DirectorEditor {
         }
         this.commit();
         this.renderRefAudioSlots();
+    }
+
+    moveRefAudioSlot(target, fromIndex, toIndex, isGlobal) {
+        if (!target || fromIndex === toIndex) return;
+        target.refAudios = swapIndexedMedia(target.refAudios || [], fromIndex, toIndex);
+        if (isGlobal) {
+            this.timeline.global = target;
+            if (this.isR2vCommonEnabled()) rebaseR2vGroupSlotsForCommon(this);
+        }
+        this.commit();
+        this.renderRefAudioSlots();
+        if (isGlobal && this.isR2vCommonEnabled()) this.renderImageBatchGroups?.();
     }
 
     pickRefAudio(target, index) {
@@ -11352,10 +11420,27 @@ class MiniMaxH3DirectorEditor {
                 .find((i) => !target.refAudios.some((r) => Number(r.index ?? r.slot) === i));
             if (index == null) return;
         }
+        const isGlobal = target === this.timeline.global;
+        const key = slotLoadKey({
+            scope: isGlobal ? "global" : "seg",
+            segId: isGlobal ? "" : target?.id ?? this.selectedIndex,
+            kind: "audio",
+            index,
+        });
+        const extracting = isReferenceAudioVideoFile(file);
+        beginSlotLoad(this, key, extracting ? t("slot.loading.extractAudio") : t("slot.loading.upload"));
         try {
-            const prepared = await prepareLocalReferenceAudio(file);
+            const prepared = await prepareLocalReferenceAudio(file, (ratio, cur, total, phase) => {
+                updateSlotLoad(this, key, {
+                    status: phase === "extract" ? t("slot.loading.extractAudio") : t("slot.loading.upload"),
+                    ratio,
+                    cur,
+                    total,
+                });
+            });
             const relPath = prepared.relPath;
             if (hasDuplicateReferenceAudio(target.refAudios, relPath, index)) {
+                endSlotLoad(this, key);
                 alert(t("ref.audioDuplicate"));
                 return;
             }
@@ -11367,13 +11452,15 @@ class MiniMaxH3DirectorEditor {
                 type: prepared.type || "input",
                 subfolder: prepared.subfolder || "",
             });
-            if (this.isR2vCommonEnabled() && target === this.timeline.global) {
+            endSlotLoad(this, key);
+            if (this.isR2vCommonEnabled() && isGlobal) {
                 rebaseR2vGroupSlotsForCommon(this);
                 this.renderImageBatchGroups?.();
             }
             this.commit();
             this.renderRefAudioSlots();
         } catch (err) {
+            endSlotLoad(this, key);
             console.error("[MiniMax H3Director] ref audio upload failed:", err);
             alert(t("upload.refAudioFailed", { err: err?.message || err }));
         }
@@ -11404,6 +11491,7 @@ class MiniMaxH3DirectorEditor {
             el.dataset.videoSlot = String(i);
             el.dataset.refKind = "video";
             el.dataset.refIndex = String(i);
+            el.dataset.refScope = "global";
             const label = refVideoLabel(i);
             const ref = (target.refVideos || []).find((r) => Number(r.index ?? r.slot) === i);
             const file = ref?.videoFile || "";
@@ -11483,17 +11571,41 @@ class MiniMaxH3DirectorEditor {
                 hint.textContent = t("batch.r2v.uploadHint");
                 meta.appendChild(hint);
             }
-            el.onclick = (e) => {
-                if (e.target?.closest?.(".bd-r2v-play, .bd-r2v-dur, .x, video")) return;
-                if (file && e.target?.closest?.(".bd-r2v-thumb")) {
-                    el.querySelector(".bd-r2v-play")?.click();
-                    return;
-                }
-                this.pickR2vCommonVideo(i);
-            };
+            bindKindSlotDnD(el, {
+                editor: this,
+                kind: "video",
+                scope: "global",
+                segIndex: -1,
+                slotIndex: i,
+                hasMedia,
+                onMove: (from, to) => this.moveR2vCommonVideoSlot(from, to),
+                onDropFile: (f) => this.addR2vCommonVideoFromFile(f, i),
+            });
+            bindSlotActivate(el, {
+                editor: this,
+                hasMedia,
+                onPick: () => this.pickR2vCommonVideo(i),
+                onPreview: () => openSlotPreview({
+                    kind: "video",
+                    src: file ? refViewUrl(file) : posterSrc,
+                    label,
+                    onReplace: () => this.pickR2vCommonVideo(i),
+                }),
+            });
             box.appendChild(el);
         }
+        restoreSlotLoadOverlays(this);
         refreshPromptTokenEditors(this.root || document);
+    }
+
+    moveR2vCommonVideoSlot(fromIndex, toIndex) {
+        const target = this.timeline.global;
+        if (!target || fromIndex === toIndex) return;
+        target.refVideos = swapIndexedMedia(target.refVideos || [], fromIndex, toIndex);
+        if (this.isR2vCommonEnabled()) rebaseR2vGroupSlotsForCommon(this);
+        this.commit();
+        this.renderR2vCommonVideoSlots();
+        if (this.isR2vCommonEnabled()) this.renderImageBatchGroups?.();
     }
 
     removeR2vCommonVideo(index) {
@@ -11567,8 +11679,17 @@ class MiniMaxH3DirectorEditor {
                 .find((i) => !target.refVideos.some((r) => Number(r.index ?? r.slot) === i));
             if (index == null) return;
         }
+        const key = slotLoadKey({ scope: "global", segId: "", kind: "video", index });
+        beginSlotLoad(this, key, t("slot.loading.upload"));
         try {
-            const uploaded = await uploadToInputSmart(file);
+            const uploaded = await uploadToInputSmart(file, (ratio, cur, total) => {
+                updateSlotLoad(this, key, {
+                    status: t("slot.loading.upload"),
+                    ratio,
+                    cur,
+                    total,
+                });
+            });
             const relPath = videoRelativePath(uploaded);
             target.refVideos = target.refVideos.filter((r) => Number(r.index ?? r.slot) !== index);
             target.refVideos.push({
@@ -11578,6 +11699,7 @@ class MiniMaxH3DirectorEditor {
                 type: "input",
                 subfolder: uploaded?.subfolder || "",
             });
+            endSlotLoad(this, key);
             if (this.isR2vCommonEnabled()) {
                 rebaseR2vGroupSlotsForCommon(this);
                 this.renderImageBatchGroups?.();
@@ -11585,6 +11707,7 @@ class MiniMaxH3DirectorEditor {
             this.commit();
             this.renderR2vCommonVideoSlots();
         } catch (err) {
+            endSlotLoad(this, key);
             console.error("[MiniMax H3Director] common ref video upload failed:", err);
             alert(t("upload.refVideoBatchFailed", { err: err?.message || err }));
         }
@@ -11670,12 +11793,31 @@ class MiniMaxH3DirectorEditor {
             alert(t("mediaPicker.slotsFull"));
             return;
         }
+        const key = slotLoadKey({
+            scope: isGlobal ? "global" : "seg",
+            segId: isGlobal ? "" : target?.id ?? this.selectedIndex,
+            kind: "audio",
+            index,
+        });
         try {
+            beginSlotLoad(this, key, t("slot.loading.prepare"));
             const picked = await this.chooseAudioInput({
                 title: t("mediaPicker.pickReferenceAudio"),
+                onProgress: (ratio, cur, total, phase) => {
+                    updateSlotLoad(this, key, {
+                        status: phase === "extract" ? t("slot.loading.extractAudio") : t("slot.loading.upload"),
+                        ratio,
+                        cur,
+                        total,
+                    });
+                },
             });
-            if (!picked?.relPath) return;
+            if (!picked?.relPath) {
+                endSlotLoad(this, key);
+                return;
+            }
             if (hasDuplicateReferenceAudio(target.refAudios, picked.relPath, index)) {
+                endSlotLoad(this, key);
                 alert(t("ref.audioDuplicate"));
                 return;
             }
@@ -11687,6 +11829,7 @@ class MiniMaxH3DirectorEditor {
                 type: picked.type || "input",
                 subfolder: picked.subfolder || "",
             });
+            endSlotLoad(this, key);
             if (this.isR2vCommonEnabled() && isGlobal) {
                 rebaseR2vGroupSlotsForCommon(this);
                 this.renderImageBatchGroups?.();
@@ -11694,6 +11837,7 @@ class MiniMaxH3DirectorEditor {
             this.commit();
             this.renderRefAudioSlots();
         } catch (err) {
+            endSlotLoad(this, key);
             console.error("[MiniMax H3Director] ref audio pick failed:", err);
             alert(t("upload.refAudioFailed", { err: err?.message || err }));
         }
@@ -11707,11 +11851,19 @@ class MiniMaxH3DirectorEditor {
                 .find((i) => !target.refs.some((r) => Number(r.index ?? r.slot) === i));
             if (index == null) return;
         }
+        const key = slotLoadKey({
+            scope: isGlobal ? "global" : "seg",
+            segId: isGlobal ? "" : target?.id ?? this.selectedIndex,
+            kind: "image",
+            index,
+        });
+        beginSlotLoad(this, key, t("slot.loading.upload"));
         try {
             const uploaded = await uploadToInput(file);
             const relPath = videoRelativePath(uploaded);
             target.refs = target.refs.filter((r) => Number(r.index ?? r.slot) !== index);
             target.refs.push({ index, imageFile: relPath, imageB64: "" });
+            endSlotLoad(this, key);
             if (isGlobal) {
                 this.timeline.global = target;
                 if (this.isR2vCommonEnabled()) {
@@ -11721,6 +11873,7 @@ class MiniMaxH3DirectorEditor {
             }
             this.commit();
         } catch (err) {
+            endSlotLoad(this, key);
             console.error("[MiniMax H3Director] ref upload failed:", err);
         }
     }
