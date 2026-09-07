@@ -17,6 +17,13 @@ New `task_type=mixed`. After adding a group, each group can switch type (`t2v` /
 
 `fl2v` groups accept start-only, end-only, both, or neither (text-to-video). Filling one end does **not** copy that picture onto the other.
 
+### Defaults
+
+- Video groups / `fl2v` / mixed mode default to 5 seconds per group, normalized at locked 24 fps to the MiniMax `17k+5` grid (usually 124 frames); duration can be changed per card
+- First pass defaults to `seed=42` and 8 steps; the default canvas is 0.4MP, 16:9 (864×480)
+- In the Director UI, new or missing timeline fields default to segment continuity on (22 frames, **Guide + redraw**, redraw strength 0.65), preview on (speed 0.25), and all-card mode; frame rate is fixed at 24 fps
+- Built-in second pass is enabled by default; `fl2v` is not skipped by default. Enable **Skip fl2v** when keyframes must be protected
+
 ### r2v groups and asset slots
 
 The current r2v UI no longer has **Common params**. Each material group owns its prompt, images 1–9, videos 1–3, and audio 1–3. `<Picture N>` / `<Video K>` / `<Audio J>` refer only to that group, and typing `@` opens only that group’s asset menu. Wired `Director Group (Reference to Video)` inputs are also per-group; Director global reference media and prompts are no longer merged into them.
@@ -51,14 +58,14 @@ With second pass enabled (in-node panel or wired Refine), each group card can pi
 - Group 1 never pins a previous tail, so adding later groups or toggling segment continuity does not bust group 1's first-pass cache
 - A first-pass cache hit still pushes a live preview
 
-The Refine panel shows cache status across the full timeline. With segment continuity on, a missing previous segment skips the handoff and continues sampling instead of aborting.
+Group cards show cache status across the full timeline. With segment continuity on, a missing previous segment skips the handoff and continues sampling instead of aborting.
 
 ### HD tiled second sample
 
 HD second sample spatially tiles by default to lower DiT VRAM:
 
 - `refine_tile`: tiling on/off (off = full-frame)
-- `n_tiles` (default 2; 1 = full-frame)
+- `n_tiles` (default 4; 1 = full-frame)
 - `tile_axis` (`auto` = longer latent axis)
 - `tile_overlap` (latent-domain overlap; 4–8 recommended)
 - If the target-axis latent size is ≤ `max_size_for_no_tile` (default 64, ~480p), tiling is skipped
@@ -93,11 +100,32 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 - Source videos are identified by path, file size, and modification time; replacing a source file prevents the old cache from being reused as output
 - Cache-status queries read asset identities without decoding reference images or source video again, so refreshing card status does not compete for VRAM
 - Reference images reuse decoded tensors by file identity; cache read/write failures only disable caching and never abort normal sampling
+- If snapshot restore changes a reference image / audio / video path, the cache can recognize byte-identical media by content digest; real content changes still invalidate it
+- Status dots distinguish missing / matching / mismatched / invalid-metadata caches; click or hover shows diffs, and the scan covers the full timeline regardless of Select-to-run
+- Per-group **Clear** removes only that group's first-pass cache; output-bar **Clear all cache** removes first-pass, final, and audio caches for the node after confirmation and moves files to the recycle bin
+- **Export all** never silently uses stale cache for an unrun segment; add mismatched segments to Select-to-run or use **Export by segment**
+
+### Director snapshots
+
+- Toolbar **Snapshots** opens the manager on demand; save the current timeline, media, and primary first-pass sampling settings, with filename, timestamp, and size shown in the list
+- Snapshots are stored under `output/H3_D/snapshots/`; downloads use the fixed `*.mmxsnapshot.zip` suffix
+- Restore, rename, duplicate, and delete are supported; restore replaces the current configuration after confirmation, while delete moves the file to the OS recycle bin
+- Import accepts any filename ending in `.zip`; `.mmxsnapshot.zip` is not required, but the contents must be a valid current Director pack
+- Confirmations and errors are rendered inside the snapshot window instead of being hidden behind the overlay
+
+### File layout and data format
+
+- `output/H3_D/snapshots/`: Director snapshots
+- `output/H3_D/segment_cache/<node_id>/`: first-pass, second-pass, and audio caches
+- `output/H3_D/segment_export/<YYYYMMDD_HHMMSS>/`: per-segment MP4 exports
+- `input/H3_D/uploads/`: uploaded source videos; `input/H3_D/references/`: reference images / audio / video; `input/H3_D/packs/<pack-id>/`: imported pack media
+- UI exports, snapshots, and current Director packs use canonical camelCase fields and timeline v5; pack import requires `pack.json`, `timeline.json`, and the current matching format instead of guessing a missing timeline from directory filenames
+- Upload, import, and cache operations use in-node dialogs; snapshot confirmations and errors stay inside the snapshot window
 
 ### Director packs and compatibility
 
 - r2v group assets start at `Picture1` / `Video1` / `Audio1` inside each group; they no longer continue from `Picture4` because of the removed Common params slots
-- Older workflows still load; legacy common-reference fields are ignored, and r2v execution uses each group’s assets
+- Current Director packs use `pack.json` + `timeline.json` for the complete timeline; import strictly validates the current pack format and timeline v5
 
 ## Features
 
