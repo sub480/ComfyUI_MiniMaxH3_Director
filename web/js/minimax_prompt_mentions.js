@@ -203,7 +203,6 @@ function listAvailableMentions(refs, audios, videos) {
 function sourceVideoMention(editor, seg = null) {
     const taskKey = resolveTaskKey(
         seg?.taskType
-        || seg?.task_type
         || editor?.timeline?.global?.taskType
         || editor?.getTaskKey?.()
         || "",

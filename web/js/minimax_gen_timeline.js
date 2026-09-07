@@ -50,24 +50,9 @@ export function parseMegapixelsInput(raw) {
     return Math.min(MAX_MEGAPIXELS, n);
 }
 
-/** Map legacy English labels → current Chinese labels. */
-const ASPECT_RATIO_ALIASES = {
-    "1:1 (Square)": "1:1 (方形)",
-    "2:3 (Portrait Photo)": "2:3 (竖版照片)",
-    "3:2 (Photo)": "3:2 (横版照片)",
-    "3:4 (Portrait Standard)": "3:4 (竖版标准)",
-    "4:3 (Standard)": "4:3 (标准)",
-    "9:16 (Portrait Widescreen)": "9:16 (竖屏)",
-    "16:9 (Widescreen)": "16:9 (宽屏)",
-    "21:9 (Ultrawide)": "21:9 (超宽)",
-    "自定义 (Custom)": CUSTOM_ASPECT_RATIO,
-    Custom: CUSTOM_ASPECT_RATIO,
-};
-
 export function normalizeAspectRatioLabel(aspectRatio) {
     const v = String(aspectRatio || "").trim();
     if (!v) return DEFAULT_ASPECT_RATIO;
-    if (ASPECT_RATIO_ALIASES[v]) return ASPECT_RATIO_ALIASES[v];
     if (RESOLUTION_ASPECTS.some(([label]) => label === v)) return v;
     if (isCustomAspectRatio(v)) return CUSTOM_ASPECT_RATIO;
     // Fallback: match by ratio prefix e.g. "16:9"
@@ -78,7 +63,7 @@ export function normalizeAspectRatioLabel(aspectRatio) {
 
 export function isCustomAspectRatio(aspectRatio) {
     const v = String(aspectRatio || "").trim();
-    return v === CUSTOM_ASPECT_RATIO || v === "Custom" || v === "自定义 (Custom)" || v.startsWith("自定义");
+    return v === CUSTOM_ASPECT_RATIO;
 }
 
 /**
@@ -205,7 +190,7 @@ export function isMixedTask(taskKey) {
 
 export function resolveMixedGroupKey(segOrTask) {
     const raw = (segOrTask && typeof segOrTask === "object")
-        ? (segOrTask.taskType || segOrTask.task_type || "")
+        ? (segOrTask.taskType || "")
         : (segOrTask || "");
     const key = resolveTaskKey(raw);
     return MIXED_GROUP_TASKS.includes(key) ? key : "t2v";
@@ -274,12 +259,11 @@ export function refVideoPromptTag(index) {
 }
 
 /** Tasks that never show reference-image slots (v2v = source-video edit only). */
-const NO_REF_IMAGE_TASKS = new Set(["v2v", "mv2v", "ads2v", "t2v", "i2v", "fl2v"]);
+const NO_REF_IMAGE_TASKS = new Set(["v2v", "ads2v", "t2v", "i2v", "fl2v"]);
 
 export function taskUsesReferenceImages(taskKey) {
     if (NO_REF_IMAGE_TASKS.has(taskKey)) return false;
-    // r2v batch + mixed common panel + legacy Bernini-style ref edit keys.
-    return taskKey === "r2v" || taskKey === "mixed" || taskKey === "r2i" || taskKey === "rv2v" || taskKey === "vrc2v" || taskKey === "vi2v";
+    return taskKey === "r2v" || taskKey === "mixed" || taskKey === "r2i" || taskKey === "rv2v" || taskKey === "vi2v";
 }
 
 export function taskUsesReferenceVideo(taskKey) {
@@ -364,7 +348,7 @@ export function genLayoutHint(taskKey) {
 /** Master「段间引导」truthy check (timeline.output). */
 export function isContinuityMasterEnabled(output) {
     if (!output) return false;
-    const raw = output.continuityEnabled ?? output.continuity_enabled;
+    const raw = output.continuityEnabled;
     if (raw === true || raw === 1) return true;
     if (typeof raw === "string") {
         const s = raw.trim().toLowerCase();
@@ -380,7 +364,7 @@ export function isContinuityMasterEnabled(output) {
 export function isSegmentContinuityFromPrev(segOrShot, index) {
     if (!(Number(index) > 0)) return false;
     if (!segOrShot || typeof segOrShot !== "object") return true;
-    const raw = segOrShot.continuityFromPrev ?? segOrShot.continuity_from_prev;
+    const raw = segOrShot.continuityFromPrev;
     if (raw === undefined || raw === null) return true;
     if (raw === true || raw === 1) return true;
     if (typeof raw === "string") {
@@ -398,25 +382,25 @@ export function normalizeRefImageSize(value) {
 
 /** Per-group/segment first; `fallback` may be a string or output object. */
 export function resolveSegmentRefImageSize(seg, fallback) {
-    const fromSeg = seg?.refImageSize ?? seg?.ref_image_size;
+    const fromSeg = seg?.refImageSize;
     if (fromSeg != null && String(fromSeg).trim() !== "") {
         return normalizeRefImageSize(fromSeg);
     }
     if (fallback && typeof fallback === "object") {
-        return normalizeRefImageSize(fallback.refImageSize ?? fallback.ref_image_size);
+        return normalizeRefImageSize(fallback.refImageSize);
     }
     return normalizeRefImageSize(fallback);
 }
 
 /** Per-group 一采 / 二采. Missing field defaults to second pass. */
 export function resolveSegmentPassMode(seg) {
-    const raw = String(seg?.passMode ?? seg?.pass_mode ?? "").trim().toLowerCase();
+    const raw = String(seg?.passMode ?? "").trim().toLowerCase();
     if (raw === "first" || raw === "1") return "first";
     return "second";
 }
 
 export function newBatchSegment(overrides = {}) {
-    const taskKey = resolveTaskKey(overrides.taskType || overrides.task_type || "");
+    const taskKey = resolveTaskKey(overrides.taskType || "");
     const isVideo = isVideoBatchTask(taskKey) || FL2V_TASKS.has(taskKey) || MIXED_GROUP_TASKS.includes(taskKey);
     // durationSec is the user-facing source of truth; frameCount is derived by formula.
     let durationSec = defaultDurationSec(taskKey);
@@ -432,7 +416,7 @@ export function newBatchSegment(overrides = {}) {
         fc = resolved.frames;
     }
     const refImageSize = normalizeRefImageSize(
-        overrides.refImageSize ?? overrides.ref_image_size,
+        overrides.refImageSize,
     );
     return {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),

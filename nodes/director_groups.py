@@ -81,12 +81,12 @@ def _pack_r2v_kwargs(
     ref_audios=None,
     **kwargs,
 ):
-    """Pack R2V group from Autogrow dicts and/or legacy ref_*_N kwargs."""
+    """Pack R2V group from Autogrow dicts or static fallback slots."""
     images = _autogrow_to_index_map(ref_images)
     videos = _autogrow_to_index_map(ref_videos)
     v_audios = _autogrow_to_index_map(ref_video_audios)
     audios = _autogrow_to_index_map(ref_audios)
-    # Legacy V1 flat kwargs (ref_image_0, …) when Autogrow API is unavailable.
+    # Static fallback slots used when the Autogrow API is unavailable.
     for i in range(MAX_REFERENCE_IMAGES):
         val = kwargs.get(f"ref_image_{i}")
         if val is not None and i not in images:

@@ -57,7 +57,8 @@ export const FL2V_STYLES = `
 .bd-fl2v-shot-cont{display:flex;align-items:center;position:relative;z-index:2;flex:0 0 auto;margin-left:2px}
 .bd-fl2v-continuity{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#9ab;cursor:pointer;user-select:none;-webkit-user-drag:none;white-space:nowrap}
 .bd-fl2v-continuity input{width:13px;height:13px;margin:0;cursor:pointer;accent-color:#6ab0ff;pointer-events:auto;-webkit-user-drag:none}
-.bd-fl2v-shot-meta{color:#888;font-size:10px;flex-shrink:1;min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bd-fl2v-head-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.bd-fl2v-shot-meta{color:#888;font-size:10px;flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bd-fl2v-slots{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .bd-fl2v-slot-wrap{position:relative;min-width:0}
 .bd-fl2v-slot{position:relative;aspect-ratio:var(--fl2v-slot-ar,16/9);border:1px dashed #555;border-radius:4px;background:#111;overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer}
@@ -78,9 +79,8 @@ export const FL2V_STYLES = `
 .bd-fl2v-slot-wrap:focus-within .x{display:flex}
 @media (hover:none){.bd-fl2v-slot-wrap.has-img .x{display:flex}}
 .bd-fl2v-slot-wrap .x:hover{background:rgba(160,30,30,.95);color:#fff}
-.bd-fl2v-shot-foot{display:flex;align-items:center;justify-content:flex-start;gap:8px}
-.bd-fl2v-shot-row{display:flex;align-items:center;gap:6px;color:#ddd;font-size:11px;min-width:0}
-.bd-fl2v-shot-row input{width:56px}
+.bd-fl2v-shot-row{display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px;min-width:0}
+.bd-fl2v-shot-row input{width:72px;background:#181818;border:1px solid #444;border-radius:5px;color:#eee;padding:5px 8px;font-size:13px}
 .bd-fl2v-detail{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:10px;min-height:0}
 .bd-fl2v-detail:not(.hidden){flex:1 1 0;overflow:hidden}
 .bd-fl2v-detail.hidden{display:none!important}
@@ -156,7 +156,7 @@ function normalizeImageRef(raw) {
         const imageFile = raw.trim();
         return imageFile ? { imageFile, width: 0, height: 0 } : null;
     }
-    const imageFile = String(raw.imageFile || raw.image_file || "").trim();
+    const imageFile = String(raw.imageFile || "").trim();
     if (!imageFile) return null;
     return {
         imageFile,
@@ -176,16 +176,16 @@ export function newFl2vShot(overrides = {}) {
         durationSec,
         prompt: overrides.prompt || "",
         negativePrompt: overrides.negativePrompt || DEFAULT_FL2V_NEGATIVE,
-        startImage: normalizeImageRef(overrides.startImage || overrides.start_image) || null,
-        endImage: normalizeImageRef(overrides.endImage || overrides.end_image) || null,
+        startImage: normalizeImageRef(overrides.startImage) || null,
+        endImage: normalizeImageRef(overrides.endImage) || null,
         ...(overrides.externalNodeId != null
             ? { externalNodeId: overrides.externalNodeId }
             : {}),
     };
     // Must survive syncFl2vFromShots → newFl2vShot(); dropping it made 引用上段
     // appear stuck (commit rebuilt shots and defaulted back to on).
-    if (overrides.continuityFromPrev != null || overrides.continuity_from_prev != null) {
-        shot.continuityFromPrev = overrides.continuityFromPrev ?? overrides.continuity_from_prev;
+    if (overrides.continuityFromPrev != null) {
+        shot.continuityFromPrev = overrides.continuityFromPrev;
     }
     if (overrides.previewB64) shot.previewB64 = overrides.previewB64;
     if (Array.isArray(overrides.previewFrames) && overrides.previewFrames.length) {
@@ -203,89 +203,7 @@ function shotFrameCount(shot, fps = 24) {
     return clamp(durationToMiniMaxFrames(sec, fps), minFrameCount("fl2v"), MAX_GEN_FRAMES);
 }
 
-/** Migrate legacy flat segments/keyframes → shots[]. */
-export function migrateLegacyFl2vToShots(timeline) {
-    if (Array.isArray(timeline?.shots) && timeline.shots.length) {
-        return timeline.shots.map((s) => newFl2vShot(s));
-    }
-    const raw = [...(timeline?.keyframes || timeline?.segments || [])]
-        .map((s, i) => ({ s, i }))
-        .sort((a, b) => {
-            const as = parseInt(a.s.start, 10) || 0;
-            const bs = parseInt(b.s.start, 10) || 0;
-            return as - bs || a.i - b.i;
-        })
-        .map(({ s }) => s);
-    if (!raw.length) return [];
-
-    const n = raw.length;
-    const flags = raw.map((s, i) => {
-        let isStart = s.isStartFrame;
-        let isEnd = s.isEndFrame;
-        if (isStart === undefined && s.breakBefore !== undefined) {
-            isStart = !!s.breakBefore || s.isEndFrame === false;
-            isEnd = !s.breakBefore;
-        }
-        if (isStart === undefined) {
-            const endOnlyLast = i > 0 && i === n - 1 && !s.breakBefore && s.isEndFrame !== false;
-            isStart = !endOnlyLast;
-        }
-        if (isEnd === undefined) isEnd = i > 0 && !s.breakBefore;
-        return { isStart: !!isStart, isEnd: !!isEnd };
-    });
-
-    const shots = [];
-    for (let i = 0; i < raw.length; i++) {
-        const s = raw[i];
-        const f = flags[i];
-        if (!f.isStart) continue;
-        const startImage = normalizeImageRef(s.genImage || s) || normalizeImageRef(s.imageFile);
-        let endImage = null;
-        if (f.isEnd && startImage) {
-            endImage = { ...startImage };
-        } else {
-            for (let j = i + 1; j < raw.length; j++) {
-                if (flags[j].isStart) break;
-                if (flags[j].isEnd && !flags[j].isStart) {
-                    endImage = normalizeImageRef(raw[j].genImage || raw[j])
-                        || normalizeImageRef(raw[j].imageFile);
-                    break;
-                }
-            }
-        }
-        let durationSec = Number(s.durationSec);
-        if (!(durationSec > 0)) {
-            const fc = parseInt(s.frameCount ?? s.length, 10) || defaultFrameCount("fl2v");
-            // Absorb end-only span for nicer migrate.
-            let totalFc = Math.max(minFrameCount("fl2v"), fc);
-            if (endImage && !f.isEnd) {
-                for (let j = i + 1; j < raw.length; j++) {
-                    if (flags[j].isStart) break;
-                    if (flags[j].isEnd && !flags[j].isStart) {
-                        const e = raw[j];
-                        const endT = (parseInt(e.start, 10) || 0) + (parseInt(e.length ?? e.frameCount, 10) || 0);
-                        const startT = parseInt(s.start, 10) || 0;
-                        totalFc = Math.max(totalFc, endT - startT);
-                        break;
-                    }
-                }
-            }
-            durationSec = preferredDurationSecFromFrames(totalFc, 24);
-        }
-        shots.push(newFl2vShot({
-            id: s.id,
-            durationSec,
-            prompt: s.prompt || "",
-            negativePrompt: s.negativePrompt || DEFAULT_FL2V_NEGATIVE,
-            startImage,
-            endImage,
-            continuityFromPrev: s.continuityFromPrev ?? s.continuity_from_prev,
-        }));
-    }
-    return shots;
-}
-
-/** Flatten shots → one timeline segment per shot (for canvas / legacy fields). */
+/** Flatten shots → one timeline segment per shot for the canvas. */
 export function flattenFl2vShotsToSegments(editor) {
     const fps = fl2vFps(editor);
     const shots = editor.timeline.shots || [];
@@ -333,7 +251,7 @@ export function flattenFl2vShotsToSegments(editor) {
     return segs;
 }
 
-/** Compat keyframes: Start + optional End-only pair per shot. */
+/** Build canvas keyframes: start plus an optional end-frame pair per shot. */
 export function flattenFl2vShotsToKeyframes(editor) {
     const fps = fl2vFps(editor);
     const shots = editor.timeline.shots || [];
@@ -378,8 +296,7 @@ export function flattenFl2vShotsToKeyframes(editor) {
                 isEndFrame: true,
             });
         } else if (hasEnd && !hasStart) {
-            // Official last-only. Mark endOnly so legacy _expand_shots does not
-            // treat this as 首尾同图 (image0=image1).
+            // Official last-only. Mark endOnly so the canvas keeps it as image1.
             keyframes.push({
                 id: shot.id || uid(),
                 imageFile: endImage.imageFile || "",
@@ -506,51 +423,6 @@ export function getFl2vTotalDurationSec(editor) {
     return preferredDurationSecFromFrames(getFl2vSampleFrames(editor), fl2vFps(editor));
 }
 
-/** @deprecated — totals come from shot sum; keep for callers. */
-export function setFl2vTotalFrames(editor, value, { durationSec } = {}) {
-    editor.timeline.totalFrames = Math.max(
-        minFrameCount("fl2v"),
-        parseInt(value, 10) || DEFAULT_TOTAL,
-    );
-    if (durationSec != null && Number.isFinite(Number(durationSec))) {
-        editor.timeline.durationSec = roundDurationSec(durationSec);
-    }
-    if (editor.totalFramesWidget) editor.totalFramesWidget.value = editor.timeline.totalFrames;
-    syncFl2vFromShots(editor);
-    return editor.timeline.totalFrames;
-}
-
-/** @deprecated — edit per-shot duration instead. */
-export function setFl2vTotalDurationSec(editor, seconds) {
-    const shots = editor.timeline.shots || [];
-    if (!shots.length) {
-        editor.timeline.durationSec = clamp(
-            roundDurationSec(Number(seconds) || defaultDurationSec("fl2v")),
-            minDurationSec(),
-            maxDurationSec(),
-        );
-        syncFl2vFromShots(editor);
-        return editor.timeline.totalFrames;
-    }
-    // Proportionally scale all shots to match requested total.
-    const target = clamp(
-        roundDurationSec(Number(seconds) || defaultDurationSec("fl2v")),
-        minDurationSec(),
-        maxDurationSec(),
-    );
-    const cur = getFl2vTotalDurationSec(editor) || 1;
-    const scale = target / cur;
-    for (const shot of shots) {
-        shot.durationSec = clamp(
-            roundDurationSec((Number(shot.durationSec) || defaultDurationSec("fl2v")) * scale),
-            minDurationSec(),
-            maxDurationSec(),
-        );
-    }
-    syncFl2vFromShots(editor);
-    return editor.timeline.totalFrames;
-}
-
 export function ensureFl2vTimeline(editor) {
     const t = editor.timeline;
     t.timelineMode = "fl2v";
@@ -561,11 +433,8 @@ export function ensureFl2vTimeline(editor) {
     t.video.frameMap = [];
     t.videoClips = [];
 
-    if (Array.isArray(t.shots) && t.shots.length) {
-        t.shots = t.shots.map((s) => newFl2vShot(s));
-    } else {
-        t.shots = migrateLegacyFl2vToShots(t);
-    }
+    t.shots = Array.isArray(t.shots) ? t.shots.map((s) => newFl2vShot(s)) : [];
+    if (!t.shots.length) t.shots.push(newFl2vShot());
     syncFl2vFromShots(editor);
     if (!Number.isFinite(editor.selectedIndex) || editor.selectedIndex < 0) {
         editor.selectedIndex = 0;
@@ -620,11 +489,6 @@ export function setFl2vShotDurationSec(editor, shotIndex, seconds) {
         maxDurationSec(),
     );
     syncFl2vFromShots(editor);
-}
-
-/** @deprecated alias */
-export function setFl2vStartDurationSec(editor, segIndex, seconds) {
-    return setFl2vShotDurationSec(editor, segIndex, seconds);
 }
 
 /**
@@ -727,11 +591,6 @@ export function openFl2vUpload(editor) {
 export function openFl2vAddShot(editor) {
     return openFl2vUpload(editor);
 }
-
-/** @deprecated — slots handle replace */
-export function openFl2vReplace() {}
-/** @deprecated */
-export function openFl2vInsert() {}
 
 export function mountFl2vPanel(parent) {
     const wrap = document.createElement("div");
@@ -1175,7 +1034,13 @@ function renderFl2vShotCards(editor) {
             <div class="bd-fl2v-shot-head">
                 <span class="bd-fl2v-shot-drag"><b>${t("panel.fl2v.shotN", { n: i + 1 })}</b></span>
                 ${showCont ? `<div class="bd-fl2v-shot-cont"><label class="bd-fl2v-continuity" draggable="false" title="${t("tooltip.segmentContinuityFromPrev")}"><input type="checkbox" data-r="shot-continuity" ${contChecked ? "checked" : ""}><span>${t("batch.continuityFromPrev")}</span></label></div>` : ""}
-                <span class="bd-fl2v-shot-meta">${badge} · ${fc}f</span>
+                <div class="bd-fl2v-head-meta">
+                    <label class="bd-fl2v-shot-row" title="${t("tooltip.fl2vShotDuration")}">
+                        ${t("batch.seconds")}
+                        <input type="number" data-r="shot-sec" min="${minDurationSec()}" max="${maxDurationSec()}" step="0.1" value="${shot.durationSec}">
+                    </label>
+                    <span class="bd-fl2v-shot-meta">${badge} · ${fc}f</span>
+                </div>
             </div>
             <div class="bd-fl2v-shot-body">
                 <div class="bd-fl2v-params">
@@ -1194,13 +1059,6 @@ function renderFl2vShotCards(editor) {
                             </div>
                             ${endUrl ? `<button type="button" class="x" data-clear="end" title="${t("tooltip.fl2vClear")}" draggable="false">×</button>` : ""}
                         </div>
-                    </div>
-                    <div class="bd-fl2v-shot-foot">
-                        <label class="bd-fl2v-shot-row" title="${t("tooltip.fl2vShotDuration")}">
-                            ${t("panel.fl2v.duration")}
-                            <input type="number" class="bd-num" data-r="shot-sec" min="${minDurationSec()}" max="${maxDurationSec()}" step="0.1" value="${shot.durationSec}">
-                            ${t("panel.fl2v.seconds")}
-                        </label>
                     </div>
                 </div>
                 <div class="bd-fl2v-prompt-col">
@@ -1619,27 +1477,6 @@ export function buildFl2vPayloadFields(editor) {
         timelineMode: "fl2v",
         editMode: "segment",
         shots,
-        keyframes: editor.timeline.keyframes || [],
-        segments: (editor.timeline.segments || []).map((s, i) => ({
-            id: s.id,
-            start: s.start,
-            length: s.length,
-            frameCount: s.length,
-            durationSec: s.durationSec,
-            prompt: s.prompt || "",
-            negativePrompt: s.negativePrompt || DEFAULT_FL2V_NEGATIVE,
-            continuityFromPrev: isSegmentContinuityFromPrev(s, i),
-            isStartFrame: !!(s.genImage?.imageFile || s.imageFile),
-            isEndFrame: !!s.endImage?.imageFile,
-            genImage: {
-                imageFile: s.genImage?.imageFile || s.imageFile || "",
-                width: s.genImage?.width || 0,
-                height: s.genImage?.height || 0,
-            },
-            endImage: s.endImage || null,
-            taskType: "",
-            refs: [],
-        })),
         totalFrames: total,
         durationSec: getFl2vTotalDurationSec(editor),
     };
@@ -1708,21 +1545,4 @@ export function updateFl2vToolbarBtns(editor) {
         addBtn.classList.toggle("hidden", !show);
         addBtn.disabled = !show;
     }
-}
-
-/** @deprecated */
-export function updateFl2vReplaceBtn(editor) {
-    updateFl2vToolbarBtns(editor);
-}
-/** @deprecated */
-export function updateFl2vInsertBtns(editor) {
-    updateFl2vToolbarBtns(editor);
-}
-
-/** Stubs for removed both-role seam API (timeline may still import briefly). */
-export function isFl2vBothRole() {
-    return false;
-}
-export function getFl2vSeamRatio() {
-    return 0.5;
 }

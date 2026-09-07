@@ -222,7 +222,7 @@ class MiniMaxH3Director:
                 "steps": (
                     "INT",
                     {
-                        "default": 25,
+                        "default": 8,
                         "min": 1,
                         "max": 200,
                         "tooltip": (

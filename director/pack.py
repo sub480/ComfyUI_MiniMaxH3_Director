@@ -26,8 +26,6 @@ import folder_paths
 from aiohttp import web
 
 from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
-from .fl2v_timeline import DEFAULT_FL2V_DURATION_SEC, MIN_FL2V_FRAMES, _duration_to_minimax_frames
-from .frame_align import H3_FPS
 from .output_layout import INPUT_PACKS_DIR_NAME, h3_input_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.pack")
@@ -37,13 +35,6 @@ PACK_VERSION = 1
 PACK_PREFIXES = ("shared_params/", "asset_groups/", "source_video/", "extra/")
 ASCII_PATH_RE = re.compile(r"^[A-Za-z0-9_./]+$")
 SAFE_EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,8}$")
-PICTURE_FILE_RE = re.compile(r"^Picture([1-9])(\.[A-Za-z0-9]{1,8})$", re.I)
-VIDEO_FILE_RE = re.compile(r"^Video([1-3])(\.[A-Za-z0-9]{1,8})$", re.I)
-AUDIO_FILE_RE = re.compile(r"^Audio([1-3])(\.[A-Za-z0-9]{1,8})$", re.I)
-START_FILE_RE = re.compile(r"^start(\.[A-Za-z0-9]{1,8})$", re.I)
-END_FILE_RE = re.compile(r"^end(\.[A-Za-z0-9]{1,8})$", re.I)
-SOURCE_FILE_RE = re.compile(r"^source(\.[A-Za-z0-9]{1,8})$", re.I)
-
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mpg", ".mpeg", ".mts", ".ts"}
 AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wma"}
@@ -57,11 +48,11 @@ ZIP_STREAM_CHUNK = 1024 * 1024
 # POST JSON already works; keep small packs on that path instead of FileResponse.
 INLINE_JSON_MAX = 48 * 1024 * 1024
 
-IMAGE_KEYS = ("imageFile", "image_file")
-AUDIO_KEYS = ("audioFile", "audio_file")
-VIDEO_KEYS = ("videoFile", "video_file")
-PREVIEW_KEYS = ("previewImageFile", "preview_image_file")
-PAIRED_AUDIO_KEYS = ("pairedAudioFile", "paired_audio_file")
+IMAGE_KEYS = ("imageFile",)
+AUDIO_KEYS = ("audioFile",)
+VIDEO_KEYS = ("videoFile",)
+PREVIEW_KEYS = ("previewImageFile",)
+PAIRED_AUDIO_KEYS = ("pairedAudioFile",)
 
 
 def _pack_export_root() -> Path:
@@ -251,13 +242,10 @@ def _set_media_fields(item: dict, pack_rel: str, primary_key: str) -> None:
     parent = _posix(Path(pack_rel).parent)
     item[primary_key] = pack_rel
     if primary_key == "imageFile":
-        item.pop("image_file", None)
         item["fileName"] = name
     elif primary_key == "audioFile":
-        item.pop("audio_file", None)
         item["fileName"] = name
     elif primary_key == "videoFile":
-        item.pop("video_file", None)
         item["fileName"] = name
     item["type"] = "input"
     item["subfolder"] = "" if parent in (".", "") else parent
@@ -429,11 +417,11 @@ def _group_json(seg: dict) -> dict:
         "start": seg.get("start"),
         "taskType": seg.get("taskType") or "",
         "refs": seg.get("refs") or [],
-        "refAudios": seg.get("refAudios") or seg.get("ref_audios") or [],
-        "refVideos": seg.get("refVideos") or seg.get("ref_videos") or [],
-        "continuityFromPrev": seg.get("continuityFromPrev", seg.get("continuity_from_prev")),
-        "refImageSize": seg.get("refImageSize") or seg.get("ref_image_size"),
-        "passMode": seg.get("passMode") or seg.get("pass_mode"),
+        "refAudios": seg.get("refAudios") or [],
+        "refVideos": seg.get("refVideos") or [],
+        "continuityFromPrev": seg.get("continuityFromPrev"),
+        "refImageSize": seg.get("refImageSize"),
+        "passMode": seg.get("passMode"),
     }
     if isinstance(seg.get("genImage"), dict):
         out["genImage"] = {
@@ -444,9 +432,9 @@ def _group_json(seg: dict) -> dict:
         out["imageFile"] = seg.get("imageFile")
     for key in ("startImage", "endImage"):
         val = seg.get(key)
-        if isinstance(val, dict) and (val.get("imageFile") or val.get("image_file")):
+        if isinstance(val, dict) and val.get("imageFile"):
             out[key] = {
-                "imageFile": val.get("imageFile") or val.get("image_file") or "",
+                "imageFile": val.get("imageFile") or "",
                 "width": val.get("width") or 0,
                 "height": val.get("height") or 0,
             }
@@ -457,12 +445,12 @@ def _group_json(seg: dict) -> dict:
 
 def _explode_card(card: dict, folder: str, staging: Path, missing: list[str], dry_run: bool, sizes: list[int]) -> None:
     _rewrite_image_list(card.get("refs") or [], folder, staging, missing, dry_run, sizes)
-    _rewrite_audio_list(card.get("refAudios") or card.get("ref_audios") or [], folder, staging, missing, dry_run, sizes)
-    _rewrite_video_list(card.get("refVideos") or card.get("ref_videos") or [], folder, staging, missing, dry_run, sizes)
+    _rewrite_audio_list(card.get("refAudios") or [], folder, staging, missing, dry_run, sizes)
+    _rewrite_video_list(card.get("refVideos") or [], folder, staging, missing, dry_run, sizes)
     start_ref = card.get("startImage") if isinstance(card.get("startImage"), dict) else None
-    has_start = bool(start_ref and (start_ref.get("imageFile") or start_ref.get("image_file")))
+    has_start = bool(start_ref and start_ref.get("imageFile"))
     if isinstance(card.get("genImage"), dict):
-        # i2v-only packs keep historical start.*; mixed fl2v also has startImage → source.*
+        # i2v packs use genImage; mixed fl2v uses startImage.
         dest = "source" if has_start else "start"
         _rewrite_image_ref(card["genImage"], dest, folder, staging, missing, dry_run, sizes)
         if card["genImage"].get("imageFile"):
@@ -556,8 +544,8 @@ def build_export_pack(timeline: dict, widgets: dict | None = None, *, dry_run: b
         data["global"] = global_block
     shared_folder = "shared_params"
     _rewrite_image_list(global_block.get("refs") or [], shared_folder, staging or Path("."), missing, dry_run, sizes)
-    _rewrite_audio_list(global_block.get("refAudios") or global_block.get("ref_audios") or [], shared_folder, staging or Path("."), missing, dry_run, sizes)
-    _rewrite_video_list(global_block.get("refVideos") or global_block.get("ref_videos") or [], shared_folder, staging or Path("."), missing, dry_run, sizes)
+    _rewrite_audio_list(global_block.get("refAudios") or [], shared_folder, staging or Path("."), missing, dry_run, sizes)
+    _rewrite_video_list(global_block.get("refVideos") or [], shared_folder, staging or Path("."), missing, dry_run, sizes)
     if isinstance(global_block.get("referenceVideo"), dict):
         _rewrite_video_media(global_block["referenceVideo"], "reference_video", shared_folder, staging or Path("."), missing, dry_run, sizes)
     if isinstance(global_block.get("genImage"), dict):
@@ -608,8 +596,8 @@ def build_export_pack(timeline: dict, widgets: dict | None = None, *, dry_run: b
     shared_json = {
         "prompt": global_block.get("prompt") or "",
         "refs": global_block.get("refs") or [],
-        "refAudios": global_block.get("refAudios") or global_block.get("ref_audios") or [],
-        "refVideos": global_block.get("refVideos") or global_block.get("ref_videos") or [],
+        "refAudios": global_block.get("refAudios") or [],
+        "refVideos": global_block.get("refVideos") or [],
     }
 
     result: dict[str, Any] = {
@@ -701,208 +689,6 @@ def extract_pack_zip(zip_path: Path, dest: Path) -> None:
                 shutil.copyfileobj(src, out)
 
 
-def _scan_slot_files(folder: Path) -> dict[str, list[dict]]:
-    refs: list[dict] = []
-    audios: list[dict] = []
-    videos: list[dict] = []
-    start = None
-    end = None
-    source = None
-    if not folder.is_dir():
-        return {"refs": refs, "refAudios": audios, "refVideos": videos, "startImage": start, "endImage": end, "genImage": source}
-    pack_folder = _posix(folder.name if folder.parent.name != "asset_groups" else f"asset_groups/{folder.name}")
-    if folder.name == "shared_params":
-        pack_folder = "shared_params"
-    elif folder.parent.name == "asset_groups":
-        pack_folder = f"asset_groups/{folder.name}"
-    for path in folder.iterdir():
-        if not path.is_file():
-            continue
-        name = path.name
-        m = PICTURE_FILE_RE.fullmatch(name)
-        if m:
-            idx = int(m.group(1)) - 1
-            rel = f"{pack_folder}/{name}"
-            refs.append({"index": idx, "imageFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder})
-            continue
-        m = AUDIO_FILE_RE.fullmatch(name)
-        if m:
-            idx = int(m.group(1)) - 1
-            rel = f"{pack_folder}/{name}"
-            audios.append({"index": idx, "audioFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder})
-            continue
-        m = VIDEO_FILE_RE.fullmatch(name)
-        if m:
-            idx = int(m.group(1)) - 1
-            rel = f"{pack_folder}/{name}"
-            videos.append({"index": idx, "videoFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder})
-            continue
-        if START_FILE_RE.fullmatch(name):
-            rel = f"{pack_folder}/{name}"
-            start = {"imageFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder}
-        elif END_FILE_RE.fullmatch(name):
-            rel = f"{pack_folder}/{name}"
-            end = {"imageFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder}
-        elif SOURCE_FILE_RE.fullmatch(name):
-            rel = f"{pack_folder}/{name}"
-            source = {"imageFile": rel, "fileName": name, "type": "input", "subfolder": pack_folder}
-    refs.sort(key=lambda r: int(r["index"]))
-    audios.sort(key=lambda r: int(r["index"]))
-    videos.sort(key=lambda r: int(r["index"]))
-    return {"refs": refs, "refAudios": audios, "refVideos": videos, "startImage": start, "endImage": end, "genImage": source}
-
-
-def _merge_refs(json_refs: list | None, scanned: list) -> list:
-    by_idx: dict[int, dict] = {}
-    for item in scanned:
-        by_idx[int(item["index"])] = dict(item)
-    for item in json_refs or []:
-        if not isinstance(item, dict):
-            continue
-        idx = _slot_index(item, -1)
-        if idx < 0:
-            continue
-        merged = {**by_idx.get(idx, {}), **item}
-        if not _item_rel(merged, IMAGE_KEYS + AUDIO_KEYS + VIDEO_KEYS):
-            if idx in by_idx:
-                merged = {**item, **by_idx[idx]}
-        by_idx[idx] = merged
-    return [by_idx[k] for k in sorted(by_idx)]
-
-
-def _assemble_timeline(extracted: Path, pack_meta: dict) -> dict:
-    shared_path = extracted / "shared_params" / "shared_params.json"
-    shared = _read_json(shared_path) if shared_path.is_file() else {}
-    scanned_shared = _scan_slot_files(extracted / "shared_params")
-    global_block = {
-        "taskType": _task_combo(str(pack_meta.get("taskType") or "t2v")),
-        "prompt": shared.get("prompt") or "",
-        "refs": _merge_refs(shared.get("refs"), scanned_shared["refs"]),
-        "refAudios": _merge_refs(shared.get("refAudios") or shared.get("ref_audios"), scanned_shared["refAudios"]),
-        "refVideos": _merge_refs(shared.get("refVideos") or shared.get("ref_videos"), scanned_shared["refVideos"]),
-        "referenceVideo": {},
-        "continuousReference": False,
-    }
-    groups_root = extracted / "asset_groups"
-    group_dirs = sorted(
-        [p for p in groups_root.iterdir() if p.is_dir()],
-        key=lambda p: p.name,
-    ) if groups_root.is_dir() else []
-    segments: list[dict] = []
-    shots: list[dict] = []
-    cursor = 0
-    for i, gdir in enumerate(group_dirs):
-        gj = gdir / "group.json"
-        raw = _read_json(gj) if gj.is_file() else {}
-        scanned = _scan_slot_files(gdir)
-        dur = raw.get("durationSec")
-        try:
-            dur_f = float(dur) if dur is not None else None
-        except (TypeError, ValueError):
-            dur_f = None
-        fc_raw = raw.get("frameCount") if raw.get("frameCount") is not None else raw.get("length")
-        try:
-            fc = int(fc_raw) if fc_raw is not None else 0
-        except (TypeError, ValueError):
-            fc = 0
-        # durationSec is the user-facing source of truth; don't keep a stale 124
-        # frameCount when the pack stored 10s (or any other duration).
-        if dur_f is not None and dur_f > 0:
-            fc = max(MIN_FL2V_FRAMES, _duration_to_minimax_frames(dur_f, H3_FPS))
-            dur = dur_f
-        elif fc <= 0:
-            fc = max(MIN_FL2V_FRAMES, _duration_to_minimax_frames(DEFAULT_FL2V_DURATION_SEC, H3_FPS))
-        start_img = raw.get("startImage") if isinstance(raw.get("startImage"), dict) else scanned["startImage"]
-        end_img = raw.get("endImage") if isinstance(raw.get("endImage"), dict) else scanned["endImage"]
-        gen = raw.get("genImage") if isinstance(raw.get("genImage"), dict) else scanned.get("genImage")
-        if scanned.get("startImage") and not (gen and gen.get("imageFile")) and not (start_img and start_img.get("imageFile")):
-            gen = {"imageFile": scanned["startImage"]["imageFile"], "fileName": scanned["startImage"]["fileName"]}
-        seg = {
-            "id": raw.get("id") or f"g{i}",
-            "start": raw.get("start") if raw.get("start") is not None else cursor,
-            "length": fc,
-            "frameCount": fc,
-            "durationSec": dur,
-            "prompt": raw.get("prompt") or "",
-            "negativePrompt": raw.get("negativePrompt") or "",
-            "taskType": raw.get("taskType") or "",
-            "refs": _merge_refs(raw.get("refs"), scanned["refs"]),
-            "refAudios": _merge_refs(raw.get("refAudios") or raw.get("ref_audios"), scanned["refAudios"]),
-            "refVideos": _merge_refs(raw.get("refVideos") or raw.get("ref_videos"), scanned["refVideos"]),
-            "continuityFromPrev": raw.get("continuityFromPrev", raw.get("continuity_from_prev")),
-            "refImageSize": raw.get("refImageSize") or raw.get("ref_image_size"),
-            "genImage": gen or {"imageFile": ""},
-            "imageFile": (gen or {}).get("imageFile") or raw.get("imageFile") or "",
-            "startImage": start_img,
-            "endImage": end_img,
-        }
-        segments.append(seg)
-        shots.append({
-            "id": seg["id"],
-            "durationSec": dur,
-            "prompt": seg["prompt"],
-            "negativePrompt": seg["negativePrompt"],
-            "continuityFromPrev": seg["continuityFromPrev"],
-            "startImage": start_img,
-            "endImage": end_img,
-        })
-        cursor += fc
-    task_key = resolve_task_key(str(pack_meta.get("taskType") or global_block["taskType"]))
-    output = pack_meta.get("output") if isinstance(pack_meta.get("output"), dict) else {}
-    mode = "fl2v" if task_key == "fl2v" else ("video" if task_key in ("v2v", "rv2v") else "prompt_batch")
-    timeline = {
-        "version": 5,
-        "timelineMode": mode,
-        "editMode": "segment" if mode != "video" else "global",
-        "frameRate": H3_FPS,
-        "totalFrames": cursor or 124,
-        "global": global_block,
-        "output": output or {
-            "mode": "fixed",
-            "width": 864,
-            "height": 480,
-            "exportMode": "all",
-            "audioMode": "generate",
-            "refImageSize": "match",
-            "continuityEnabled": False,
-            "continuityOverlapFrames": 22,
-            "continuityMode": "guide",
-            "continuityRedraw": 0.65,
-        },
-        "segments": segments or [{
-            "id": "g0",
-            "start": 0,
-            "length": 124,
-            "frameCount": 124,
-            "prompt": "",
-            "refs": [],
-            "refAudios": [],
-            "refVideos": [],
-            "genImage": {"imageFile": ""},
-        }],
-        "video": {"fileName": "", "videoFile": "", "subfolder": "", "type": "input", "frames": [], "frameMap": []},
-        "videoClips": [],
-        "runSelectEnabled": False,
-        "runSelection": [],
-    }
-    if task_key == "fl2v":
-        timeline["shots"] = shots
-        timeline["keyframes"] = []
-    src_dir = extracted / "source_video"
-    if src_dir.is_dir():
-        clips = sorted([p for p in src_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS])
-        video_clips = []
-        for i, path in enumerate(clips):
-            rel = f"source_video/{path.name}"
-            rec = {"videoFile": rel, "fileName": path.name, "type": "input", "subfolder": "source_video", "frames": []}
-            video_clips.append(rec)
-            if i == 0:
-                timeline["video"] = dict(rec)
-        if video_clips:
-            timeline["videoClips"] = video_clips
-    return timeline
-
-
 def _prefix_pack_paths(obj: Any, prefix: str) -> None:
     if isinstance(obj, list):
         for item in obj:
@@ -986,25 +772,27 @@ def _collect_missing_media(obj: Any, dest: Path, rel_prefix: str, missing: list[
 
 def import_extracted_pack(extracted: Path) -> dict[str, Any]:
     pack_path = extracted / "pack.json"
-    pack_meta: dict[str, Any] = {}
-    if pack_path.is_file():
-        pack_meta = _read_json(pack_path)
-        if not isinstance(pack_meta, dict):
-            pack_meta = {}
+    if not pack_path.is_file():
+        raise ValueError("Pack is missing pack.json.")
+    pack_meta = _read_json(pack_path)
+    if not isinstance(pack_meta, dict):
+        raise ValueError("pack.json is invalid.")
     fmt = str(pack_meta.get("format") or "")
-    if pack_path.is_file() and fmt and fmt != PACK_FORMAT:
+    if fmt != PACK_FORMAT:
         raise ValueError(f"Unsupported pack format: {fmt}")
-    version = int(pack_meta.get("formatVersion") or 1)
-    if version > PACK_VERSION:
-        raise ValueError(f"Pack formatVersion {version} is newer than this plugin.")
+    version = int(pack_meta.get("formatVersion") or 0)
+    if version != PACK_VERSION:
+        raise ValueError(f"Unsupported pack formatVersion: {version}")
 
     timeline_path = extracted / "timeline.json"
-    if timeline_path.is_file():
-        timeline = _read_json(timeline_path)
-        if not isinstance(timeline, dict):
-            raise ValueError("timeline.json is invalid.")
-    else:
-        timeline = _assemble_timeline(extracted, pack_meta)
+    if not timeline_path.is_file():
+        raise ValueError("Pack is missing timeline.json.")
+    timeline = _read_json(timeline_path)
+    if not isinstance(timeline, dict):
+        raise ValueError("timeline.json is invalid.")
+    timeline_version = int(timeline.get("version") or 0)
+    if timeline_version != 5:
+        raise ValueError(f"Unsupported timeline version: {timeline_version}")
 
     pack_id = uuid.uuid4().hex[:12]
     rel_prefix = f"H3_D/{INPUT_PACKS_DIR_NAME}/{pack_id}"

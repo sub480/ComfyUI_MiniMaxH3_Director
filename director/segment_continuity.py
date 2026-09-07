@@ -4,9 +4,6 @@ Active path (opt-in「段间引导」): motion-context pin via
 ``director.h3_motion_context`` — previous segment AV tail → next segment
 conditioning, then trim the pinned prefix.
 Tasks: t2v / i2v / fl2v / r2v / v2v / rv2v.
-
-Legacy Wan/SCAIL helpers below are retained for concat seam utilities and
-historical APIs; ``apply_scail_continuity_core`` is a no-op on MiniMax H3.
 """
 
 from __future__ import annotations
@@ -23,7 +20,8 @@ from .h3_motion_context import (
     DEFAULT_CONTEXT_FRAMES as DEFAULT_CONTINUITY_OVERLAP,
     snap_context_frames,
 )
-from .plan import DirectorPlan, SegmentPlan, wan_align_frame_count
+from .frame_align import minimax_align_frame_count
+from .plan import DirectorPlan, SegmentPlan
 from .segment_cache import load_segment_cache
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.continuity")
@@ -70,7 +68,6 @@ CONTINUITY_FIRST_HANDOFF_WEIGHT = 0.0
 CONTINUITY_TAIL_LUMA_BLEND = 0
 CONTINUITY_OPENING_EXPOSURE_SMOOTH = 0
 CONTINUITY_OPENING_EXPOSURE_SPIKE = 0.008
-CONTINUITY_OPENING_LUMA_BLEND = 0
 CONTINUITY_OPENING_LUMA_MIN_RATIO = 0.55
 CONTINUITY_OPENING_LUMA_MAX_RATIO = 1.8
 CONTINUITY_OPENING_LUMA_EPSILON = 0.015
@@ -125,7 +122,7 @@ def resolve_continuity_mode(timeline: dict | None) -> str:
     output = (timeline or {}).get("output") if isinstance(timeline, dict) else None
     if not isinstance(output, dict):
         return CONTINUITY_MODE_GUIDE
-    raw = str(output.get("continuityMode", output.get("continuity_mode", "")) or "")
+    raw = str(output.get("continuityMode") or "")
     if raw.strip().lower() in {
         "continue", "continuation", "latent", "guide_redraw", "guide+redraw", "redraw",
     }:
@@ -139,9 +136,9 @@ def resolve_continuity_redraw(timeline: dict | None) -> float:
     output = (timeline or {}).get("output") if isinstance(timeline, dict) else None
     if not isinstance(output, dict):
         return DEFAULT_CONTINUITY_REDRAW
-    raw = output.get("continuityRedraw", output.get("continuity_redraw"))
+    raw = output.get("continuityRedraw")
     if raw is None:
-        raw = output.get("continueSeam", DEFAULT_CONTINUITY_REDRAW)
+        raw = DEFAULT_CONTINUITY_REDRAW
     return clamp_seam_min_mask(raw)
 
 
@@ -156,14 +153,11 @@ def resolve_continuity_settings(timeline: dict, *, segment_count: int) -> tuple[
     if segment_count < 2:
         return False, 0
     output = timeline.get("output") or {}
-    enabled = _truthy_continuity_flag(
-        output.get("continuityEnabled", output.get("continuity_enabled"))
-    )
+    enabled = _truthy_continuity_flag(output.get("continuityEnabled"))
     if not enabled:
         return False, 0
     raw = (
         output.get("continuityOverlapFrames")
-        or output.get("continuity_overlap_frames")
         or DEFAULT_CONTINUITY_OVERLAP
     )
     return True, snap_context_frames(raw)
@@ -186,8 +180,6 @@ def resolve_segment_continuity_from_prev(
         return True
     if "continuityFromPrev" in seg_data:
         raw = seg_data.get("continuityFromPrev")
-    elif "continuity_from_prev" in seg_data:
-        raw = seg_data.get("continuity_from_prev")
     else:
         return True
     return _truthy_continuity_flag(raw)
@@ -209,7 +201,7 @@ def timeline_row_for_index(timeline: dict | None, index: int) -> dict:
 def resolve_continuity_lock_pixels(overlap_frames: int) -> int:
     """SCAIL prefix length in pixels (Wan 4n+1, for clean VAE round-trip)."""
     ov = max(MIN_CONTINUITY_OVERLAP, min(MAX_CONTINUITY_OVERLAP, int(overlap_frames)))
-    return wan_align_frame_count(ov)
+    return minimax_align_frame_count(ov)
 
 
 def resolve_continuity_guide_frames(overlap_frames: int) -> tuple[int, int, int, int, int]:
@@ -235,13 +227,13 @@ def resolve_segment_generation_frames(
     """
     body = max(1, int(segment_frame_count))
     if not continuity_enabled or segment_index <= 0:
-        return wan_align_frame_count(body), 0
+        return minimax_align_frame_count(body), 0
     lock_px = resolve_continuity_lock_pixels(continuity_overlap)
     if lock_px <= 0:
-        return wan_align_frame_count(body), 0
+        return minimax_align_frame_count(body), 0
     settling = max(0, int(CONTINUITY_SETTLING_FRAMES))
     raw = lock_px + settling + body + CONTINUITY_SOURCE_LOOKAHEAD
-    return wan_align_frame_count(raw), lock_px + settling
+    return minimax_align_frame_count(raw), lock_px + settling
 
 
 def resolve_continuity_settling_frames() -> int:
@@ -409,49 +401,6 @@ def normalize_guide_luma_to_source(
         ref_mean,
     )
     return (out * ratio).clamp(0.0, 1.0).to(dtype=guide.dtype)
-
-
-def _match_opening_luma_to_guide(
-    body: torch.Tensor,
-    guide: torch.Tensor,
-    *,
-    blend_frames: int = CONTINUITY_OPENING_LUMA_BLEND,
-) -> torch.Tensor:
-    """Deprecated path: fading gain on body opening caused post-seam brightness pump.
-
-    Kept for call-site compat; ``CONTINUITY_OPENING_LUMA_BLEND`` is 0. Prefer
-    ``_match_tail_luma_to_next``.
-    """
-    if (
-        body is None
-        or guide is None
-        or int(body.shape[0]) <= 0
-        or int(guide.shape[0]) <= 0
-        or int(blend_frames) <= 0
-    ):
-        return body
-    last = guide[-1]
-    if last.dim() == 4:
-        last = last[0]
-    if tuple(last.shape) != tuple(body[0].shape):
-        last = fit_canvas(last.unsqueeze(0), int(body.shape[2]), int(body.shape[1]))[0]
-    last_f = last.float()
-    body0 = body[0].float()
-    ref_mean = last_f.mean(dim=(0, 1)).clamp_min(1e-6)
-    body_mean = body0.mean(dim=(0, 1)).clamp_min(1e-6)
-    gain = (ref_mean / body_mean).clamp(
-        CONTINUITY_OPENING_LUMA_MIN_RATIO,
-        CONTINUITY_OPENING_LUMA_MAX_RATIO,
-    )
-    if float((gain - 1.0).abs().max().item()) < CONTINUITY_OPENING_LUMA_EPSILON:
-        return body
-    n = min(int(blend_frames), int(body.shape[0]))
-    out = body.clone()
-    for i in range(n):
-        t = float(i) / float(n - 1) if n > 1 else 0.0
-        g = gain * (1.0 - t) + torch.ones_like(gain) * t
-        out[i] = (out[i].float() * g).clamp(0.0, 1.0).to(dtype=out.dtype)
-    return out
 
 
 def _match_tail_luma_to_next(
@@ -1302,7 +1251,7 @@ def encode_tail_clip(
 ) -> torch.Tensor:
     """VAE-encode prev-tail clip for SCAIL lock (must already be Wan 4n+1 length)."""
     clip = fit_canvas(tail_clip, width, height)
-    aligned = wan_align_frame_count(int(clip.shape[0]))
+    aligned = minimax_align_frame_count(int(clip.shape[0]))
     if int(clip.shape[0]) > aligned:
         clip = clip[:aligned]
     elif int(clip.shape[0]) < aligned:
@@ -1347,7 +1296,7 @@ def apply_scail_prefix_to_latent(
             flat.float(), size=(h, w), mode="bilinear", align_corners=False
         )
         tail_latent = flat.to(dtype=tail_latent.dtype).reshape(b, c, f, h, w)
-    aligned_pixels = wan_align_frame_count(int(overlap_pixel_frames))
+    aligned_pixels = minimax_align_frame_count(int(overlap_pixel_frames))
     t_tail = min(
         int(tail_latent.shape[2]),
         _latent_frame_count(aligned_pixels),
@@ -1496,25 +1445,6 @@ def apply_continuity_to_core_conditioning(
     positive = node_helpers.conditioning_set_values(positive, payload)
     negative = node_helpers.conditioning_set_values(negative, payload)
     return positive, negative
-
-
-def apply_scail_continuity_core(
-    *,
-    plan: DirectorPlan,
-    seg: SegmentPlan,
-    prev_output: torch.Tensor | None,
-    positive,
-    negative,
-    vae,
-    width: int,
-    height: int,
-    ref_max_size: int = 848,
-    latent: dict[str, Any] | None = None,
-    source_luma_ref: torch.Tensor | None = None,
-) -> tuple[Any, Any, dict[str, Any] | None, str | None]:
-    """SCAIL is Wan-only; MiniMax H3 uses last-frame handoff in executor."""
-    del plan, seg, prev_output, vae, width, height, ref_max_size, source_luma_ref
-    return positive, negative, latent, None
 
 
 def _blend_opening_toward_last_frame(

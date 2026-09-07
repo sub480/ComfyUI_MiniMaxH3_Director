@@ -17,10 +17,6 @@ from .task_prompts import get_task_prompt_spec
 OUTPUT_LANGUAGE_EN = "English"
 OUTPUT_LANGUAGE_ZH = "中文"
 
-# Legacy combo values (workflows saved before checkbox migration).
-CHARACTER_DETAIL_NORMAL = "一般"
-CHARACTER_DETAIL_DETAILED = "详尽"
-
 DETAILED_MIN_TOTAL_HAN = 300
 DETAILED_MIN_APPEARANCE_HAN = 200
 
@@ -30,12 +26,11 @@ _DEFAULT_USER_TEMPLATE = (
     "English only.\n\nInstruction: {user_prompt}"
 )
 
-_TEMPLATE_ALIASES = {"mv2v": "v2v", "vrc2v": "rv2v"}
 _TASKS_REQUIRE_IMAGE_SLOTS = frozenset({"rv2v", "r2v", "r2i", "vi2v"})
 
 
 def _task_key(task_type: str) -> str:
-    return _TEMPLATE_ALIASES.get(task_type, task_type)
+    return task_type
 
 
 def uses_json_mode(task_type: str) -> bool:
@@ -82,30 +77,16 @@ def normalize_output_language(value: str) -> str:
     return "en"
 
 
-def normalize_character_detail_level(value: str) -> str:
-    """Legacy: return 'detailed' or 'normal'."""
-    v = (value or "").strip().lower()
-    if v in ("详尽", "详细", "detailed", "verbose", "full"):
-        return "detailed"
-    return "normal"
-
-
-def is_detailed_character_level(level: str) -> bool:
-    return normalize_character_detail_level(level) == "detailed"
-
-
 def normalize_character_feature_enhance(value) -> bool:
-    """Parse checkbox / legacy combo / bool."""
+    """Parse the character enhancement checkbox value."""
     if isinstance(value, bool):
         return value
     if value is None:
         return False
     v = str(value).strip().lower()
-    if v in ("true", "1", "yes", "on", "详尽", "详细", "detailed", "verbose", "full"):
+    if v in ("true", "1", "yes", "on"):
         return True
-    if v in ("false", "0", "no", "off", "一般", "normal", ""):
-        return False
-    return is_detailed_character_level(v)
+    return False
 
 
 def is_character_feature_enhance_enabled(
@@ -115,8 +96,6 @@ def is_character_feature_enhance_enabled(
 ) -> bool:
     if feature_enhance is not None:
         return normalize_character_feature_enhance(feature_enhance)
-    if character_detail_level is not None:
-        return is_detailed_character_level(character_detail_level)
     return False
 
 

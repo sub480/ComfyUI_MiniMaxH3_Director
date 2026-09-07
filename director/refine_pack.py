@@ -18,7 +18,7 @@ SEED_MODES = ("inherit", "offset")
 UPSCALE_METHODS = ("lanczos", "nvidia_rtx_vsr", "h3_latent")
 TILE_AXES = ("auto", "H", "W")
 MAX_REFINE_PASSES = 9999
-DEFAULT_N_TILES = 2
+DEFAULT_N_TILES = 4
 DEFAULT_TILE_OVERLAP = 8
 DEFAULT_MAX_SIZE_FOR_NO_TILE = 64
 DEFAULT_SEAM_REFINE_STEPS = 8
@@ -205,7 +205,7 @@ def latent_upscale_model_name(pack: dict[str, Any] | None) -> str:
 
 FOLLOW_DIRECTOR_ASPECT = "跟随导演台"
 CUSTOM_ASPECT_RATIO = "自定义"
-DEFAULT_UPSCALE_MEGAPIXELS = 1.0
+DEFAULT_UPSCALE_MEGAPIXELS = 2.0
 
 # Same labels/ratios as Director output bar / official ResolutionSelector.
 RESOLUTION_ASPECTS = (
@@ -224,21 +224,6 @@ ASPECT_RATIO_CHOICES = (
     *[row[0] for row in RESOLUTION_ASPECTS],
     CUSTOM_ASPECT_RATIO,
 )
-
-_ASPECT_ALIASES = {
-    "Follow Director": FOLLOW_DIRECTOR_ASPECT,
-    "follow": FOLLOW_DIRECTOR_ASPECT,
-    "Custom": CUSTOM_ASPECT_RATIO,
-    "自定义 (Custom)": CUSTOM_ASPECT_RATIO,
-    "1:1 (Square)": "1:1 (方形)",
-    "2:3 (Portrait Photo)": "2:3 (竖版照片)",
-    "3:2 (Photo)": "3:2 (横版照片)",
-    "3:4 (Portrait Standard)": "3:4 (竖版标准)",
-    "4:3 (Standard)": "4:3 (标准)",
-    "9:16 (Portrait Widescreen)": "9:16 (竖屏)",
-    "16:9 (Widescreen)": "16:9 (宽屏)",
-    "21:9 (Ultrawide)": "21:9 (超宽)",
-}
 
 
 def infer_upscale_target(base_w: int, base_h: int) -> tuple[int, int]:
@@ -299,22 +284,11 @@ def canvas_from_director_aspect(
 
 
 def normalize_aspect_ratio(aspect_ratio: str | None) -> str:
-    # Legacy workflows mapped old target_width=0 onto this combo.
-    if aspect_ratio in (None, "", 0, 0.0, "0", "0.0", False):
-        return FOLLOW_DIRECTOR_ASPECT
     v = str(aspect_ratio).strip()
-    if not v or v in {"0", "0.0", "None", "null"}:
+    if not v:
         return FOLLOW_DIRECTOR_ASPECT
-    if v in _ASPECT_ALIASES:
-        return _ASPECT_ALIASES[v]
     if v in ASPECT_RATIO_CHOICES:
         return v
-    prefix = v.split(" ", 1)[0]
-    for label, _, _ in RESOLUTION_ASPECTS:
-        if label == prefix or label.startswith(f"{prefix} "):
-            return label
-    if v.startswith("自定义") or v.lower() == "custom":
-        return CUSTOM_ASPECT_RATIO
     return FOLLOW_DIRECTOR_ASPECT
 
 
@@ -357,20 +331,15 @@ def resolve_refine_target(
     megapixels: float = DEFAULT_UPSCALE_MEGAPIXELS,
     width: int = 0,
     height: int = 0,
-    target_width: int = 0,
-    target_height: int = 0,
 ) -> tuple[int, int]:
     """Return (0, 0) to follow Director canvas; otherwise an explicit ×32 canvas."""
     ar = normalize_aspect_ratio(aspect_ratio)
-    legacy_w, legacy_h = int(target_width or 0), int(target_height or 0)
     w, h = int(width or 0), int(height or 0)
     if is_follow_director_aspect(ar):
-        if (legacy_w > 0 or legacy_h > 0) and w <= 0 and h <= 0:
-            return ensure_minimax_canvas(max(legacy_w, 32), max(legacy_h, 32))
         return 0, 0
     if is_custom_aspect_ratio(ar):
-        cw = w or legacy_w or 1280
-        ch = h or legacy_h or 720
+        cw = w or 1280
+        ch = h or 720
         return ensure_minimax_canvas(max(cw, 32), max(ch, 32))
     resolved = resolution_from_selector(ar, megapixels)
     if resolved is not None:
@@ -462,9 +431,7 @@ def pack_refine(
     megapixels: float = DEFAULT_UPSCALE_MEGAPIXELS,
     width: int = 0,
     height: int = 0,
-    target_width: int = 0,
-    target_height: int = 0,
-    skip_fl2v: bool = True,
+    skip_fl2v: bool = False,
     upscale_method: str = "h3_latent",
     sample_model=None,
     latent_upscale_model=None,
@@ -508,8 +475,6 @@ def pack_refine(
         megapixels=megapixels,
         width=width,
         height=height,
-        target_width=target_width,
-        target_height=target_height,
     )
     latent_mod, latent_name = resolve_latent_upscale_ref(latent_upscale_model)
     return {
@@ -589,7 +554,7 @@ def pack_director_builtin_refine(
         megapixels=widgets.get("refine_megapixels") or DEFAULT_UPSCALE_MEGAPIXELS,
         width=widgets.get("refine_width") or 1280,
         height=widgets.get("refine_height") or 720,
-        skip_fl2v=_as_bool(widgets.get("refine_skip_fl2v"), True),
+        skip_fl2v=_as_bool(widgets.get("refine_skip_fl2v"), False),
         n_tiles=n_tiles,
         tile_axis=widgets.get("refine_tile_axis") or "auto",
         tile_overlap=widgets.get("refine_tile_overlap", DEFAULT_TILE_OVERLAP),
@@ -684,7 +649,7 @@ def normalize_refine_pack(
         "megapixels": float(raw.get("megapixels") or DEFAULT_UPSCALE_MEGAPIXELS),
         "target_width": tw,
         "target_height": th,
-        "skip_fl2v": bool(raw.get("skip_fl2v", True)),
+        "skip_fl2v": bool(raw.get("skip_fl2v", False)),
         "upscale_method": method,
         "upscale_model": upscale,
         "has_upscale_model": upscale is not None,
@@ -728,7 +693,7 @@ def refine_will_sample(plan, seg) -> bool:
     pack = getattr(plan, "refine", None)
     if not isinstance(pack, dict) or not pack.get("enabled"):
         return False
-    if pack.get("skip_fl2v", True) and getattr(seg, "task_key", "") == "fl2v":
+    if pack.get("skip_fl2v", False) and getattr(seg, "task_key", "") == "fl2v":
         return False
     return True
 
@@ -776,7 +741,7 @@ def refine_fingerprint(plan) -> dict[str, Any]:
         else (pack.get("sigmas") or ""),
         "refine_sigmas_wired": bool(pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None),
         "refine_sample_model": bool(pack.get("has_sample_model") or pack.get("sample_model") is not None),
-        "refine_skip_fl2v": bool(pack.get("skip_fl2v", True)),
+        "refine_skip_fl2v": bool(pack.get("skip_fl2v", False)),
         "refine_n_tiles": int(pack.get("n_tiles") or DEFAULT_N_TILES),
         "refine_tile_axis": pack.get("tile_axis") or "auto",
         "refine_tile_overlap": int(pack.get("tile_overlap") or DEFAULT_TILE_OVERLAP),

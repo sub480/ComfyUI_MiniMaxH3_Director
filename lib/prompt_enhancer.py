@@ -48,7 +48,6 @@ DEFAULT_OPENAI_COMPAT_URL = "http://127.0.0.1:8080/v1"
 API_FORMAT_OLLAMA = "Ollama"
 API_FORMAT_ZHIPU = "智谱 GLM"
 API_FORMAT_OPENAI_COMPAT = "OpenAI Compatible"
-_LEGACY_OPENAI_FORMAT = "OpenAI / vLLM"
 DEFAULT_API_FORMAT = API_FORMAT_OLLAMA
 OPENAI_COMPAT_MODE_STANDARD = "标准"
 OPENAI_COMPAT_MODE_LLAMA_SWAP = "llama-swap"
@@ -79,8 +78,6 @@ def coerce_llm_url(value, default: str = DEFAULT_OLLAMA_URL) -> str:
 def default_url_for_format(api_format: str) -> str:
     if api_format == API_FORMAT_ZHIPU:
         return DEFAULT_ZHIPU_URL
-    if api_format == _LEGACY_OPENAI_FORMAT:
-        return DEFAULT_OPENAI_COMPAT_URL
     if api_format == API_FORMAT_OPENAI_COMPAT:
         return DEFAULT_OPENAI_COMPAT_URL
     if api_format == API_FORMAT_OLLAMA:
@@ -150,8 +147,6 @@ def llm_models_endpoint(url: str, api_format: str) -> str:
 
 
 def infer_api_format(url: str, explicit: str = DEFAULT_API_FORMAT) -> str:
-    if explicit == _LEGACY_OPENAI_FORMAT:
-        explicit = API_FORMAT_OPENAI_COMPAT
     if explicit in (API_FORMAT_OLLAMA, API_FORMAT_ZHIPU, API_FORMAT_OPENAI_COMPAT):
         return explicit
     base = coerce_llm_url(url)
@@ -620,7 +615,7 @@ def enhance_prompt_sync(
         replace_task
         and src_count > 0
         and bool(directive_slots)
-        and task_key in ("rv2v", "vrc2v")
+        and task_key == "rv2v"
         and bool(vision_images)
         and not (custom_template or "").strip()
     )
@@ -634,7 +629,7 @@ def enhance_prompt_sync(
         output_language=output_language,
     )
     if (
-        task_key in ("rv2v", "vrc2v")
+        task_key == "rv2v"
         and vision_images
         and (src_count > 0 or slots)
         and not (custom_template or "").strip()

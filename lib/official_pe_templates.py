@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-JSON_MODE_TASKS = frozenset({"r2v", "r2i", "rv2v", "vrc2v"})
+JSON_MODE_TASKS = frozenset({"r2v", "r2i", "rv2v"})
 T2V_SYSTEM_TASKS = frozenset({"t2v"})
 T2I_SYSTEM_TASKS = frozenset({"t2i"})
 
@@ -304,10 +304,8 @@ I'm providing 3 uniformly sampled frames of the source video for context.
 """
 ENHANCE_TEMPLATES = {
     "v2v": V2V_TEMPLATE,
-    "mv2v": V2V_TEMPLATE,
     "i2i": I2I_TEMPLATE,
     "rv2v": VR2V_TEMPLATE,
-    "vrc2v": VR2V_TEMPLATE,
     "r2v": R2V_TEMPLATE,
     "r2i": R2I_TEMPLATE,
     "vi2v": VI2V_TEMPLATE,

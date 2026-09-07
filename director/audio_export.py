@@ -52,19 +52,8 @@ def resolve_audio_mode(plan) -> str:
     (per-segment reference audio). Other tasks treat it as generate.
     """
     out = (getattr(plan, "raw", None) or {}).get("output") or {}
-    raw = str(out.get("audioMode") or out.get("audio_mode") or AUDIO_MODE_GENERATE).strip().lower()
-    aliases = {
-        "generate": AUDIO_MODE_GENERATE,
-        "generated": AUDIO_MODE_GENERATE,
-        "model": AUDIO_MODE_GENERATE,
-        "source": AUDIO_MODE_SOURCE,
-        "original": AUDIO_MODE_SOURCE,
-        "passthrough": AUDIO_MODE_SOURCE,
-        "mute": AUDIO_MODE_MUTE,
-        "silent": AUDIO_MODE_MUTE,
-        "silence": AUDIO_MODE_MUTE,
-    }
-    mode = aliases.get(raw, AUDIO_MODE_GENERATE)
+    raw = str(out.get("audioMode") or AUDIO_MODE_GENERATE).strip().lower()
+    mode = raw if raw in {AUDIO_MODE_GENERATE, AUDIO_MODE_SOURCE, AUDIO_MODE_MUTE} else AUDIO_MODE_GENERATE
     task_key = str(getattr(plan, "global_task_key", "") or "")
     if mode == AUDIO_MODE_SOURCE and task_key not in VIDEO_EDIT_AUDIO_TASKS:
         return AUDIO_MODE_GENERATE

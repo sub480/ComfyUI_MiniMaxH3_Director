@@ -600,7 +600,7 @@ def apply_segment_refine(
     pack = getattr(plan, "refine", None)
     if not isinstance(pack, dict) or not pack.get("enabled"):
         return samples, ""
-    if pack.get("skip_fl2v", True) and getattr(seg, "task_key", "") == "fl2v":
+    if pack.get("skip_fl2v", False) and getattr(seg, "task_key", "") == "fl2v":
         return samples, "refine skipped (fl2v)"
 
     mode = pack.get("mode") or "refine"

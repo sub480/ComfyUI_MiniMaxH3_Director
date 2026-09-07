@@ -53,7 +53,7 @@ def timeline_required_inputs() -> dict:
         "seed": (
             "INT",
             {
-                "default": 0,
+                "default": 42,
                 "min": 0,
                 "max": 0xFFFFFFFFFFFFFFFF,
                 "control_after_generate": True,

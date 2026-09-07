@@ -19,8 +19,6 @@ from .nodes.director_groups import (
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3Director": MiniMaxH3Director,
     "MiniMaxH3DirectorRefine": MiniMaxH3DirectorRefine,
-    # Legacy type id kept so older workflows still load.
-    "ComfyMiniMaxH3Director": MiniMaxH3Director,
     "MiniMaxH3DirectorConditioning": MiniMaxH3DirectorConditioning,
     "MiniMaxH3DirectorPlannerConditioning": MiniMaxH3DirectorPlannerConditioning,
     "MiniMaxH3DirectorGroupImageToVideo": MiniMaxH3DirectorGroupImageToVideo,
@@ -33,7 +31,6 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3Director": "MiniMaxH3Director",
     "MiniMaxH3DirectorRefine": "MiniMax H3 Director Refine",
-    "ComfyMiniMaxH3Director": "MiniMaxH3Director",
     "MiniMaxH3DirectorConditioning": "MiniMax H3 Director Conditioning",
     "MiniMaxH3DirectorPlannerConditioning": "MiniMax H3 Director Planner Conditioning",
     "MiniMaxH3DirectorGroupImageToVideo": "MiniMax H3 Director Group (Image to Video)",

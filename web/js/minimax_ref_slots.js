@@ -11,7 +11,6 @@ import {
 } from "./minimax_gen_timeline.js";
 
 export const SLOT_DND_MIME = "application/x-minimax-media-slot";
-export const SLOT_DND_MIME_LEGACY = "application/x-minimax-ref-slot";
 
 export const SLOT_UI_STYLES = `
 .bd-slot-load{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:rgba(0,0,0,.78);color:#e8e8e8;font-size:10px;line-height:1.35;text-align:center;padding:8px 6px;pointer-events:auto;box-sizing:border-box}
@@ -252,7 +251,7 @@ function parseSlotPayload(raw) {
 
 export function isSlotDnD(types) {
     const list = [...(types || [])];
-    return list.includes(SLOT_DND_MIME) || list.includes(SLOT_DND_MIME_LEGACY);
+    return list.includes(SLOT_DND_MIME);
 }
 
 export function bindKindSlotDnD(el, {
@@ -279,7 +278,6 @@ export function bindKindSlotDnD(el, {
             from: slotIndex,
         });
         e.dataTransfer.setData(SLOT_DND_MIME, payload);
-        e.dataTransfer.setData(SLOT_DND_MIME_LEGACY, payload);
         e.dataTransfer.setData("text/plain", payload);
         e.dataTransfer.effectAllowed = "move";
         el.classList.add("dragging");
@@ -303,7 +301,6 @@ export function bindKindSlotDnD(el, {
         e.preventDefault();
         e.stopPropagation();
         const raw = e.dataTransfer.getData(SLOT_DND_MIME)
-            || e.dataTransfer.getData(SLOT_DND_MIME_LEGACY)
             || e.dataTransfer.getData("text/plain");
         const data = parseSlotPayload(raw);
         if (data?.kind === kind && data.scope === scope) {

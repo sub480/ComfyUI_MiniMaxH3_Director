@@ -44,7 +44,6 @@ from .plan import (
     resolve_segment_pass_mode,
     ref_audios_to_dict,
     ref_videos_to_dict,
-    reference_video_for_segment,
     refs_to_kwargs_for_context,
     reinforce_r2v_prompt,
     reinforce_rv2v_prompt,
@@ -231,13 +230,7 @@ def _build_minimax_inputs(
             ref_images[f"ref_image_{idx}"] = tensor[:1] if tensor.ndim == 4 else tensor
         if not ref_images:
             ref_images = None
-        # Prefer multi-slot ref_videos (r2v batch cards); fall back to legacy single meta.
         ref_videos = ref_videos_to_dict(getattr(seg, "ref_videos", None) or [])
-        if not ref_videos:
-            nframes = max(5, int(getattr(seg, "frame_count", 0) or plan.total_frames or 124))
-            ref_video = reference_video_for_segment(plan, seg, num_frames=nframes)
-            if ref_video is not None and ref_video.shape[0] > 0:
-                ref_videos = {"ref_video_0": ref_video}
         ref_audios = ref_audios_to_dict(
             getattr(seg, "ref_audios", None) or [],
             cache=getattr(plan, "audio_decode_cache", None),
@@ -760,10 +753,6 @@ def execute_director_plan_core(
 
             has_start = any(getattr(r, "index", None) == 0 for r in (seg.refs or []))
             has_end = any(getattr(r, "index", None) == 1 for r in (seg.refs or []))
-            if not has_start and not has_end and seg.refs:
-                # Legacy packs without explicit indices: [start] or [start, end].
-                has_start = True
-                has_end = len(seg.refs) >= 2
             positive_prompt = reinforce_fl2v_prompt(
                 positive_prompt,
                 has_end_frame=has_end,
@@ -1409,8 +1398,8 @@ def execute_director_plan_core(
         if (
             live_tae_preview
             and seg.task_key in {
-                "t2v", "i2v", "r2v", "fl2v", "v2v", "mv2v", "ads2v",
-                "rv2v", "vrc2v", "vi2v",
+                "t2v", "i2v", "r2v", "fl2v", "v2v", "ads2v",
+                "rv2v", "vi2v",
             }
             and decoded.shape[0] >= 1
         ):

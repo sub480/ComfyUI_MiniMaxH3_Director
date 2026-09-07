@@ -16,11 +16,6 @@ def minimax_align_frame_count(frame_count: int) -> int:
     return n
 
 
-def wan_align_frame_count(frame_count: int) -> int:
-    """Legacy alias — MiniMax H3 uses 17k+5, not Wan 4n+1."""
-    return minimax_align_frame_count(frame_count)
-
-
 def pad_or_trim_frames(frames: torch.Tensor, target_len: int) -> torch.Tensor:
     """Trim to at most target_len frames. Does not fabricate last-frame duplicates."""
     target_len = max(0, int(target_len))

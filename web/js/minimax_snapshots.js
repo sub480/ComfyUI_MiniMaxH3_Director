@@ -43,8 +43,8 @@ export function bindSnapshotActions(editor) {
     modal.className = "bd-snapshot-modal hidden";
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
+    modal.inert = true;
      modal.innerHTML = `<div class="bd-snapshot-box"><header><strong data-i18n="snapshot.title">快照</strong><button class="bd-icon-btn" data-snap="close" aria-label="×">×</button></header><div class="bd-snapshot-body"><aside><button class="bd-btn bd-btn-primary" data-snap="save" data-i18n="snapshot.save">保存当前配置</button><div class="bd-snapshot-count" data-snap="count"></div><div class="bd-snapshot-list" data-snap="list"></div></aside><section><div class="bd-snapshot-detail" data-snap="detail"></div><div class="bd-snapshot-actions"><button class="bd-btn bd-btn-primary" data-snap="restore" data-i18n="snapshot.restore">还原</button><button class="bd-btn" data-snap="export" data-i18n="snapshot.export">导出</button><button class="bd-btn" data-snap="import" data-i18n="snapshot.import">导入</button><button class="bd-btn" data-snap="rename" data-i18n="snapshot.rename">重命名</button><button class="bd-btn" data-snap="duplicate" data-i18n="snapshot.duplicate">复制</button><button class="bd-btn bd-btn-danger" data-snap="remove" data-i18n="snapshot.remove">删除</button></div></section></div></div>`;
-    document.body.appendChild(modal);
     editor._snapshotModal = modal;
     let items = [];
     let selected = null;
@@ -79,19 +79,7 @@ export function bindSnapshotActions(editor) {
         cancel.onclick = () => finish(false); confirm.onclick = () => finish(true);
         bar.append(cancel, confirm);
         modal.querySelector(".bd-snapshot-actions").before(bar);
-        confirm.focus();
     });
-    const recoverDesktopFocus = (target = null) => {
-        // ComfyUI Desktop's WebView can retain the canvas keyboard capture
-        // after a native confirm or a graph/layout rebuild.  A real window
-        // focus transition normally clears it; reproduce that transition
-        // without requiring the user to alt-tab.
-        window.focus?.();
-        setTimeout(() => {
-            window.focus?.();
-            target?.focus?.({ preventScroll: true });
-        }, 0);
-    };
     const setBusy = (value) => { busy = value; buttons.forEach((button) => { if (button.dataset.snap !== "close") button.disabled = value; }); };
     const downloadSnapshot = async (snapshot) => {
         const response = await api.fetchApi(`/minimax/director/snapshots/export?id=${encodeURIComponent(snapshot.id)}`);
@@ -170,14 +158,7 @@ export function bindSnapshotActions(editor) {
                 selected = result.id;
             });
         };
-        const keepInputFocus = (event) => {
-            event.stopPropagation();
-            setTimeout(() => { if (!finished && input.isConnected) input.focus(); }, 0);
-        };
-        input.addEventListener("pointerdown", keepInputFocus, true);
-        input.addEventListener("mousedown", keepInputFocus, true);
         input.addEventListener("keydown", (event) => {
-            event.stopImmediatePropagation();
             if (event.key === "Enter") { event.preventDefault(); finish(true); }
             if (event.key === "Escape") { event.preventDefault(); finish(false); }
         }, true);
@@ -214,30 +195,37 @@ export function bindSnapshotActions(editor) {
     modal.querySelector('[data-snap="remove"]').onclick = () => operation(async () => {
         const snapshot = selectedSnapshot(); if (!snapshot || !await confirmInView(t("snapshot.removeConfirm", { name: snapshot.name }))) return;
         await request("/minimax/director/snapshots/delete", { id: snapshot.id }); selected = null;
-        recoverDesktopFocus(modal.querySelector('[data-snap="save"]'));
     });
     modal.querySelector('[data-snap="restore"]').onclick = () => operation(async () => {
         const snapshot = selectedSnapshot(); if (!snapshot || !await confirmInView(t("snapshot.restoreConfirm", { name: snapshot.name }))) return;
         const data = await request("/minimax/director/snapshots/restore", { id: snapshot.id });
         if (!data?.timeline) throw new Error(t("snapshot.restoreError"));
-        modal.classList.add("hidden");
+        close();
         editor.applyImportedTimeline(data.timeline, data.widgets || {});
-        recoverDesktopFocus(editor.globalPrompt);
     });
-    const close = () => modal.classList.add("hidden");
+    const close = () => {
+        if (modal.contains(document.activeElement)) document.activeElement.blur?.();
+        modal.classList.add("hidden");
+        modal.inert = true;
+        // Remove the overlay completely instead of leaving a hidden fixed DOM
+        // subtree behind.  ComfyUI Desktop's shortcut routing is sensitive to
+        // stale DOM-widget focus/ownership after modal close.
+        modal.remove();
+    };
     modal.querySelector('[data-snap="close"]').onclick = close;
     modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
-    const keydown = (event) => { if (!modal.classList.contains("hidden") && event.key === "Escape") { event.preventDefault(); close(); } };
-    window.addEventListener("keydown", keydown, true);
+    const keydown = (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } };
+    modal.addEventListener("keydown", keydown);
     const unsub = onLocaleChange(() => { applyI18nDom(modal); render(); });
-    editor._snapshotCleanup = () => { unsub?.(); window.removeEventListener("keydown", keydown, true); modal.remove(); };
+    editor._snapshotCleanup = () => { unsub?.(); modal.remove(); };
     const open = async () => {
         if (busy) return;
+        if (!modal.isConnected) document.body.appendChild(modal);
         modal.classList.remove("hidden");
+        modal.inert = false;
         setBusy(true);
         try { await load(); } catch (error) { await alertError(error); }
         finally { setBusy(false); }
-        modal.querySelector('[data-snap="save"]').focus();
     };
     applyI18nDom(modal); render();
     return open;

@@ -177,17 +177,13 @@ export function wireMediaDuration(mediaEl, durEl, onReady) {
     if (mediaEl.readyState >= 1) apply();
 }
 
-/**
- * User-facing seconds (1 decimal). durationSec is the source of truth when set;
- * only fall back to frames for legacy rows that never stored durationSec.
- */
-function resolveSegmentDurationSec(seg, defFc) {
+/** User-facing seconds (1 decimal). */
+function resolveSegmentDurationSec(seg) {
     if (seg.durationSec != null && Number.isFinite(Number(seg.durationSec))) {
         const { durationSec } = durationToClampedMiniMaxFrames(seg.durationSec, 24);
         return durationSec;
     }
-    const fc = parseInt(seg.frameCount ?? seg.length ?? seg._videoFrameCount ?? defFc, 10) || defFc;
-    return preferredDurationSecFromFrames(fc, 24);
+    return defaultDurationSec(resolveTaskKey(seg.taskType || ""));
 }
 
 /** Apply seconds to a segment by index (avoids stale closures after normalize). */
@@ -613,7 +609,7 @@ export function mountImageBatchPanel(root) {
     panel.dataset.r = "batch-panel";
     panel.innerHTML = `
         <div class="bd-batch-toolbar">
-            <button type="button" class="bd-btn bd-btn-primary" data-a="batch-add" data-i18n="batch.addPromptGroup">+ 添加提示词组</button>
+            <button type="button" class="bd-btn bd-btn-primary hidden" data-a="batch-add" data-i18n="toolbar.addShot">添加一组</button>
             <button type="button" class="bd-btn bd-batch-run-select hidden" data-a="batch-run-select" data-i18n="toolbar.runSelect" data-i18n-title="tooltip.batchRunSelect">选择运行</button>
             <label class="bd-batch-run-all hidden" data-r="batch-run-all-wrap" data-i18n-title="tooltip.runSelectAll">
                 <input type="checkbox" data-r="batch-run-all-cb">
@@ -722,7 +718,7 @@ export function ensureImageBatchTimeline(editor) {
     for (const seg of editor.timeline.segments) {
         if (isVideoBatchTask(taskKey)) {
             const { frames, durationSec } = durationToClampedMiniMaxFrames(
-                resolveSegmentDurationSec(seg, defFc),
+                resolveSegmentDurationSec(seg),
                 24,
             );
             seg.durationSec = durationSec;
@@ -740,8 +736,8 @@ export function ensureImageBatchTimeline(editor) {
         // Do NOT copy r2v refs into i2v/t2v here — each task keeps its own workspace.
         // Backend ignores refs on i2v/t2v; r2v snapshots restore them on switch-back.
         seg.refs = seg.refs || [];
-        seg.refAudios = seg.refAudios || seg.ref_audios || [];
-        seg.refVideos = seg.refVideos || seg.ref_videos || [];
+        seg.refAudios = seg.refAudios || [];
+        seg.refVideos = seg.refVideos || [];
         seg.previewB64 = seg.previewB64 || "";
         seg.previewFrames = seg.previewFrames || [];
         seg.previewFps = seg.previewFps || parseFloat(editor.frameRateWidget?.value || 24);
@@ -773,7 +769,7 @@ export function normalizeImageBatchSegments(editor) {
         let durationSec;
         if (isVideo) {
             const resolved = durationToClampedMiniMaxFrames(
-                clamp(resolveSegmentDurationSec(seg, defFc) || defSec, minDurationSec(), maxDurationSec()),
+                clamp(resolveSegmentDurationSec(seg) || defSec, minDurationSec(), maxDurationSec()),
                 24,
             );
             fc = resolved.frames;
@@ -1009,7 +1005,7 @@ function clearSegFl2vImage(editor, index, kind) {
         seg.endImage = null;
     } else {
         seg.startImage = null;
-        // genImage is the i2v/legacy mirror of the first frame. Drop it so
+        // genImage mirrors the i2v first frame. Drop it so
         // last-only groups cannot resurrect the same picture as image0.
         if (seg.genImage) seg.genImage = { imageFile: "" };
         seg.imageFile = "";
@@ -1892,7 +1888,7 @@ function drawFrame(canvas, img) {
 
 export const LIVE_PREVIEW_SPEED_MIN = 0;
 export const LIVE_PREVIEW_SPEED_MAX = 1;
-export const LIVE_PREVIEW_SPEED_DEFAULT = 1;
+export const LIVE_PREVIEW_SPEED_DEFAULT = 0.25;
 export const LIVE_PREVIEW_SPEED_STEP = 0.05;
 
 export function clampLivePreviewSpeed(v) {
@@ -2206,7 +2202,6 @@ function executedPromptTaskKey(editor, seg) {
     const globalKey = resolveTaskKey(
         editor?.getTaskKey?.()
         || editor?.timeline?.global?.taskType
-        || editor?.timeline?.global?.task_type
         || "",
     );
     if (isMixedTask(globalKey)) return resolveMixedGroupKey(seg);
@@ -2383,7 +2378,7 @@ function renderBatchGroupPicker(editor, ctx) {
         const meta = document.createElement("span");
         meta.className = "bd-batch-pick-meta";
         if (isVideo) {
-            const sec = resolveSegmentDurationSec(seg, defaultFrameCount(key));
+            const sec = resolveSegmentDurationSec(seg);
             meta.textContent = `${Number(sec).toFixed(1)}s`;
         } else {
             meta.textContent = `#${index + 1}`;
@@ -2823,11 +2818,9 @@ export function renderImageBatchGroups(editor) {
     }
     const addBtn = editor.batchPanel?.querySelector('[data-a="batch-add"]');
     if (addBtn) {
-        addBtn.textContent = t(key === "r2v" ? "batch.addRefGroup" : "batch.addPromptGroup");
-        addBtn.setAttribute("data-i18n", key === "r2v" ? "batch.addRefGroup" : "batch.addPromptGroup");
-        // r2v / mixed: add from toolbar (left of task select), like fl2v.
+        // Video batch modes add from the shared top toolbar, matching mixed mode.
         // External groups: never add UI cards (graph is source of truth).
-        addBtn.classList.toggle("hidden", key === "r2v" || mixed || externalLocked);
+        addBtn.classList.toggle("hidden", isVideo || externalLocked);
         addBtn.disabled = externalLocked;
     }
 
@@ -3008,7 +3001,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         if (isVideo) {
             const secRow = document.createElement("label");
             secRow.className = "bd-batch-fc";
-            const curSec = resolveSegmentDurationSec(seg, defaultFrameCount(cardKey || key));
+            const curSec = resolveSegmentDurationSec(seg);
             const { frames, durationSec: syncedSec } = durationToClampedMiniMaxFrames(curSec, 24);
             const playSec = framesToDurationSec(frames, 24);
             seg.durationSec = syncedSec;
@@ -3672,12 +3665,11 @@ export function setR2vToolbar(editor, enabled) {
         addBtn.classList.toggle("hidden", !enabled || externalLocked);
         addBtn.disabled = !enabled || externalLocked;
         if (enabled) {
-            const mixed = !!editor.isMixedMode?.();
-            const addKey = mixed ? "toolbar.addShot" : "toolbar.addRefGroup";
+            const addKey = "toolbar.addShot";
             addBtn.textContent = t(addKey);
             addBtn.setAttribute("data-i18n", addKey);
-            addBtn.setAttribute("data-i18n-title", mixed ? "tooltip.addShot" : "tooltip.addRefGroup");
-            addBtn.title = t(mixed ? "tooltip.addShot" : "tooltip.addRefGroup");
+            addBtn.setAttribute("data-i18n-title", "tooltip.addShot");
+            addBtn.title = t("tooltip.addShot");
         }
     }
     const batchAdd = editor.batchPanel?.querySelector('[data-a="batch-add"]');
@@ -3688,21 +3680,21 @@ export function setR2vToolbar(editor, enabled) {
 export function updateR2vToolbarBtns(editor) {
     const addBtn = editor?.root?.querySelector?.('[data-a="r2v-add-group"]');
     const externalLocked = !!(editor?.hasExternalI2vGroups?.() || editor?.hasExternalR2vGroups?.());
-    const isR2v = !!editor?.isR2vBatch?.();
-    const mixed = !!editor?.isMixedMode?.();
-    const show = (isR2v || mixed) && !externalLocked;
+    const isVideoBatch = !!editor?.isImageBatch?.()
+        && isVideoBatchTask(editor?.getTaskKey?.());
+    const show = isVideoBatch && !externalLocked;
     if (addBtn) {
         addBtn.classList.toggle("hidden", !show);
         addBtn.disabled = !show;
         if (show) {
-            const addKey = mixed ? "toolbar.addShot" : "toolbar.addRefGroup";
+            const addKey = "toolbar.addShot";
             addBtn.textContent = t(addKey);
             addBtn.setAttribute("data-i18n", addKey);
-            addBtn.setAttribute("data-i18n-title", mixed ? "tooltip.addShot" : "tooltip.addRefGroup");
-            addBtn.title = t(mixed ? "tooltip.addShot" : "tooltip.addRefGroup");
+            addBtn.setAttribute("data-i18n-title", "tooltip.addShot");
+            addBtn.title = t("tooltip.addShot");
         }
     }
-    if (!isR2v && !mixed) return;
+    if (!isVideoBatch) return;
 
     const del = editor?.root?.querySelector?.('[data-a="del"]');
     if (!del) return;
@@ -3712,15 +3704,15 @@ export function updateR2vToolbarBtns(editor) {
     del.classList.toggle("bd-disabled", !canDelete);
     del.textContent = t("toolbar.deleteSelectedGroup");
     del.setAttribute("data-i18n", "toolbar.deleteSelectedGroup");
-    del.setAttribute("data-i18n-title", "tooltip.deleteSelectedR2vGroup");
-    del.title = t("tooltip.deleteSelectedR2vGroup");
+    del.setAttribute("data-i18n-title", "tooltip.deleteSelectedPromptGroup");
+    del.title = t("tooltip.deleteSelectedPromptGroup");
 }
 
 api.addEventListener?.("executed", () => {
     const graph = app.graph ?? app.canvas?.graph;
     for (const node of graph?._nodes ?? graph?.nodes ?? []) {
         const cls = node?.comfyClass || node?.type || "";
-        if (cls === "MiniMaxH3Director" || cls === "ComfyMiniMaxH3Director") {
+        if (cls === "MiniMaxH3Director") {
             scheduleDirectorPassCacheRefresh(node, 250);
         }
     }

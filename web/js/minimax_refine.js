@@ -14,7 +14,7 @@ import {
 } from "./minimax_image_batch.js";
 
 const REFINE_CLASS = "MiniMaxH3DirectorRefine";
-const DIRECTOR_CLASSES = new Set(["MiniMaxH3Director", "ComfyMiniMaxH3Director"]);
+const DIRECTOR_CLASSES = new Set(["MiniMaxH3Director"]);
 const FOLLOW_DIRECTOR_ASPECT = "跟随导演台";
 
 function isRefineNode(node) {
@@ -126,40 +126,7 @@ function migrateRefineWidgetOrder(node) {
     }
 }
 
-function migrateLegacyPrePassesValues(node) {
-    const seedW = widgetByName(node, "seed_mode");
-    const aspectW = widgetByName(node, "aspect_ratio");
-    const mpW = widgetByName(node, "megapixels");
-    const widthW = widgetByName(node, "width");
-    const heightW = widgetByName(node, "height");
-    const skipW = widgetByName(node, "skip_fl2v");
-    const rawSeed = widgetValue(seedW);
-    if (!seedW || SEED_MODE_VALUES.has(String(rawSeed ?? "").trim().toLowerCase())) return;
-
-    // Workflows saved before `passes` was inserted load every following value
-    // one slot early: seed_mode gets the aspect ratio, aspect gets MP, etc.
-    if (ASPECT_CHOICES.has(rawSeed)) {
-        const rawAspect = widgetValue(aspectW);
-        const rawMp = widgetValue(mpW);
-        const rawWidth = widgetValue(widthW);
-        const rawHeight = widgetValue(heightW);
-        seedW.value = "inherit";
-        if (aspectW) aspectW.value = rawSeed;
-        const mp = Number(rawAspect);
-        if (mpW && Number.isFinite(mp) && mp >= 0.1 && mp <= 16) mpW.value = mp;
-        const width = Number(rawMp);
-        if (widthW && Number.isFinite(width) && width >= 32 && width <= 8192) widthW.value = width;
-        const height = Number(rawWidth);
-        if (heightW && Number.isFinite(height) && height >= 32 && height <= 8192) heightW.value = height;
-        if (skipW && (rawHeight === true || rawHeight === false)) skipW.value = rawHeight;
-        node._mmxRecoveredLegacyRefineValues = true;
-        return;
-    }
-    seedW.value = "inherit";
-}
-
 function migrateRefineWidgets(node) {
-    migrateLegacyPrePassesValues(node);
     migrateRefineWidgetOrder(node);
     const seedW = widgetByName(node, "seed_mode");
     const aspectW = widgetByName(node, "aspect_ratio");
@@ -483,6 +450,11 @@ export function closePassPanels(editor, except) {
         editor._mmxPreviewPanelOpen = false;
         editor.previewPanelEl?.classList.add("hidden");
     }
+    if (except !== "continuity") {
+        editor._mmxContinuityPanelOpen = false;
+        editor.segmentContinuityPanelEl?.classList.add("hidden");
+        if (editor.segmentContinuityPanelEl) editor.segmentContinuityPanelEl.hidden = true;
+    }
 }
 
 export function mountDirectorSamplePanel(editor) {
@@ -681,6 +653,7 @@ export function mountDirectorRefinePanel(editor) {
         refinePanelFieldHtml("height", "widget.refineHeight", "高",
             `<input type="number" data-w="refine_height" min="0" max="8192" step="32">`),
         `<label class="bd-refine-field row" data-show="skip"><input type="checkbox" data-w="refine_skip_fl2v"><span data-i18n="widget.refineSkipFl2v">跳过 fl2v</span></label>`,
+        `<div class="bd-refine-divider" data-show="tile-section"></div>`,
         `<label class="bd-refine-field row" data-show="tile"><input type="checkbox" data-w="refine_tile"><span data-i18n="widget.refineTile">分块</span></label>`,
         refinePanelFieldHtml("tiles", "widget.refineNTiles", "分块数",
             `<input type="number" data-w="refine_n_tiles" min="1" max="8" step="1">`),
@@ -817,6 +790,7 @@ function updateRefinePanelVisibility(editor) {
         width: needsCanvas && custom,
         height: needsCanvas && custom,
         skip: true,
+        "tile-section": !latentOnly,
         tile: !latentOnly,
         tiles: tileOn,
         axis: tileOn,

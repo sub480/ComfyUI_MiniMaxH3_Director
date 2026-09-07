@@ -668,22 +668,6 @@ def extract_timeline_audio(
     return {"waveform": merged, "sample_rate": sr}
 
 
-def extract_audio_segment(path: str, start_sec: float, duration_sec: float) -> dict[str, Any] | None:
-    """Extract a time range from a file (legacy helper)."""
-    if duration_sec <= 0:
-        return None
-    full = _load_full_audio(path)
-    if full is None:
-        return None
-    sr = int(full["sample_rate"])
-    i0 = max(0, int(round(float(start_sec) * sr)))
-    n = max(1, int(round(float(duration_sec) * sr)))
-    return {
-        "waveform": _slice_samples(full["waveform"], src_start=i0, n_samples=n),
-        "sample_rate": sr,
-    }
-
-
 def diagnose_source_audio_failure(
     timeline: dict,
     logical_start: int,

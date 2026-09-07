@@ -1,14 +1,11 @@
 """First/last-frame (fl2v) timeline → DirectorPlan.
 
-Preferred schema: timeline.shots[] — each shot is one sampling group:
+Schema: timeline.shots[] — each shot is one sampling group:
   - startImage (optional): image0 first keyframe
   - endImage (optional): image1 last keyframe; official FL2VA allows last-only
   - neither start nor end: text-to-video on the same fl2va path (prompt only;
     with「段间引导」+「引用上段」the previous tail is pinned as motion context)
-  - durationSec: per-shot length; totalFrames ≈ sum of shot frames
-
-Legacy flat keyframes/segments (isStartFrame / isEndFrame) still supported via
-_expand_shots when shots[] is absent.
+    - durationSec: per-shot length; totalFrames ≈ sum of shot frames
 """
 
 from __future__ import annotations
@@ -20,7 +17,7 @@ import torch
 
 from ..lib.image_prep import assert_minimax_canvas, fit_canvas, fit_video_long_edge, resolve_output_dimensions
 from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
-from .frame_align import H3_FPS
+from .frame_align import H3_FPS, minimax_align_frame_count
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.fl2v")
 
@@ -50,8 +47,8 @@ def _image_ref_from_raw(raw: Any) -> dict[str, Any] | None:
         return {"imageFile": path, "imageB64": "", "width": 0, "height": 0} if path else None
     if not isinstance(raw, dict):
         return None
-    image_file = str(raw.get("imageFile") or raw.get("image_file") or "").strip()
-    image_b64 = str(raw.get("imageB64") or raw.get("image_b64") or "").strip()
+    image_file = str(raw.get("imageFile") or "").strip()
+    image_b64 = str(raw.get("imageB64") or "").strip()
     if not image_file and not image_b64:
         return None
     return {
@@ -71,10 +68,10 @@ def _normalize_shots(raw_shots: list | None, *, frame_rate: float = H3_FPS) -> l
     for i, item in enumerate(raw_shots):
         if not isinstance(item, dict):
             continue
-        start = _image_ref_from_raw(item.get("startImage") or item.get("start_image"))
-        end = _image_ref_from_raw(item.get("endImage") or item.get("end_image"))
+        start = _image_ref_from_raw(item.get("startImage"))
+        end = _image_ref_from_raw(item.get("endImage"))
         try:
-            dur = float(item.get("durationSec") or item.get("duration_sec") or DEFAULT_FL2V_DURATION_SEC)
+            dur = float(item.get("durationSec") or DEFAULT_FL2V_DURATION_SEC)
         except (TypeError, ValueError):
             dur = DEFAULT_FL2V_DURATION_SEC
         dur = max(0.1, dur)
@@ -112,18 +109,16 @@ def _normalize_shots(raw_shots: list | None, *, frame_rate: float = H3_FPS) -> l
             "prompt": (item.get("prompt") or "").strip(),
             "negativePrompt": (
                 item.get("negativePrompt")
-                or item.get("negative_prompt")
                 or DEFAULT_FL2V_NEGATIVE
             ).strip()
             or DEFAULT_FL2V_NEGATIVE,
         }
         if "continuityFromPrev" in item:
             row["continuityFromPrev"] = item.get("continuityFromPrev")
-        elif "continuity_from_prev" in item:
-            row["continuity_from_prev"] = item.get("continuity_from_prev")
         out.append(row)
         cursor += fc
     return out
+
 
 # Hard locks for every fl2v shot (re-applied after PE). Community cue words:
 # MiniMax H3 locks first/last via MiniMaxH3ImageToVideo keyframe latents.
@@ -151,36 +146,16 @@ L2V_PROMPT_SUFFIX = (
     "完全保持尾帧：结尾锁定尾帧。"
 )
 
-# Legacy wraps from earlier builds — strip so re-runs do not stack.
-_LEGACY_FL2V_WRAPS = (
-    "完全保持首尾帧。"
-    "视频开始完全按照image0的构图，不修改，视频结束完全保持image1。"
-    "第一帧必须与image0像素级一致，最后一帧必须与image1像素级一致；"
-    "image0/image1是固定首尾帧，不是参考图，禁止改动首尾构图、主体外观与机位。",
-    "完全保持首帧。"
-    "视频开始完全按照image0的构图，不修改。"
-    "第一帧必须与image0像素级一致；image0是固定首帧，不是参考图，禁止改动首帧构图与主体外观。",
-    "视频开始完全按照image0的构图，不修改，视频结束完全保持image1。",
-    "视频开始完全按照image0的构图，不修改，视频结束完全保持image1的构图。",
-    "视频结束完全保持image1的构图。",
-    "严格要求：第一帧必须与image0一致，最后一帧必须与image1一致；"
-    "中间仅做从image0到image1的自然过渡，不得改变首尾构图与主体外观。",
-    "视频开始完全按照image0的构图，不修改。"
-    "严格要求：第一帧必须与image0一致；后续运动从该首帧自然展开，不得偏离image0的构图与主体外观。",
-    "再次强调：开头锁定image0，结尾锁定image1。",
-    "再次强调：开头锁定image0。",
-)
-
 
 def _strip_fl2v_wraps(text: str) -> str:
     changed = True
     while changed and text:
         changed = False
-        for p in (FLF_PROMPT_PREFIX, I2V_PROMPT_PREFIX, L2V_PROMPT_PREFIX, *_LEGACY_FL2V_WRAPS):
+        for p in (FLF_PROMPT_PREFIX, I2V_PROMPT_PREFIX, L2V_PROMPT_PREFIX):
             if text.startswith(p):
                 text = text[len(p) :].strip()
                 changed = True
-        for s in (FLF_PROMPT_SUFFIX, I2V_PROMPT_SUFFIX, L2V_PROMPT_SUFFIX, *_LEGACY_FL2V_WRAPS):
+        for s in (FLF_PROMPT_SUFFIX, I2V_PROMPT_SUFFIX, L2V_PROMPT_SUFFIX):
             if text.endswith(s):
                 text = text[: -len(s)].strip()
                 changed = True
@@ -308,11 +283,9 @@ def _build_fl2v_endpoint_source(
     image0 and last frame is image1 (middle held at image0) gives the model a much
     stronger first/last-frame signal — especially on long later shots.
     """
-    from .plan import wan_align_frame_count
-
     if start_img.ndim == 3:
         start_img = start_img.unsqueeze(0)
-    n = wan_align_frame_count(max(MIN_FL2V_FRAMES, int(frame_count)))
+    n = minimax_align_frame_count(max(MIN_FL2V_FRAMES, int(frame_count)))
     # Hold start through the body (i2v-like), snap last frame to end when present.
     clip = start_img[:1].expand(n, -1, -1, -1).contiguous().clone()
     if end_img is not None:
@@ -351,13 +324,8 @@ def load_fl2v_segment_media(
     from .plan import SegmentRef
 
     raw = seg_data if isinstance(seg_data, dict) else {}
-    start = _image_ref_from_raw(raw.get("startImage") or raw.get("start_image"))
-    end = _image_ref_from_raw(raw.get("endImage") or raw.get("end_image"))
-    # Legacy packs stored the first frame only in genImage. Mixed-mode cards always
-    # have startImage (possibly null): do not promote leftover genImage into image0,
-    # or last-only shots get pinned as first+last with the same picture.
-    if start is None and "startImage" not in raw and "start_image" not in raw:
-        start = _image_ref_from_raw(raw.get("genImage") or raw.get("gen_image"))
+    start = _image_ref_from_raw(raw.get("startImage"))
+    end = _image_ref_from_raw(raw.get("endImage"))
     start_img = None
     if start is not None:
         start_img = _fit_image(
@@ -413,175 +381,10 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
-def _normalize_keyframes(raw: list[dict] | None) -> list[dict]:
-    out: list[dict] = []
-    for idx, item in enumerate(raw or []):
-        if not isinstance(item, dict):
-            continue
-        image_file = (
-            (item.get("imageFile") or item.get("image_file") or "").strip()
-            or ((item.get("genImage") or {}).get("imageFile") or "").strip()
-        )
-        if not image_file and not (item.get("imageB64") or item.get("image_b64")):
-            continue
-        fc = int(
-            item.get("frameCount")
-            or item.get("frame_count")
-            or item.get("length")
-            or DEFAULT_FL2V_FRAMES
-        )
-        fc = max(MIN_FL2V_FRAMES, fc)
-        start = max(0, int(item.get("start") or 0))
-
-        if "isEndFrame" in item or "is_end_frame" in item:
-            is_end = _as_bool(item.get("isEndFrame", item.get("is_end_frame")))
-        elif "breakBefore" in item or "break_before" in item:
-            is_end = idx > 0 and not _as_bool(item.get("breakBefore") or item.get("break_before"))
-        else:
-            is_end = False
-
-        has_start_key = "isStartFrame" in item or "is_start_frame" in item
-        is_start = (
-            _as_bool(item.get("isStartFrame", item.get("is_start_frame")), True)
-            if has_start_key
-            else None
-        )
-
-        out.append(
-            {
-                "id": item.get("id") or "",
-                "imageFile": image_file,
-                "imageB64": item.get("imageB64") or item.get("image_b64") or "",
-                "width": int(item.get("width") or (item.get("genImage") or {}).get("width") or 0),
-                "height": int(item.get("height") or (item.get("genImage") or {}).get("height") or 0),
-                "start": start,
-                "length": fc,
-                "frameCount": fc,
-                "prompt": (item.get("prompt") or "").strip(),
-                "negativePrompt": (
-                    item.get("negativePrompt")
-                    or item.get("negative_prompt")
-                    or DEFAULT_FL2V_NEGATIVE
-                ).strip()
-                or DEFAULT_FL2V_NEGATIVE,
-                "isStartFrame": is_start,
-                "isEndFrame": is_end,
-                "endOnly": _as_bool(item.get("endOnly") or item.get("end_only")),
-                "_breakBefore": _as_bool(
-                    item.get("breakBefore") or item.get("break_before") or item.get("disconnect")
-                ),
-            }
-        )
-    out.sort(key=lambda k: (int(k.get("start") or 0), k.get("id") or ""))
-    n = len(out)
-    for i, kf in enumerate(out):
-        if kf["isStartFrame"] is None:
-            # Legacy: only the last continuous end-frame was non-start.
-            end_only_last = (
-                i > 0
-                and i == n - 1
-                and not kf.get("_breakBefore")
-                and kf.get("isEndFrame")
-            )
-            kf["isStartFrame"] = not end_only_last
-        kf.pop("_breakBefore", None)
-    return out
-
-
-def _shot_sample_frame_count(start_kf: dict, end_kf: dict | None) -> int:
-    """Generation length for a start shot.
-
-    Base = start clip length. If the paired end clip is end-only (not a start),
-    extend through the end of that end clip's placeholder on the timeline.
-    """
-    base = max(MIN_FL2V_FRAMES, int(start_kf.get("frameCount") or start_kf.get("length") or DEFAULT_FL2V_FRAMES))
-    if end_kf is None:
-        return base
-    # End clip is also a start → its span belongs to its own shot; only use as image1.
-    if end_kf.get("isStartFrame"):
-        return base
-    start_t = int(start_kf.get("start") or 0)
-    end_t = int(end_kf.get("start") or 0) + max(
-        MIN_FL2V_FRAMES,
-        int(end_kf.get("frameCount") or end_kf.get("length") or DEFAULT_FL2V_FRAMES),
-    )
-    return max(base, end_t - start_t)
-
-
-def _expand_shots(keyframes: list[dict]) -> list[dict[str, Any]]:
-    """Only isStartFrame clips produce sampling shots.
-
-    Pairing rule:
-    - Start+End on the same clip → 首尾同图 (image0=image1=self)
-    - Else walk forward until the next Start (exclusive); first End-only is image1
-    - Start with no End → i2v; Start+End → fl2v (sample spans both when End-only)
-    """
-    if not keyframes:
-        return []
-    shots: list[dict[str, Any]] = []
-    n = len(keyframes)
-    for i, kf in enumerate(keyframes):
-        if not kf.get("isStartFrame"):
-            continue
-        if kf.get("isEndFrame"):
-            fc = _shot_sample_frame_count(kf, None)
-            if kf.get("endOnly"):
-                # Official last-only: image1 only (no image0).
-                shots.append(
-                    {
-                        "source_index": i,
-                        "start": None,
-                        "end": kf,
-                        "frameCount": fc,
-                        "timeline_start": int(kf.get("start") or 0),
-                        "prompt": kf.get("prompt") or "",
-                        "negativePrompt": kf.get("negativePrompt") or DEFAULT_FL2V_NEGATIVE,
-                    }
-                )
-            else:
-                # Self-paired 首尾同图: sample this clip alone.
-                shots.append(
-                    {
-                        "source_index": i,
-                        "start": kf,
-                        "end": kf,
-                        "frameCount": fc,
-                        "timeline_start": int(kf.get("start") or 0),
-                        "prompt": kf.get("prompt") or "",
-                        "negativePrompt": kf.get("negativePrompt") or DEFAULT_FL2V_NEGATIVE,
-                    }
-                )
-            continue
-        end = None
-        for j in range(i + 1, n):
-            nxt = keyframes[j]
-            if nxt.get("isStartFrame"):
-                break
-            if nxt.get("isEndFrame") and not nxt.get("isStartFrame"):
-                end = nxt
-                break
-        fc = _shot_sample_frame_count(kf, end)
-        shots.append(
-            {
-                "source_index": i,
-                "start": kf,
-                "end": end,
-                "frameCount": fc,
-                "timeline_start": int(kf.get("start") or 0),
-                "prompt": kf.get("prompt") or "",
-                "negativePrompt": kf.get("negativePrompt") or DEFAULT_FL2V_NEGATIVE,
-            }
-        )
-    return shots
-
-
 def count_fl2v_runnable_shots(timeline: dict) -> int:
     fps = float(H3_FPS)
     shots = _normalize_shots(timeline.get("shots"), frame_rate=fps)
-    if shots:
-        return max(1, len(shots))
-    keys = _normalize_keyframes(timeline.get("keyframes") or timeline.get("segments") or [])
-    return max(1, sum(1 for k in keys if k.get("isStartFrame")) or 1)
+    return max(1, len(shots))
 
 
 def build_fl2v_director_plan(
@@ -613,25 +416,14 @@ def build_fl2v_director_plan(
         raise ValueError(f"fl2v plan builder received task_key={task_key}")
 
     fps = float(H3_FPS)
-    keyframes = _normalize_keyframes(
-        timeline.get("keyframes") or timeline.get("segments") or []
-    )
     shots = _normalize_shots(timeline.get("shots"), frame_rate=fps)
-    used_explicit_shots = bool(shots)
     if not shots:
-        if not keyframes:
-            raise ValueError(
-                "fl2v: 请至少添加一组。每组可只写提示词（文生），或上传首帧和/或尾帧。"
-            )
-        shots = _expand_shots(keyframes)
-        if not shots:
-            raise ValueError(
-                "fl2v: 没有可用的组。请添加一组（可只写提示词，或上传首帧/尾帧）。"
-            )
+        raise ValueError(
+            "fl2v: 请至少添加一组。每组可只写提示词（文生），或上传首帧和/或尾帧。"
+        )
 
-    # runSelection uses shot indices when shots[] is present; else keyframe indices.
     # Keep full shot list for continuity neighbors; honor selection via run_indices.
-    run_count = len(timeline.get("shots") or []) if used_explicit_shots else len(keyframes)
+    run_count = len(timeline.get("shots") or [])
     run_sel = _parse_run_selection(timeline, max(1, run_count))
     if run_sel is not None:
         if not any(int(s["source_index"]) in run_sel for s in shots):
@@ -657,7 +449,6 @@ def build_fl2v_director_plan(
         mode=out_mode,
         long_edge=int(
             output_block.get("longEdge")
-            or output_block.get("long_edge")
             or ref_max_size
             or 848
         ),
@@ -670,7 +461,6 @@ def build_fl2v_director_plan(
     fallback_prompt = (global_block.get("prompt") or global_prompt or "").strip()
     fallback_negative = (
         global_block.get("negativePrompt")
-        or global_block.get("negative_prompt")
         or ""
     ).strip()
     content_total = sum(max(MIN_FL2V_FRAMES, int(s["frameCount"])) for s in shots) or DEFAULT_FL2V_FRAMES
@@ -679,8 +469,7 @@ def build_fl2v_director_plan(
         int(timeline.get("totalFrames") or total_frames or content_total or DEFAULT_TOTAL_FRAMES),
     )
     # Prefer content sum when explicit shots define per-group durations.
-    if used_explicit_shots:
-        timeline_total = max(MIN_FL2V_FRAMES, content_total)
+    timeline_total = max(MIN_FL2V_FRAMES, content_total)
 
     from .segment_continuity import resolve_segment_continuity_from_prev
 
@@ -796,7 +585,6 @@ def build_fl2v_director_plan(
     raw = dict(timeline)
     raw["frameRate"] = H3_FPS
     raw["timelineMode"] = "fl2v"
-    raw["keyframes"] = keyframes
     raw["totalFrames"] = timeline_total
 
     from .segment_continuity import (

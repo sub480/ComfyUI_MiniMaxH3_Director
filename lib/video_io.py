@@ -72,10 +72,6 @@ def ffprobe_bin() -> str | None:
     return None
 
 
-# Back-compat alias used by older call sites / hot-reload.
-_ffprobe_bin = ffprobe_bin
-
-
 def _parse_rate(value: str | float | int | None) -> float:
     if value is None:
         return 0.0
@@ -99,7 +95,7 @@ def _ffprobe_stream_info(path: str) -> dict | None:
     import json
     import subprocess
 
-    probe = _ffprobe_bin()
+    probe = ffprobe_bin()
     if not probe:
         return None
     try:
@@ -150,7 +146,7 @@ def peek_video_size(path: str) -> tuple[int, int]:
 def _ffprobe_count_frames(path: str) -> int | None:
     import subprocess
 
-    probe = _ffprobe_bin()
+    probe = ffprobe_bin()
     if not probe:
         return None
     try:
@@ -454,20 +450,15 @@ def parse_frame_map_entry(entry: Any, default_clip: int = 0) -> tuple[int, int]:
 
 
 def video_clips_from_timeline(timeline: dict) -> list[dict]:
-    """Return ordered video clip metadata; falls back to legacy single ``video`` block."""
-    clips = timeline.get("videoClips") or timeline.get("video_clips")
-    if clips:
-        return list(clips)
-    video = timeline.get("video") or {}
-    if (video.get("videoFile") or video.get("fileName") or "").strip():
-        return [video]
-    return []
+    """Return ordered video clip metadata."""
+    clips = timeline.get("videoClips")
+    return list(clips or [])
 
 
 def deleted_source_ranges(timeline: dict) -> list[tuple[int, int]]:
     """Source-frame spans removed from the logical timeline (sparse single-clip edits)."""
     video = timeline.get("video") or {}
-    raw = video.get("deletedSourceRanges") or video.get("deleted_source_ranges") or []
+    raw = video.get("deletedSourceRanges") or []
     ranges: list[tuple[int, int]] = []
     for item in raw:
         if isinstance(item, (list, tuple)) and len(item) >= 2:
@@ -536,15 +527,6 @@ def resolve_logical_frame_entry(timeline: dict, logical_index: int) -> tuple[int
     last = clips[-1]
     last_count = max(1, int(last.get("sourceFrameCount") or 1))
     return len(clips) - 1, last_count - 1
-
-
-def frame_indices_from_timeline(timeline: dict) -> list[int]:
-    """Legacy helper: source-frame indices for single-clip timelines."""
-    total = logical_frame_count(timeline)
-    entries = [resolve_logical_frame_entry(timeline, i) for i in range(total)]
-    if entries and all(c == 0 for c, _ in entries):
-        return [f for _, f in entries]
-    return list(range(total))
 
 
 def _decode_timeline_entries(

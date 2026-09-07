@@ -42,7 +42,7 @@ def director_refine_widget_inputs() -> dict:
         "refine_enable": (
             "BOOLEAN",
             {
-                "default": False,
+                "default": True,
                 "tooltip": (
                     "启用二采：每段在一采之后再跑精修/放大。"
                     "关闭=只一采；打开后各组默认切到二采。"
@@ -53,7 +53,7 @@ def director_refine_widget_inputs() -> dict:
         "refine_mode": (
             list(REFINE_MODES),
             {
-                "default": "refine",
+                "default": "upscale",
                 "tooltip": (
                     "refine = 同分辨率二采（精修）。"
                     "upscale = 先放大到目标画布再二采。"
@@ -208,7 +208,7 @@ def director_refine_widget_inputs() -> dict:
         "refine_skip_fl2v": (
             "BOOLEAN",
             {
-                "default": True,
+                "default": False,
                 "tooltip": "跳过首尾帧（fl2v）镜头的二采/放大。",
             },
         ),
@@ -440,11 +440,11 @@ class MiniMaxH3DirectorRefine:
                 "skip_fl2v": (
                     "BOOLEAN",
                     {
-                        "default": True,
+                        "default": False,
                         "tooltip": (
                             "跳过首尾帧（fl2v）镜头的二采/放大。"
-                            "二采会改画面，容易把钉死的首尾帧画飘；默认跳过以保护关键帧。"
-                            "关掉则 fl2v 也走精修 / latent 放大。"
+                            "二采会改画面，容易把钉死的首尾帧画飘；默认不跳过。"
+                            "打开后 fl2v 才跳过精修 / latent 放大。"
                         ),
                     },
                 ),
@@ -518,11 +518,6 @@ class MiniMaxH3DirectorRefine:
             },
         }
 
-    @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, **_kwargs):
-        # Skip combo/min checks so old workflows (target_width=0 → aspect_ratio) can load.
-        return True
-
     RETURN_TYPES = (MMX_DIR_REFINE, "INT", "INT")
     RETURN_NAMES = ("refine", "width", "height")
     FUNCTION = "pack"
@@ -551,7 +546,7 @@ class MiniMaxH3DirectorRefine:
         megapixels=DEFAULT_UPSCALE_MEGAPIXELS,
         width=1280,
         height=720,
-        skip_fl2v=True,
+        skip_fl2v=False,
         n_tiles=DEFAULT_N_TILES,
         tile_axis="auto",
         tile_overlap=DEFAULT_TILE_OVERLAP,
@@ -564,8 +559,6 @@ class MiniMaxH3DirectorRefine:
         sigmas=None,
         refine_model=None,
         model=None,
-        target_width=0,
-        target_height=0,
         **kwargs,
     ):
         del kwargs
@@ -601,8 +594,6 @@ class MiniMaxH3DirectorRefine:
             megapixels=mp,
             width=w,
             height=h,
-            target_width=target_width,
-            target_height=target_height,
             skip_fl2v=skip_fl2v,
             n_tiles=n_tiles,
             tile_axis=tile_axis,

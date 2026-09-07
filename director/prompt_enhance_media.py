@@ -442,10 +442,6 @@ def build_user_image_directive(
     )
 
 
-# Backward-compatible alias for internal imports
-build_user_slot_directive = build_user_image_directive
-
-
 def build_vision_slot_preamble(
     *,
     source_count: int = 0,

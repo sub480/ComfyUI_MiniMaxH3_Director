@@ -73,7 +73,7 @@ def resolve_mixed_segment_task_key(seg_data: dict | None, global_key: str) -> st
         return global_key
     raw = ""
     if isinstance(seg_data, dict):
-        raw = seg_data.get("taskType") or seg_data.get("task_type") or ""
+        raw = seg_data.get("taskType") or ""
     key = resolve_task_key(raw) if str(raw).strip() else "t2v"
     return key if key in MIXED_GROUP_KEYS else "t2v"
 
@@ -96,7 +96,7 @@ def _min_frames_for_task(task_key: str) -> int:
 
 
 def _segment_frame_count(raw: dict, *, default: int, task_key: str) -> int:
-    fc = int(raw.get("frameCount") or raw.get("frame_count") or raw.get("length") or default)
+    fc = int(raw.get("frameCount") or raw.get("length") or default)
     return max(_min_frames_for_task(task_key), fc)
 
 
@@ -292,7 +292,7 @@ def build_gen_director_plan(
     )
 
     global_block = timeline.get("global") or {}
-    edit_mode = timeline.get("editMode") or timeline.get("edit_mode") or "global"
+    edit_mode = timeline.get("editMode") or "global"
     if is_prompt_batch_timeline(timeline, resolve_task_key(global_block.get("taskType") or global_task_type or "")):
         edit_mode = "segment"
     elif edit_mode not in ("global", "segment"):
@@ -308,7 +308,7 @@ def build_gen_director_plan(
     global_refs = _load_refs(global_block.get("refs") or [])
     shared_ref_audios = (
         _load_ref_audios(
-            global_block.get("refAudios") or global_block.get("ref_audios") or []
+            global_block.get("refAudios") or []
         )
         if edit_mode == "global"
         else []
@@ -351,7 +351,7 @@ def build_gen_director_plan(
             src_w or int(width or 832),
             src_h or int(height or 480),
             mode=out_mode,
-            long_edge=int(output_block.get("longEdge") or output_block.get("long_edge") or ref_max_size or 848),
+            long_edge=int(output_block.get("longEdge") or ref_max_size or 848),
             fixed_width=int(output_block.get("width") or timeline.get("width") or width),
             fixed_height=int(output_block.get("height") or timeline.get("height") or height),
         )
@@ -406,13 +406,13 @@ def build_gen_director_plan(
                 seg_task_key_preview = resolve_mixed_segment_task_key(seg_data, task_key)
                 seg_task = seg_task_key_preview
             else:
-                seg_task = seg_data.get("taskType") or seg_data.get("task_type") or task_type
+                seg_task = seg_data.get("taskType") or task_type
                 seg_task_key_preview = resolve_task_key(seg_task)
             local_prompt = (seg_data.get("prompt") or "").strip()
             seg_prompt = local_prompt or prompt
             seg_refs = _load_refs(seg_data.get("refs") or [])
             seg_negative = (
-                (seg_data.get("negativePrompt") or seg_data.get("negative_prompt") or "").strip()
+                (seg_data.get("negativePrompt") or "").strip()
             )
 
         seg_task_key = (
@@ -473,17 +473,12 @@ def build_gen_director_plan(
         else:
             local_audios = segment_ref_audios_for_context(
                 seg_task_key,
-                _load_ref_audios(seg_data.get("refAudios") or seg_data.get("ref_audios") or []),
+                _load_ref_audios(seg_data.get("refAudios") or []),
             )
             seg_ref_audios = local_audios
             if seg_task_key == "r2v":
                 seg_len = max(5, int(end) - int(start))
-                raw_vids = list(seg_data.get("refVideos") or seg_data.get("ref_videos") or [])
-                # Backward compat: single referenceVideo → slot 0
-                legacy = seg_data.get("referenceVideo") or seg_data.get("reference_video") or {}
-                if isinstance(legacy, dict) and (legacy.get("videoFile") or legacy.get("fileName")):
-                    if not any(int(v.get("index", v.get("slot", -1))) == 0 for v in raw_vids if isinstance(v, dict)):
-                        raw_vids = [{"index": 0, **legacy}, *list(raw_vids or [])]
+                raw_vids = list(seg_data.get("refVideos") or [])
                 seg_ref_videos = _load_ref_videos(raw_vids, timeline, seg_len)
         if seg_task_key in ("r2v", "r2i") and not seg_refs and not seg_ref_videos and not seg_ref_audios:
             log.warning(

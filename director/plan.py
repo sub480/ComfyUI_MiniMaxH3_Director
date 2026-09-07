@@ -87,16 +87,6 @@ def _timeline_dict(plan_or_timeline) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def _legacy_output_ref_image_size(timeline: dict | None) -> str | None:
-    out = (timeline or {}).get("output") or {}
-    raw = out.get("refImageSize")
-    if raw is None:
-        raw = out.get("ref_image_size")
-    if raw is None or str(raw).strip() == "":
-        return None
-    return normalize_ref_image_size(raw)
-
-
 PASS_MODE_FIRST = "first"
 PASS_MODE_SECOND = "second"
 
@@ -107,8 +97,6 @@ def resolve_segment_pass_mode(seg_or_data=None) -> str:
     if isinstance(seg_or_data, dict):
         if "passMode" in seg_or_data:
             raw = seg_or_data.get("passMode")
-        elif "pass_mode" in seg_or_data:
-            raw = seg_or_data.get("pass_mode")
     elif seg_or_data is not None:
         raw = getattr(seg_or_data, "pass_mode", None)
     text = str(raw or "").strip().lower()
@@ -118,19 +106,17 @@ def resolve_segment_pass_mode(seg_or_data=None) -> str:
 
 
 def resolve_ref_image_size(seg_or_data=None, plan_or_timeline=None) -> str:
-    """Per-segment MiniMax ``ref_image_size``; legacy ``output.refImageSize`` as fallback."""
+    """Return the per-segment MiniMax ``ref_image_size`` setting."""
+    del plan_or_timeline
     raw = None
     if isinstance(seg_or_data, dict):
-        if "refImageSize" in seg_or_data or "ref_image_size" in seg_or_data:
+        if "refImageSize" in seg_or_data:
             raw = seg_or_data.get("refImageSize")
-            if raw is None:
-                raw = seg_or_data.get("ref_image_size")
     elif seg_or_data is not None:
         raw = getattr(seg_or_data, "ref_image_size", None)
     if raw is not None and str(raw).strip() != "":
         return normalize_ref_image_size(raw)
-    legacy = _legacy_output_ref_image_size(_timeline_dict(plan_or_timeline))
-    return legacy if legacy is not None else REF_IMAGE_SIZE_MATCH
+    return REF_IMAGE_SIZE_MATCH
 
 
 @dataclass
@@ -331,24 +317,16 @@ def _continuous_reference_enabled(timeline: dict, edit_mode: str, task_key: str)
     if edit_mode != "global" or task_key != "ads2v":
         return False
     global_block = timeline.get("global") or {}
-    return bool(
-        global_block.get("continuousReference")
-        or global_block.get("continuous_reference")
-        or timeline.get("continuousReference")
-        or timeline.get("continuous_reference")
-    )
+    return bool(global_block.get("continuousReference"))
 
 
 def _resolve_global_reference_video(timeline: dict) -> dict:
     global_block = timeline.get("global") or {}
-    ref = global_block.get("referenceVideo") or global_block.get("reference_video") or {}
-    if _ref_video_has_file(ref):
-        return dict(ref)
-    legacy = timeline.get("referenceVideo") or timeline.get("reference_video") or {}
-    return dict(legacy) if isinstance(legacy, dict) else {}
+    ref = global_block.get("referenceVideo") or {}
+    return dict(ref) if isinstance(ref, dict) else {}
 
 
-from .frame_align import H3_FPS, minimax_align_frame_count as wan_align_frame_count
+from .frame_align import H3_FPS, minimax_align_frame_count
 
 
 def _decode_image_b64(b64_str: str) -> torch.Tensor:
@@ -395,16 +373,6 @@ def load_reference_tensor(ref: dict) -> torch.Tensor | None:
         return None
 
 
-def load_source_video_from_timeline(timeline: dict) -> torch.Tensor:
-    """Load all logical frames (legacy). Prefer load_timeline_segment for long videos."""
-    total = logical_frame_count(timeline)
-    if total <= 0:
-        video = timeline.get("video") or {}
-        if not (video.get("frames") or []):
-            raise ValueError("No frames in MiniMax H3 Director timeline.")
-    return load_timeline_segment(timeline, 0, max(1, total))
-
-
 def _load_refs(ref_list: list[dict]) -> list[SegmentRef]:
     refs: list[SegmentRef] = []
     for item in ref_list or []:
@@ -414,7 +382,7 @@ def _load_refs(ref_list: list[dict]) -> list[SegmentRef]:
         tensor = load_reference_tensor(item)
         if tensor is not None:
             image_file = str(
-                item.get("imageFile") or item.get("image_file") or item.get("fileName") or ""
+                item.get("imageFile") or item.get("fileName") or ""
             ).replace("\\", "/").strip()
             refs.append(SegmentRef(index=index, tensor=tensor, image_file=image_file))
     return sorted(refs, key=lambda r: r.index)
@@ -434,7 +402,7 @@ def _ref_metadata(ref_list: list[dict]) -> list[SegmentRef]:
         if index < 0 or index >= MAX_REFERENCE_IMAGES:
             continue
         image_file = str(
-            item.get("imageFile") or item.get("image_file") or item.get("fileName") or ""
+            item.get("imageFile") or item.get("fileName") or ""
         ).replace("\\", "/").strip()
         if image_file or item.get("imageB64"):
             refs.append(SegmentRef(index=index, tensor=torch.empty(0), image_file=image_file))
@@ -445,9 +413,7 @@ def _reference_audio_file(item: dict) -> tuple[str, str]:
     """Return (timeline-relative identity, absolute input path)."""
     rel = str(
         item.get("audioFile")
-        or item.get("audio_file")
         or item.get("fileName")
-        or item.get("file_name")
         or ""
     ).replace("\\", "/").strip()
     if not rel:
@@ -614,8 +580,8 @@ def _segment_ranges_from_timeline(timeline: dict, total: int) -> list[tuple[int,
         if ranges:
             return ranges
 
-    split_points = timeline.get("splitPoints") or timeline.get("split_points") or []
-    auto_count = int(timeline.get("autoSegmentCount") or timeline.get("auto_segment_count") or 0)
+    split_points = timeline.get("splitPoints") or []
+    auto_count = int(timeline.get("autoSegmentCount") or 0)
     if auto_count > 1:
         points = [int(round(total * i / auto_count)) for i in range(1, auto_count)]
     else:
@@ -634,15 +600,15 @@ def _segment_ranges_from_timeline(timeline: dict, total: int) -> list[tuple[int,
 
 def _resolve_export_total(timeline: dict, source_total: int) -> int:
     output_block = timeline.get("output") or {}
-    max_export = int(output_block.get("maxExportFrames") or output_block.get("max_export_frames") or 0)
+    max_export = int(output_block.get("maxExportFrames") or 0)
     if max_export <= 0 or source_total <= 0:
         return source_total
     return min(source_total, max_export)
 
 
 def _resolve_export_mode(output_block: dict) -> str:
-    mode = str(output_block.get("exportMode") or output_block.get("export_mode") or "all").lower()
-    if mode in ("segments", "segment", "per_segment", "by_segment"):
+    mode = str(output_block.get("exportMode") or "all").lower()
+    if mode == "segments":
         return "segments"
     return "all"
 
@@ -686,12 +652,10 @@ def _trim_timeline_for_export(timeline: dict, export_total: int) -> dict:
 
 def _parse_run_selection(timeline: dict, segment_count: int) -> frozenset[int] | None:
     """Return selected segment indices, or None when all segments should run."""
-    enabled = bool(timeline.get("runSelectEnabled") or timeline.get("run_select_enabled"))
+    enabled = bool(timeline.get("runSelectEnabled"))
     if not enabled:
         return None
     raw = timeline.get("runSelection")
-    if raw is None:
-        raw = timeline.get("run_selection")
     if raw is None:
         return None
     if not isinstance(raw, list):
@@ -767,7 +731,7 @@ def build_director_plan(
     timeline["frameRate"] = H3_FPS
 
     global_block = timeline.get("global") or {}
-    edit_mode = timeline.get("editMode") or timeline.get("edit_mode") or "global"
+    edit_mode = timeline.get("editMode") or "global"
     if edit_mode not in ("global", "segment"):
         edit_mode = "global"
 
@@ -782,7 +746,7 @@ def build_director_plan(
         # device).
         global_refs = _ref_metadata(global_block.get("refs") or [])
     global_ref_audios = _load_ref_audios(
-        global_block.get("refAudios") or global_block.get("ref_audios") or []
+        global_block.get("refAudios") or []
     )
     global_ref_video = _resolve_global_reference_video(timeline)
 
@@ -816,7 +780,6 @@ def build_director_plan(
     source_total = logical_frame_count(timeline) or int(timeline.get("totalFrames") or total_frames or 0)
     export_max = int(
         (timeline.get("output") or {}).get("maxExportFrames")
-        or (timeline.get("output") or {}).get("max_export_frames")
         or 0
     )
     export_total = _resolve_export_total(timeline, source_total)
@@ -824,7 +787,7 @@ def build_director_plan(
     load_timeline = _trim_timeline_for_export(timeline, export_total) if export_total < source_total else timeline
 
     clips = video_clips_from_timeline(load_timeline)
-    if not clips and not (load_timeline.get("video") or {}).get("frames"):
+    if not clips:
         raise ValueError(
             "No source video in MiniMax H3 Director. Upload a video inside the node timeline UI before running."
         )
@@ -855,7 +818,7 @@ def build_director_plan(
         loaded_w or meta_w or int(width),
         loaded_h or meta_h or int(height),
         mode=str(output_block.get("mode") or "long_edge"),
-        long_edge=int(output_block.get("longEdge") or output_block.get("long_edge") or ref_max_size or 848),
+        long_edge=int(output_block.get("longEdge") or ref_max_size or 848),
         fixed_width=int(output_block.get("width") or timeline.get("width") or width),
         fixed_height=int(output_block.get("height") or timeline.get("height") or height),
     )
@@ -881,16 +844,16 @@ def build_director_plan(
         else:
             use_global = False
             seg_prompt = (seg_data.get("prompt") or "").strip() or prompt
-            seg_task = seg_data.get("taskType") or seg_data.get("task_type") or task_type
+            seg_task = seg_data.get("taskType") or task_type
             # Segment mode: only this segment's refs — never inherit global.refs / refAudios.
             if load_media:
                 seg_refs = _load_refs(seg_data.get("refs") or [])
             else:
                 seg_refs = _ref_metadata(seg_data.get("refs") or [])
             seg_ref_audios = _load_ref_audios(
-                seg_data.get("refAudios") or seg_data.get("ref_audios") or []
+                seg_data.get("refAudios") or []
             )
-            seg_ref_video = dict(seg_data.get("referenceVideo") or seg_data.get("reference_video") or {})
+            seg_ref_video = dict(seg_data.get("referenceVideo") or {})
 
         seg_task_key = resolve_task_key(seg_task)
         seg_refs = segment_refs_for_context(seg_task_key, seg_refs)
@@ -991,7 +954,7 @@ def prepare_segment_clip(clip: torch.Tensor, target_frames: int) -> tuple[torch.
     actual = clip.shape[0]
     if actual <= 0:
         raise ValueError("Segment has no frames.")
-    num_frames = wan_align_frame_count(max(actual, target_frames))
+    num_frames = minimax_align_frame_count(max(actual, target_frames))
     if actual > num_frames:
         clip = clip[:num_frames]
     return clip, num_frames

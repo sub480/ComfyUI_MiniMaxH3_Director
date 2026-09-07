@@ -22,7 +22,6 @@ const DEFAULT_OUTPUT_LANGUAGE = "中文";
 const OUTPUT_LANGUAGE_ZH = "中文";
 const CHARACTER_DETAIL_NORMAL = "一般";
 const CHARACTER_DETAIL_DETAILED = "详尽";
-const LEGACY_OPENAI_FORMAT = "OpenAI / vLLM";
 
 const STATUS_COLORS = {
     info: "#9aa3b5",
@@ -44,7 +43,6 @@ function coerceLlmModel(value) {
 }
 
 function normalizeApiFormat(fmt) {
-    if (fmt === LEGACY_OPENAI_FORMAT) return API_OPENAI_COMPAT;
     if (fmt === API_ZHIPU || fmt === API_OLLAMA || fmt === API_OPENAI_COMPAT) return fmt;
     return DEFAULT_API_FORMAT;
 }
@@ -135,8 +133,6 @@ function coerceFeatureEnhanceValue(value) {
     if (value === false || value === 0 || value == null || value === "") return false;
     const v = String(value).trim().toLowerCase();
     if (v === "true" || v === "yes" || v === "on") return true;
-    // 旧下拉迁移到 BOOLEAN 时可能残留「一般」「详尽」字符串，仅「详尽」视为开启
-    if (v.includes("详尽") || v === "detailed" || v === "verbose" || v === "full") return true;
     return false;
 }
 
