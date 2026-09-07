@@ -6,6 +6,7 @@ blocks, full disks) must never abort the main generation run.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -422,6 +423,49 @@ def _fingerprint_diff_keys(stored: Any, expected: dict[str, Any]) -> list[str]:
     return [k for k in keys if stored.get(k) != expected.get(k)]
 
 
+def _media_file_digest(value: Any) -> str | None:
+    """Return a content identity for a fingerprint media reference.
+
+    Snapshot restore copies media into a new input-pack directory, so the
+    path changes even though the referenced bytes do not.  Keep the digest
+    lookup here (rather than in the UI) so old caches remain usable after a
+    restore.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    # Reference lists are prefixed with img0:/aud0:/vid0:.
+    rel = raw.split(":", 1)[1] if ":" in raw else raw
+    try:
+        from .pack import resolve_media_path
+
+        path = resolve_media_path(rel)
+        if path is None:
+            return None
+        stat = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"{stat.st_size}:{digest.hexdigest()}"
+    except (OSError, ValueError):
+        return None
+
+
+def _media_values_equivalent(stored: Any, expected: Any) -> bool:
+    if stored == expected:
+        return True
+    if isinstance(stored, list) and isinstance(expected, list):
+        if len(stored) != len(expected):
+            return False
+        return all(_media_values_equivalent(a, b) for a, b in zip(stored, expected))
+    if isinstance(stored, str) and isinstance(expected, str):
+        stored_digest = _media_file_digest(stored)
+        expected_digest = _media_file_digest(expected)
+        return bool(stored_digest and stored_digest == expected_digest)
+    return False
+
+
 def _align_cache_fingerprint(stored: Any, expected: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     """Normalize old first-pass meta that baked LoRA trigger into ``prompt``."""
     if not isinstance(stored, dict):
@@ -446,6 +490,14 @@ def _align_cache_fingerprint(stored: Any, expected: dict[str, Any]) -> tuple[Any
         for key in ("continuity", "continuity_overlap", "continuity_from_prev"):
             if key in expected_cmp:
                 stored_cmp[key] = expected_cmp[key]
+    # Restoring a snapshot rewrites media paths to a fresh input-pack id.
+    # Treat byte-identical references as the same input while retaining the
+    # original path in newly written metadata.
+    for key in ("refs", "ref_audios", "ref_videos", "ref_video"):
+        if key in stored_cmp and key in expected_cmp and _media_values_equivalent(
+            stored_cmp[key], expected_cmp[key]
+        ):
+            stored_cmp[key] = expected_cmp[key]
     return stored_cmp, expected_cmp
 
 
