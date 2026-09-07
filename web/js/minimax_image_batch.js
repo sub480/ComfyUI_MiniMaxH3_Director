@@ -355,9 +355,9 @@ export const IMAGE_BATCH_STYLES = `
 .bd-wrap:not(.bd-live-preview-on) .bd-preview-col{display:none!important}
 .bd-batch-plain .bd-batch-head,.bd-batch-source .bd-batch-head,.bd-batch-fl2v .bd-batch-head,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px}
 .bd-batch-plain .bd-batch-head b,.bd-batch-source .bd-batch-head b,.bd-batch-fl2v .bd-batch-head b,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
-.bd-batch-plain .bd-batch-prompts,.bd-batch-source .bd-batch-prompts,.bd-batch-fl2v .bd-batch-prompts,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;height:100%;min-height:0;align-self:stretch}
-.bd-batch-plain .bd-batch-prompts .bd-label,.bd-batch-source .bd-batch-prompts .bd-label,.bd-batch-fl2v .bd-batch-prompts .bd-label,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.02em;flex-shrink:0}
-.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
+.bd-batch-plain .bd-batch-prompts,.bd-batch-source .bd-batch-prompts,.bd-batch-fl2v .bd-batch-prompts,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts,.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;height:100%;min-height:0;align-self:stretch;display:flex;flex-direction:column;overflow:hidden}
+.bd-batch-plain .bd-batch-prompts .bd-label,.bd-batch-source .bd-batch-prompts .bd-label,.bd-batch-fl2v .bd-batch-prompts .bd-label,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-label,.bd-batch-r2v .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.02em;flex-shrink:0}
+.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-plain .bd-batch-preview,.bd-batch-source .bd-batch-preview,.bd-batch-fl2v .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-preview{border-radius:10px;border-color:#262626;background:#0c0c0c}
 /* ——— r2v asset stage (polished) ——— */
 .bd-batch-card.bd-batch-r2v{display:flex;flex-direction:column;gap:12px;padding:14px 16px;background:linear-gradient(165deg,#1c1c1c 0%,#141414 52%,#111 100%);border:1px solid #2c2c2c;border-radius:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.035);align-items:stretch}
@@ -405,11 +405,11 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-media{display:flex;flex-direction:column;gap:4px;min-width:88px;max-width:140px}
 
 /* Left = 参考素材 · Middle = 提示词 · Right = 预览 */
-.bd-batch-r2v-body{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(0,1.4fr);gap:12px;width:100%;align-items:stretch;min-height:420px;flex:1 1 auto}
+.bd-batch-r2v-body{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(0,1.4fr);gap:12px;width:100%;align-items:stretch;min-height:420px;flex:1 1 auto;overflow:hidden}
 .bd-wrap.bd-live-preview-on .bd-batch-r2v-body{grid-template-columns:minmax(220px,.8fr) minmax(0,1.3fr) minmax(200px,.7fr)}
-.bd-wrap.bd-live-preview-on .bd-batch-r2v-body>.bd-preview-col{height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch}
-.bd-batch-r2v-assets{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
-.bd-batch-r2v-main{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:380px;flex:1 1 auto}
+.bd-batch-r2v-body>.bd-batch-r2v-main,.bd-batch-r2v-body>.bd-preview-col{height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch}
+.bd-batch-r2v-assets{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow:auto}
+.bd-batch-r2v-main{display:flex;flex-direction:column;gap:6px;min-width:0}
 .bd-r2v-section{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0;box-sizing:border-box}
 .bd-r2v-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .bd-r2v-section-title{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#eaeaea;min-width:0}
@@ -480,14 +480,10 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-r2v .bd-batch-audio:hover .x,.bd-batch-r2v .bd-batch-video:hover .x{display:flex}
 .bd-batch-prompts{display:flex;flex-direction:column;gap:4px;min-width:0}
 .bd-batch-prompts .bd-label{color:#888;font-size:10px}
-.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;flex:0 0 auto;min-height:140px;display:flex;flex-direction:column}
-.bd-batch-r2v .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .bd-batch-prompts textarea,.bd-batch-prompts .bd-token-wrap{width:100%;min-height:88px;box-sizing:border-box}
 .bd-batch-prompts textarea{background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:6px;resize:none;overflow-y:auto;font-size:11px;font-family:inherit;line-height:1.35}
-.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,
-.bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;resize:vertical;overflow-y:auto}
-.bd-batch-r2v .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{min-height:120px;height:auto;flex:0 0 auto;overflow:auto}
-.bd-batch-r2v .bd-batch-prompts .bd-token-editor{resize:vertical}
+.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea,
+.bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;overflow:auto}
 .bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-preview{background:#0d0d0d;border:1px solid #333;border-radius:4px;min-height:100px;display:flex;flex-direction:column;align-items:stretch;justify-content:center;overflow:hidden;color:#555;font-size:10px;text-align:center;padding:4px;box-sizing:border-box}
 .bd-batch-plain .bd-preview-col .bd-batch-preview,.bd-batch-source .bd-preview-col .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-preview-col .bd-batch-preview{width:100%;max-width:none;min-height:0;justify-self:stretch}
@@ -3156,23 +3152,6 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 };
             });
         }
-        const resizeTarget = promptEl.__bdTokenEditor || promptEl;
-        const resizeObserver = new ResizeObserver(() => {
-                const height = resizeTarget.getBoundingClientRect().height;
-                if (!Number.isFinite(height) || height <= 0) return;
-                const live = (editor.timeline.segments || []).find((s) => s?.id && s.id === segId)
-                    || editor.timeline.segments?.[segIndex];
-                if (live) live.promptHeight = height;
-                const card = resizeTarget.closest(".bd-batch-card");
-                if (card) {
-                    card.style.minHeight = "0";
-                    card.style.height = "auto";
-                }
-                const body = resizeTarget.closest(".bd-batch-r2v-body");
-                if (body) body.style.minHeight = `${Math.max(420, height + 48)}px`;
-                editor.updateDomWidgetHeight?.();
-        });
-        resizeObserver.observe(resizeTarget);
 
         const preview = document.createElement("div");
         preview.className = "bd-batch-preview";

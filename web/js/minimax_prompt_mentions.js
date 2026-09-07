@@ -61,11 +61,9 @@ const MENTION_STYLES = `
   min-height:88px;flex:1 1 auto;height:auto;overflow:auto;resize:none;background:#181818;border:1px solid #333;border-radius:4px;padding:6px;font-size:11px;line-height:1.35
 }
 .bd-batch-plain .bd-batch-prompts .bd-token-editor,.bd-batch-source .bd-batch-prompts .bd-token-editor,
-.bd-batch-fl2v .bd-batch-prompts .bd-token-editor,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-editor{
-  min-height:88px;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
-}
+.bd-batch-fl2v .bd-batch-prompts .bd-token-editor,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-editor,
 .bd-batch-r2v .bd-batch-prompts .bd-token-editor{
-  min-height:120px;height:auto;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
+  min-height:88px;flex:1 1 auto;height:auto;overflow:auto;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
 }
 .bd-fl2v-prompt-col .bd-token-editor,.bd-fl2v-detail .bd-token-editor{
   min-height:120px;flex:1 1 auto;height:auto;overflow:auto;resize:none;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px
