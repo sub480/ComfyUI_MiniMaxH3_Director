@@ -297,6 +297,8 @@ class DirectorPlan:
     run_indices: frozenset[int] | None = None  # None = run all segments
     continuity_enabled: bool = False
     continuity_overlap_frames: int = 0
+    continuity_mode: str = "guide"
+    continuity_redraw: float = 0.65
     global_ref_audios: list[SegmentRefAudio] = field(default_factory=list)
     # Full source-video PCM reused only during this Director execution.
     audio_decode_cache: dict = field(default_factory=dict, repr=False)
@@ -922,6 +924,8 @@ def build_director_plan(
         )
 
     from .segment_continuity import (
+        resolve_continuity_mode,
+        resolve_continuity_redraw,
         resolve_continuity_settings,
         resolve_segment_continuity_from_prev,
     )
@@ -965,6 +969,8 @@ def build_director_plan(
         run_indices=_parse_run_selection(timeline, len(segments)),
         continuity_enabled=continuity_enabled,
         continuity_overlap_frames=continuity_overlap,
+        continuity_mode=resolve_continuity_mode(timeline),
+        continuity_redraw=resolve_continuity_redraw(timeline),
         global_ref_audios=global_ref_audios,
     )
 

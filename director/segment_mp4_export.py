@@ -202,3 +202,28 @@ def copy_segment_mp4_suffix(
             exc,
         )
         return None
+
+
+def is_released_poster(tensor, expected_frames: int) -> bool:
+    """Return whether a segment IMAGE slot is only a post-export stand-in."""
+    if not isinstance(tensor, torch.Tensor) or tensor.ndim != 4:
+        return False
+    expected = int(expected_frames or 0)
+    return expected > 1 and int(tensor.shape[0]) < expected
+
+
+def released_output_slots(segment_outputs: list, frame_counts: list[int] | None) -> list[int]:
+    """Return output indexes whose full segment clip has already been released."""
+    counts = frame_counts or []
+    released: list[int] = []
+    for index, tensor in enumerate(segment_outputs):
+        expected = int(counts[index]) if index < len(counts) else 0
+        if is_released_poster(tensor, expected):
+            released.append(index)
+            continue
+        if not isinstance(tensor, torch.Tensor) or tensor.ndim != 4:
+            released.append(index)
+            continue
+        if int(tensor.shape[1]) < 2 or int(tensor.shape[2]) < 2:
+            released.append(index)
+    return released

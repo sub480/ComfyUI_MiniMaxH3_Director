@@ -152,6 +152,15 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         or ""
     ).strip()
     uses_mc = _segment_uses_motion_context(seg, plan)
+    continuity_mode = str(getattr(plan, "continuity_mode", "guide") or "guide")
+    if uses_mc and continuity_mode == "continue":
+        from .h3_latent_continue import CONTINUE_PIPELINE_ID
+
+        continuity_pipeline = CONTINUE_PIPELINE_ID
+        continuity_redraw = round(float(getattr(plan, "continuity_redraw", 0.65) or 0.65), 2)
+    else:
+        continuity_pipeline = CONTINUITY_PIPELINE_ID
+        continuity_redraw = 0
     return {
         "index": seg.index,
         "start": seg.start_frame,
@@ -177,7 +186,9 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
             int(plan.continuity_overlap_frames or 0) if uses_mc else 0
         ),
         "continuity_from_prev": uses_mc,
-        "continuity_pipeline": CONTINUITY_PIPELINE_ID,
+        "continuity_mode": continuity_mode if uses_mc else "off",
+        "continuity_redraw": continuity_redraw,
+        "continuity_pipeline": continuity_pipeline,
     }
 
 

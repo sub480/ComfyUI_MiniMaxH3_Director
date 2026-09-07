@@ -613,6 +613,11 @@ def apply_segment_refine(
         if refine_model is not model:
             note_parts.append("custom model")
     pin_frames = max(0, int(trim_frames or 0))
+    from .segment_continuity import is_continue_mode
+
+    if is_continue_mode(plan):
+        pin_frames = 0
+        note_parts.append("continue: no refine re-pin")
     task_key = str(getattr(seg, "task_key", "") or "")
 
     # Same-size refine keeps any first-pass mask so a continuity lock still holds.

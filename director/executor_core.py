@@ -82,6 +82,7 @@ from .segment_mp4_export import (
 from .segment_continuity import (
     concat_continuous_chunks,
     is_continuity_active,
+    is_continue_mode,
     resolve_prev_segment_output,
 )
 from .vram_cleanup import cleanup_segment_vram
@@ -311,7 +312,7 @@ def _prune_continuity_working_set(
 def _poster_frame(tensor: torch.Tensor | None) -> torch.Tensor:
     """1-frame stand-in so IMAGE list length stays valid after a pixel release."""
     if not isinstance(tensor, torch.Tensor) or tensor.ndim != 4 or int(tensor.shape[0]) <= 0:
-        return torch.full((1, 1, 1, 3), 0.5)
+        return torch.full((1, 2, 2, 3), 0.5)
     if int(tensor.shape[0]) == 1:
         return tensor.detach().cpu().contiguous()
     return tensor[-1:].detach().cpu().contiguous().clone()
@@ -852,6 +853,7 @@ def execute_director_plan_core(
         cond_s = time.perf_counter() - t_cond
 
         trim_frames = 0
+        after_shift = None
         if use_motion_context:
             # Pin audio from previous AV latent whenever available (official MC path).
             # Do not gate on decode_audio — mute only skips final audio decode.
@@ -859,24 +861,41 @@ def execute_director_plan_core(
                 audio_mode != AUDIO_MODE_MUTE
                 and (prev_av is not None or prev_audio is not None)
             )
-            positive, trim_frames, prev_export_trim = apply_motion_context(
-                positive,
-                latent,
-                vae=vae,
-                context_length=context_n,
-                context_latent=prev_av,
-                context_frames=prev_tail,
-                # Always pass export audio so a canvas-mismatch fallback
-                # (Refine upscale) can still pin audio from the decoded tail.
-                context_audio=prev_audio,
-                audio_vae=audio_vae,
-                continue_audio=pin_audio,
-                # t2v/i2v/r2v/v2v/rv2v: context owns the head.
-                # fl2v keeps last_frame, marked so origin-shift retiming can move it.
-                keep_existing_keyframes=(seg.task_key == "fl2v"),
-                context_end_frame=prev_end_frame,
-                audio_context_length=DEFAULT_AUDIO_CONTEXT_FRAMES,
-            )
+            if is_continue_mode(plan):
+                from .h3_latent_continue import (
+                    apply_latent_continue,
+                    install_continue_prefix_remask,
+                )
+
+                latent, trim_frames, prev_export_trim = apply_latent_continue(
+                    latent,
+                    prev_av=prev_av,
+                    prev_tail=prev_tail,
+                    vae=vae,
+                    context_length=context_n,
+                    context_end_frame=prev_end_frame,
+                    pin_audio=pin_audio,
+                    context_audio=prev_audio,
+                    audio_vae=audio_vae,
+                    audio_context_length=DEFAULT_AUDIO_CONTEXT_FRAMES,
+                    seam_min_mask=getattr(plan, "continuity_redraw", 0.65),
+                )
+                after_shift = install_continue_prefix_remask
+            else:
+                positive, trim_frames, prev_export_trim = apply_motion_context(
+                    positive,
+                    latent,
+                    vae=vae,
+                    context_length=context_n,
+                    context_latent=prev_av,
+                    context_frames=prev_tail,
+                    context_audio=prev_audio,
+                    audio_vae=audio_vae,
+                    continue_audio=pin_audio,
+                    keep_existing_keyframes=(seg.task_key == "fl2v"),
+                    context_end_frame=prev_end_frame,
+                    audio_context_length=DEFAULT_AUDIO_CONTEXT_FRAMES,
+                )
             # Phase-align can pin a few frames before the previous export end.
             # Drop that orphaned tail so concat does not replay it at the seam.
             trimmed_prev_export = 0
@@ -1147,6 +1166,7 @@ def execute_director_plan_core(
                 on_phase=_report_sample_phase,
                 on_step_preview=_report_step_preview if live_tae_preview else None,
                 preview_every=1,
+                after_shift=after_shift,
             )
 
         first_pass_samples = samples
@@ -1633,7 +1653,7 @@ def execute_director_plan_core(
         )
         reports.append(
             "Export mode: segments — released prior-segment pixels after mp4 "
-            "and continuity pin (no full-timeline concat; IMAGE keeps a 1-frame poster)."
+            "and continuity pin (no full-timeline concat)."
         )
     else:
         combined = concat_continuous_chunks(export_chunks, export_segments, plan)

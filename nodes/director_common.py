@@ -24,6 +24,7 @@ from ..director.plan import (
     plan_summary,
 )
 from ..director.progress import report_director_planning
+from ..director.segment_mp4_export import released_output_slots
 from ..lib.image_prep import fit_canvas, fit_video_long_edge
 from ..lib.video_io import load_timeline_segment
 from ..lib.task_prompts import task_type_combo_options
@@ -310,6 +311,18 @@ def _empty_source_images_for(images_out: list[torch.Tensor]) -> list[torch.Tenso
     return placeholders
 
 
+def _pad_even_hw_image(image: torch.Tensor) -> torch.Tensor:
+    """Pad IMAGE batches for yuv420p encoders, which require even dimensions."""
+    frames, height, width, channels = (int(value) for value in image.shape)
+    even_height = max(2, height + height % 2)
+    even_width = max(2, width + width % 2)
+    if even_height == height and even_width == width:
+        return image
+    padded = image.new_zeros((frames, even_height, even_width, channels))
+    padded[:, :height, :width].copy_(image)
+    return padded
+
+
 def _ensure_nonempty_image_batches(images_out: list[torch.Tensor], *, label: str) -> list[torch.Tensor]:
     fixed: list[torch.Tensor] = []
     for i, img in enumerate(images_out):
@@ -318,9 +331,8 @@ def _ensure_nonempty_image_batches(images_out: list[torch.Tensor], *, label: str
         if int(img.shape[0]) <= 0:
             h, w, c = int(img.shape[1]), int(img.shape[2]), int(img.shape[3])
             log.warning("Director %s[%d] has 0 frames; emitting 1-frame placeholder.", label, i)
-            fixed.append(torch.full((1, max(1, h), max(1, w), max(1, c)), 0.5))
-        else:
-            fixed.append(img)
+            img = torch.full((1, max(2, h), max(2, w), max(1, c)), 0.5)
+        fixed.append(_pad_even_hw_image(img))
     return fixed
 
 
@@ -369,12 +381,17 @@ def finalize_director_outputs(
     )
     if segment_frame_counts:
         frame_count = int(sum(int(n) for n in segment_frame_counts))
+    released_slots: list[int] = []
     if export_segments and len(segment_outputs) > 1:
-        report = (
-            report
-            + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s) on images output "
-            "(full frames are in per-segment mp4; released clips keep a 1-frame poster)."
-        )
+        released_slots = released_output_slots(segment_outputs, segment_frame_counts)
+        if released_slots:
+            report = (
+                report + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s); "
+                f"{len(released_slots)} released clip(s) omitted from images so "
+                "CreateVideo → SaveVideo do not write stills."
+            )
+        else:
+            report = report + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s) on images output."
     if plan.run_indices is not None and split_layout:
         report = (
             report
@@ -412,13 +429,42 @@ def finalize_director_outputs(
             pre_refine_out = images_out
             report = report + f"\n\nimages_pre_refine: fallback to images ({exc})."
 
+    if export_segments:
+        released_slots = sorted(
+            set(released_slots) | set(released_output_slots(pre_refine_out, segment_frame_counts))
+        )
+    if released_slots:
+        released = set(released_slots)
+        keep = [index for index in range(len(images_out)) if index not in released]
+        if keep:
+            images_out = [images_out[index] for index in keep]
+            kept_pre_refine = [
+                pre_refine_out[index]
+                for index in keep
+                if index < len(pre_refine_out)
+            ]
+            if kept_pre_refine:
+                pre_refine_out = kept_pre_refine
+            if segment_audios:
+                segment_audios = [
+                    segment_audios[index]
+                    for index in keep
+                    if index < len(segment_audios)
+                ]
+            if segment_frame_counts:
+                segment_frame_counts = [
+                    segment_frame_counts[index]
+                    for index in keep
+                    if index < len(segment_frame_counts)
+                ]
+
     split_for_audio = split_layout
     audio_frame_end = frame_count if not split_for_audio else None
     audio_mode = resolve_audio_mode(plan)
     use_generated = audio_mode == AUDIO_MODE_GENERATE
     # Prefer caller-provided export lengths (post continuity trim); else match IMAGE batches.
     if segment_frame_counts is None and segment_audios and split_for_audio:
-        segment_frame_counts = [int(s.shape[0]) for s in segment_outputs]
+        segment_frame_counts = [int(s.shape[0]) for s in images_out]
     audio_out, source_fallback = build_director_audio_outputs(
         plan,
         images_out,

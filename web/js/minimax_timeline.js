@@ -208,7 +208,22 @@ function normalizeAudioMode(value) {
 const CONTINUITY_FRAME_CHOICES = [5, 22, 39, 56];
 /** Official Motion Context baseline recommendation. */
 const DEFAULT_CONTINUITY_FRAMES = 22;
+const DEFAULT_CONTINUITY_MODE = "guide";
+const DEFAULT_CONTINUITY_REDRAW = 0.65;
 const CONTINUITY_TASKS = new Set(["t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v", "mixed"]);
+
+function normalizeContinuityMode(raw) {
+    const mode = String(raw || "").trim().toLowerCase();
+    return ["continue", "continuation", "latent", "guide_redraw", "guide+redraw", "redraw"].includes(mode)
+        ? "continue"
+        : DEFAULT_CONTINUITY_MODE;
+}
+
+function snapContinuityRedraw(raw) {
+    const parsed = Number(raw);
+    const value = Number.isFinite(parsed) ? parsed : DEFAULT_CONTINUITY_REDRAW;
+    return Math.round(Math.min(0.95, Math.max(0.4, value)) * 100) / 100;
+}
 
 function isVideoEditTaskKey(taskKey) {
     return taskKey === "v2v" || taskKey === "rv2v";
@@ -235,6 +250,8 @@ function normalizeOutputContinuity(output = {}) {
         ...output,
         continuityEnabled: isContinuityEnabled(output),
         continuityOverlapFrames: snapContinuityFrames(rawOverlap),
+        continuityMode: normalizeContinuityMode(output.continuityMode ?? output.continuity_mode),
+        continuityRedraw: snapContinuityRedraw(output.continuityRedraw ?? output.continuity_redraw),
         audioMode: normalizeAudioMode(output.audioMode ?? output.audio_mode),
         refImageSize: normalizeRefImageSize(output.refImageSize ?? output.ref_image_size),
     };
@@ -3134,6 +3151,14 @@ class MiniMaxH3DirectorEditor {
                     <option value="source" data-i18n="output.audio.source">使用原声</option>
                     <option value="mute" data-i18n="output.audio.mute">静音</option>
                 </select>
+                <select class="bd-num" data-r="segment-continuity-mode" style="width:96px" data-i18n-title="tooltip.continuityMode">
+                    <option value="guide" data-i18n="output.continuityMode.guide">引导</option>
+                    <option value="continue" data-i18n="output.continuityMode.continue">引导+重绘</option>
+                </select>
+                <span data-r="segment-continuity-redraw-wrap" hidden>
+                    <span class="bd-meta" data-i18n="output.continuityRedraw">重绘幅度</span>
+                    <input type="number" class="bd-num" data-r="segment-continuity-redraw" min="0.40" max="0.95" step="0.05" value="0.65" style="width:56px">
+                </span>
             </span>
             <span class="bd-out-source-wrap hidden" data-r="out-source-wrap" data-i18n-title="widget.tooltip.exportSourceImages">
                 <label>
@@ -3481,6 +3506,9 @@ class MiniMaxH3DirectorEditor {
         this.segmentContinuityWrap = this.root.querySelector('[data-r="segment-continuity-wrap"]');
         this.segmentContinuityCb = this.root.querySelector('[data-r="segment-continuity-cb"]');
         this.segmentContinuityOverlap = this.root.querySelector('[data-r="segment-continuity-overlap"]');
+        this.segmentContinuityMode = this.root.querySelector('[data-r="segment-continuity-mode"]');
+        this.segmentContinuityRedrawWrap = this.root.querySelector('[data-r="segment-continuity-redraw-wrap"]');
+        this.segmentContinuityRedraw = this.root.querySelector('[data-r="segment-continuity-redraw"]');
         this.outPreview = this.root.querySelector('[data-r="out-preview"]');
         this.runIoEl = this.root.querySelector('[data-r="run-io"]');
         this.livePreviewSpeedWrap = this.root.querySelector('[data-r="live-preview-speed-wrap"]');
@@ -3766,6 +3794,18 @@ class MiniMaxH3DirectorEditor {
             this.segmentContinuityOverlap.oninput = applyOverlap;
             this.segmentContinuityOverlap.addEventListener("keydown", (e) => e.stopPropagation());
             this.segmentContinuityOverlap.addEventListener("keyup", (e) => e.stopPropagation());
+        }
+        if (this.segmentContinuityMode) {
+            this.segmentContinuityMode.onchange = () => {
+                this.onOutputField("continuityMode", this.segmentContinuityMode.value);
+                this.updateSegmentContinuityUI();
+            };
+        }
+        if (this.segmentContinuityRedraw) {
+            this.segmentContinuityRedraw.onchange = () => this.onOutputField(
+                "continuityRedraw", snapContinuityRedraw(this.segmentContinuityRedraw.value),
+            );
+            this.segmentContinuityRedraw.addEventListener("keydown", (event) => event.stopPropagation());
         }
         if (this.segContinuityFromPrevCb) {
             this.segContinuityFromPrevCb.onchange = () => {
@@ -6239,6 +6279,12 @@ class MiniMaxH3DirectorEditor {
                 snapContinuityFrames(out.continuityOverlapFrames ?? DEFAULT_CONTINUITY_FRAMES),
             );
         }
+        if (this.segmentContinuityMode) {
+            this.segmentContinuityMode.value = normalizeContinuityMode(out.continuityMode);
+        }
+        if (this.segmentContinuityRedraw) {
+            this.segmentContinuityRedraw.value = String(snapContinuityRedraw(out.continuityRedraw));
+        }
         this.syncFrameRateUI(this.timeline.frameRate);
         this.updateOutputModeUI();
         this.updateSegmentContinuityUI();
@@ -6282,6 +6328,18 @@ class MiniMaxH3DirectorEditor {
         if (this.segmentContinuityCb && this.timeline?.output) {
             // Keep DOM aligned with timeline; eligibility only gates visibility.
             this.segmentContinuityCb.checked = isContinuityEnabled(this.timeline.output);
+        }
+        if (this.segmentContinuityMode && this.timeline?.output) {
+            const mode = normalizeContinuityMode(this.timeline.output.continuityMode);
+            this.segmentContinuityMode.value = mode;
+            this.timeline.output.continuityMode = mode;
+            const redrawVisible = isContinuityEnabled(this.timeline.output) && mode === "continue";
+            if (this.segmentContinuityRedrawWrap) this.segmentContinuityRedrawWrap.hidden = !redrawVisible;
+        }
+        if (this.segmentContinuityRedraw && this.timeline?.output) {
+            const redraw = snapContinuityRedraw(this.timeline.output.continuityRedraw);
+            this.segmentContinuityRedraw.value = String(redraw);
+            this.timeline.output.continuityRedraw = redraw;
         }
         this.syncSegmentContinuityFromPrevUI();
         this.syncSegmentRefImageSizeUI();
@@ -6686,6 +6744,10 @@ class MiniMaxH3DirectorEditor {
             this.timeline.output.continuityEnabled = !!value;
         } else if (key === "continuityOverlapFrames") {
             this.timeline.output.continuityOverlapFrames = snapContinuityFrames(value);
+        } else if (key === "continuityMode") {
+            this.timeline.output.continuityMode = normalizeContinuityMode(value);
+        } else if (key === "continuityRedraw") {
+            this.timeline.output.continuityRedraw = snapContinuityRedraw(value);
         }
         this.syncOutputUIFromTimeline();
         if (this.isFl2vMode()) updateFl2vDetailUI(this);

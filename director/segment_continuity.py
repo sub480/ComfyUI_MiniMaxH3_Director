@@ -116,6 +116,41 @@ def _truthy_continuity_flag(value) -> bool:
     return False
 
 
+CONTINUITY_MODE_GUIDE = "guide"
+CONTINUITY_MODE_CONTINUE = "continue"
+DEFAULT_CONTINUITY_REDRAW = 0.65
+
+
+def resolve_continuity_mode(timeline: dict | None) -> str:
+    output = (timeline or {}).get("output") if isinstance(timeline, dict) else None
+    if not isinstance(output, dict):
+        return CONTINUITY_MODE_GUIDE
+    raw = str(output.get("continuityMode", output.get("continuity_mode", "")) or "")
+    if raw.strip().lower() in {
+        "continue", "continuation", "latent", "guide_redraw", "guide+redraw", "redraw",
+    }:
+        return CONTINUITY_MODE_CONTINUE
+    return CONTINUITY_MODE_GUIDE
+
+
+def resolve_continuity_redraw(timeline: dict | None) -> float:
+    from .h3_latent_continue import clamp_seam_min_mask
+
+    output = (timeline or {}).get("output") if isinstance(timeline, dict) else None
+    if not isinstance(output, dict):
+        return DEFAULT_CONTINUITY_REDRAW
+    raw = output.get("continuityRedraw", output.get("continuity_redraw"))
+    if raw is None:
+        raw = output.get("continueSeam", DEFAULT_CONTINUITY_REDRAW)
+    return clamp_seam_min_mask(raw)
+
+
+def is_continue_mode(plan) -> bool:
+    return bool(getattr(plan, "continuity_enabled", False)) and str(
+        getattr(plan, "continuity_mode", CONTINUITY_MODE_GUIDE) or CONTINUITY_MODE_GUIDE
+    ).strip().lower() == CONTINUITY_MODE_CONTINUE
+
+
 def resolve_continuity_settings(timeline: dict, *, segment_count: int) -> tuple[bool, int]:
     """Read segment continuity flags from timeline JSON (output only; default off)."""
     if segment_count < 2:
