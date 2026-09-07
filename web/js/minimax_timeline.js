@@ -139,6 +139,7 @@ import {
     toggleLocale,
 } from "./minimax_i18n.js";
 import { bindPackActions } from "./minimax_pack.js";
+import { bindSnapshotActions } from "./minimax_snapshots.js";
 
 const RULER_H = 24;
 const SEG_LABEL_H = 20;
@@ -939,7 +940,12 @@ const STYLES = `
    overflow:hidden keeps run-status from painting past the node bottom edge. */
 .mmx-host{width:100%;box-sizing:border-box;display:flex;flex-direction:column;min-height:var(--comfy-widget-min-height,0px);height:100%;max-height:100%;overflow:hidden}
 /* Default: fill allocated box. Batch-fill mode stretches list into leftover space. */
-.bd-wrap{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e0e0e0;font-size:11px;display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box;position:relative;min-height:0;height:100%;flex:1 1 auto;overflow:hidden}
+ .bd-wrap{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e0e0e0;font-size:11px;display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box;position:relative;min-height:0;height:100%;flex:1 1 auto;overflow:hidden}
+ .bd-snapshot-modal{position:fixed;inset:0;background:#0009;z-index:10000;display:flex;align-items:center;justify-content:center;padding:18px}
+ .bd-snapshot-modal.hidden{display:none}.bd-snapshot-box{width:min(860px,96vw);height:min(620px,90vh);background:#20252b;border:1px solid #59616b;border-radius:8px;box-shadow:0 12px 50px #000b;display:flex;flex-direction:column;color:#e8edf2}
+ .bd-snapshot-box header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #414951;font-size:14px}.bd-snapshot-body{display:grid;grid-template-columns:280px 1fr;min-height:0;flex:1}.bd-snapshot-body aside,.bd-snapshot-body section{padding:12px;min-width:0}.bd-snapshot-body aside{border-right:1px solid #414951;display:flex;flex-direction:column;gap:10px}.bd-snapshot-count{color:#aeb8c2}.bd-snapshot-list{overflow:auto;display:flex;flex-direction:column;gap:5px}.bd-snapshot-item{white-space:pre-line;text-align:left;background:#2b3239;color:#dfe7ed;border:1px solid #46515b;border-radius:4px;padding:8px;cursor:pointer}.bd-snapshot-item.active{border-color:#4fff8f;background:#35443c}.bd-snapshot-name-input{width:100%;box-sizing:border-box;background:#171b1f;color:#fff;border:1px solid #4fff8f;border-radius:3px;padding:3px}.bd-snapshot-body section{display:flex;flex-direction:column;gap:12px}.bd-snapshot-detail{white-space:pre-wrap;overflow:auto;line-height:1.65;background:#171b1f;border-radius:5px;padding:12px;flex:1}.bd-snapshot-actions{display:flex;flex-wrap:wrap;gap:6px}
+ .bd-snapshot-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;background:#302a20;border:1px solid #80652d;border-radius:4px}.bd-snapshot-confirm::first-line{flex:1}
+ @media(max-width:600px){.bd-snapshot-body{grid-template-columns:1fr}.bd-snapshot-body aside{border-right:0;border-bottom:1px solid #414951;max-height:42%}}
 .bd-wrap.bd-batch-fill{height:100%!important;min-height:0!important;max-height:100%;flex:1 1 0;overflow:hidden}
 .bd-wrap>.bd-toolbar-wrap{flex-shrink:0}
 .bd-main{flex:1 1 0;min-height:0;display:flex;flex-direction:column;gap:6px;width:100%;overflow:hidden}
@@ -1980,7 +1986,9 @@ function directorEditableFromEventTarget(target) {
     let node = target;
     if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
     if (!node?.closest) return null;
-    if (!node.closest(".mmx-host")) return null;
+    // Snapshot modal is mounted on document.body so editor panel rebuilds do
+    // not replace it, but it still needs the same canvas keyboard protection.
+    if (!node.closest(".mmx-host") && !node.closest(".bd-snapshot-modal")) return null;
     return node.closest("input, textarea, select, [contenteditable='true'], .bd-token-editor");
 }
 
@@ -2737,6 +2745,7 @@ class MiniMaxH3DirectorEditor {
         }
         syncBatchPanelFillHeight(this, {
             settle: opts.settle !== false && !runActive,
+            restore: opts.restore === true,
         });
     }
 
@@ -3021,7 +3030,8 @@ class MiniMaxH3DirectorEditor {
                         <input type="range" class="bd-tl-zoom-slider hidden" data-r="zoom" min="1" max="10" step="any" value="1" data-i18n-title="tooltip.timelineZoom">
                     </div>
                     <button type="button" class="bd-btn" data-a="pack-import" data-i18n="toolbar.importPack" data-i18n-title="tooltip.importPack">导入导演包</button>
-                    <button type="button" class="bd-btn" data-a="pack-export" data-i18n="toolbar.exportPack" data-i18n-title="tooltip.exportPack">导出导演包</button>
+                     <button type="button" class="bd-btn" data-a="pack-export" data-i18n="toolbar.exportPack" data-i18n-title="tooltip.exportPack">导出导演包</button>
+                     <button type="button" class="bd-btn" data-a="snapshots" data-i18n="toolbar.snapshots" data-i18n-title="tooltip.snapshots">快照</button>
                     <button type="button" class="bd-btn" data-a="lang-toggle" data-i18n="toolbar.langToggle" data-i18n-title="toolbar.langToggleTitle">EN</button>
                     <div class="bd-bounds" data-r="bounds">起点: 0.00 | 终点: -</div>
                     <div class="bd-timecode" data-r="timecode">0.00s</div>
@@ -3033,6 +3043,7 @@ class MiniMaxH3DirectorEditor {
         this.smartSplitMsgEl = toolbarWrap.querySelector('[data-r="smart-split-msg"]');
         this.externalGroupsMsgEl = toolbarWrap.querySelector('[data-r="external-groups-msg"]');
         this.langToggleBtn = toolbarWrap.querySelector('[data-a="lang-toggle"]');
+        this.openSnapshots = bindSnapshotActions(this);
 
         this.mainBody = document.createElement("div");
         this.mainBody.className = "bd-main";
@@ -3529,6 +3540,7 @@ class MiniMaxH3DirectorEditor {
         bind('[data-a="lang-toggle"]', () => toggleLocale());
         bind('[data-a="zoom-toggle"]', () => this.toggleTimelineZoom());
         bindPackActions(this);
+        bind('[data-a="snapshots"]', () => this.openSnapshots?.());
         bind('[data-a="play"]', () => this.togglePlay());
         bind('[data-a="loop"]', () => this.toggleLoop());
         bind('[data-a="live-tae-preview"]', () => this.togglePreviewPanel());
@@ -3922,6 +3934,8 @@ class MiniMaxH3DirectorEditor {
         this._unsubLocale = null;
         this._stopLiveSampleAnim?.();
         this._closeBdModal();
+        this._snapshotCleanup?.();
+        this._snapshotCleanup = null;
         teardownPromptImageMentions(this.root);
         this._clearPreviewVideos(true);
         this._previewVideos?.clear();
@@ -3947,6 +3961,8 @@ class MiniMaxH3DirectorEditor {
 
     applyImportedTimeline(timeline, widgets = {}) {
         const data = timeline && typeof timeline === "object" ? timeline : {};
+        const previousMode = this._directorMode || this.getDirectorMode();
+        const previousTaskKey = this._taskKey || this.getTaskKey();
         // Replace, do not merge: drop in-memory drafts from the previous task so
         // later t2v/r2v/v2v switches restore pack batchWorkspaces, not stale slots.
         this._batchWsMem = {};
@@ -3999,7 +4015,10 @@ class MiniMaxH3DirectorEditor {
         } else {
             this.ensureGenTimeline();
         }
-        this.applyTaskLayout(this._directorMode);
+        // Pass the old mode/key so workspace switching can distinguish a real
+        // restore from an in-place refresh.  Passing the new mode here makes
+        // batch restore skip its cleanup path and leaves stale fill heights.
+        this.applyTaskLayout(previousMode, previousTaskKey);
         this.lockH3FrameRate({ fromFps: storedFps });
         this.populateTaskSelect(this.globalTask, this.taskTypeWidget?.value);
         this.syncLivePreviewSpeedUI();
@@ -4010,8 +4029,8 @@ class MiniMaxH3DirectorEditor {
         snapshotDirectorSampleWidgets(this.node, { force: true, includeHidden: true });
         this._externalGroupsSyncSig = null;
         this.syncExternalGroupsTimeline?.();
+        this._snapshotModal && applyI18nDom(this._snapshotModal);
         this.scheduleSettleRender?.();
-        this.updateDomWidgetHeight?.();
     }
 
     _videoIdentityFromParts(video, clips) {
@@ -7573,6 +7592,7 @@ class MiniMaxH3DirectorEditor {
 
     showBdDialog(opts = {}) {
         const { title, message, items } = opts;
+        const inputEnabled = opts.input === true;
         const confirmText = opts.confirmText ?? t("dialog.confirm");
         const cancelText = Object.prototype.hasOwnProperty.call(opts, "cancelText")
             ? opts.cancelText
@@ -7628,6 +7648,21 @@ class MiniMaxH3DirectorEditor {
                 }
             }
 
+            let inputEl = null;
+            if (inputEnabled) {
+                inputEl = document.createElement("input");
+                inputEl.type = "text";
+                inputEl.className = "bd-text-input";
+                inputEl.maxLength = 80;
+                inputEl.value = String(opts.inputValue ?? "");
+                inputEl.placeholder = String(opts.inputPlaceholder ?? "");
+                inputEl.addEventListener("keydown", (e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") { e.preventDefault(); finish(inputEl.value); }
+                });
+                bodyEl.appendChild(inputEl);
+            }
+
             if (cancelText) {
                 const cancelBtn = document.createElement("button");
                 cancelBtn.type = "button";
@@ -7641,7 +7676,7 @@ class MiniMaxH3DirectorEditor {
             okBtn.type = "button";
             okBtn.className = "bd-btn bd-btn-primary";
             okBtn.textContent = confirmText;
-            okBtn.onclick = () => finish(items?.length ? selectedValue : true);
+            okBtn.onclick = () => finish(inputEnabled ? inputEl.value : (items?.length ? selectedValue : true));
             actionsEl.appendChild(okBtn);
 
             overlay.onclick = (e) => {
@@ -7664,7 +7699,7 @@ class MiniMaxH3DirectorEditor {
             overlay.appendChild(panel);
             this.root.appendChild(overlay);
             this._modalEl = overlay;
-            okBtn.focus();
+            (inputEl || okBtn).focus();
         });
     }
 

@@ -3448,6 +3448,17 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         return;
     }
 
+    // A restored snapshot rebuilds cards before LiteGraph arranges the widget.
+    // Clear the previous project's 0px measurements instead of preserving them.
+    if (opts.restore) {
+        main?.style.removeProperty("height");
+        main?.style.removeProperty("max-height");
+        panel?.style.removeProperty("height");
+        panel?.style.removeProperty("max-height");
+        list.style.removeProperty("height");
+        list.style.removeProperty("max-height");
+    }
+
     const applyFill = () => {
         if (!editor.batchList || editor.batchPanel?.classList?.contains("hidden")) return;
 
@@ -3485,7 +3496,13 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
             topChrome += child.offsetHeight + 6;
         }
 
-        const budget = slotH > 0
+        // During restore LiteGraph can briefly expose the old widget height.
+        // Do not turn that transient measurement into a permanent 0px clamp.
+        // The next settle pass will run after the DOM widget is arranged.
+        const hasUsableBudget = trusted && slotH > 0
+            ? slotH >= Math.max(minH, 120)
+            : false;
+        const budget = hasUsableBudget
             ? slotH
             : Math.max(minH, Number(wrap.clientHeight || host.clientHeight) || minH);
         const mainH = Math.max(0, budget - statusH - liveH - topChrome);
@@ -3494,7 +3511,7 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
             main.style.flex = "1 1 0";
             main.style.minHeight = "0";
             main.style.overflow = "hidden";
-            if (trusted && slotH > 0) {
+            if (hasUsableBudget) {
                 main.style.height = `${mainH}px`;
                 main.style.maxHeight = `${mainH}px`;
             } else {
@@ -3519,7 +3536,7 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         panel.style.flex = "1 1 0";
         panel.style.minHeight = "0";
         panel.style.overflow = "hidden";
-        if (trusted && slotH > 0) {
+        if (hasUsableBudget) {
             panel.style.height = `${batchH}px`;
             panel.style.maxHeight = `${batchH}px`;
         } else {
@@ -3538,7 +3555,7 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         );
         list.style.flex = "1 1 0";
         list.style.minHeight = "0";
-        if (trusted && slotH > 0) {
+        if (hasUsableBudget) {
             list.style.height = `${listH}px`;
             list.style.maxHeight = `${listH}px`;
         } else {

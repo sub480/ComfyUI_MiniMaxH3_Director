@@ -666,10 +666,24 @@ def register_routes() -> bool:
         minimax_clear_segment_cache,
     )
     from .pack import minimax_download_pack, minimax_export_pack, minimax_import_pack
+    from .snapshots import (
+        minimax_delete_snapshot,
+        minimax_duplicate_snapshot,
+        minimax_list_snapshots,
+        minimax_rename_snapshot,
+        minimax_restore_snapshot,
+        minimax_save_snapshot,
+    )
 
     _register_route(routes, "POST", "/minimax/director/export_pack", minimax_export_pack)
     _register_route(routes, "GET", "/minimax/director/download_pack", minimax_download_pack)
     _register_route(routes, "POST", "/minimax/director/import_pack", minimax_import_pack)
+    _register_route(routes, "GET", "/minimax/director/snapshots", minimax_list_snapshots)
+    _register_route(routes, "POST", "/minimax/director/snapshots/save", minimax_save_snapshot)
+    _register_route(routes, "POST", "/minimax/director/snapshots/restore", minimax_restore_snapshot)
+    _register_route(routes, "POST", "/minimax/director/snapshots/rename", minimax_rename_snapshot)
+    _register_route(routes, "POST", "/minimax/director/snapshots/duplicate", minimax_duplicate_snapshot)
+    _register_route(routes, "POST", "/minimax/director/snapshots/delete", minimax_delete_snapshot)
     _ROUTES_REGISTERED = True
     log.info("MiniMax H3 Director HTTP routes registered")
     return True
