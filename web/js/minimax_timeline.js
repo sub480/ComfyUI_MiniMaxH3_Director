@@ -11219,7 +11219,7 @@ class MiniMaxH3DirectorEditor {
             const relPath = prepared.relPath;
             if (hasDuplicateReferenceAudio(target.refAudios, relPath, index)) {
                 endSlotLoad(this, key);
-                alert(t("ref.audioDuplicate"));
+                void this.showBdMessage?.(t("snapshot.errorTitle"), t("ref.audioDuplicate"));
                 return;
             }
             target.refAudios = target.refAudios.filter((r) => Number(r.index ?? r.slot) !== index);
@@ -11236,7 +11236,7 @@ class MiniMaxH3DirectorEditor {
         } catch (err) {
             endSlotLoad(this, key);
             console.error("[MiniMax H3Director] ref audio upload failed:", err);
-            alert(t("upload.refAudioFailed", { err: err?.message || err }));
+            void this.showBdMessage?.(t("snapshot.errorTitle"), t("upload.refAudioFailed", { err: err?.message || err }));
         }
     }
 

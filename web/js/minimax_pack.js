@@ -42,7 +42,7 @@ async function packConfirm(editor, message, title) {
             cancelText: t("dialog.cancel"),
         }));
     }
-    return window.confirm(message);
+    return false;
 }
 
 async function packAlert(editor, message, title) {
@@ -50,7 +50,7 @@ async function packAlert(editor, message, title) {
         await editor.showBdMessage(title || t("pack.failedTitle"), message);
         return;
     }
-    window.alert(title ? `${title}\n${message}` : message);
+    console.error(`[MiniMax H3 Director] ${title || "Pack"}: ${message}`);
 }
 
 function downloadBlob(blob, filename) {

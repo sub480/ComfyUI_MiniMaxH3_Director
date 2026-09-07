@@ -1140,7 +1140,7 @@ function bindFl2vSlotDnD(editor, slotEl, shotIndex, slotKind) {
                     editor.scheduleRender?.();
                 } catch (err) {
                     console.error("[MiniMax H3 fl2v] drop upload failed", err);
-                    alert(t("upload.alertFailed", { err: err?.message || err }));
+                    void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.alertFailed", { err: err?.message || err }));
                 }
             })();
         }
@@ -1451,7 +1451,7 @@ export function bindFl2vEvents(editor) {
             editor.updateDomWidgetHeight?.();
         } catch (err) {
             console.error("[MiniMax H3 fl2v] upload failed", err);
-            alert(t("upload.alertFailed", { err: err?.message || err }));
+            void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.alertFailed", { err: err?.message || err }));
         } finally {
             ui.fileInput.value = "";
         }

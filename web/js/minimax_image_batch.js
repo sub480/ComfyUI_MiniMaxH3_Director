@@ -938,7 +938,7 @@ async function assignSegSourceFromFile(editor, index, file) {
         }
     } catch (err) {
         console.error("[MiniMax H3Director] batch source upload failed:", err);
-        alert(t("upload.alertFailed", { err: err?.message || err }));
+        void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.alertFailed", { err: err?.message || err }));
     }
 }
 
@@ -991,7 +991,7 @@ async function assignSegFl2vFromFile(editor, index, kind, file) {
         }
     } catch (err) {
         console.error("[MiniMax H3Director] mixed fl2v upload failed:", err);
-        alert(t("upload.alertFailed", { err: err?.message || err }));
+        void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.alertFailed", { err: err?.message || err }));
     }
 }
 
@@ -1135,7 +1135,7 @@ async function assignSegRefFromFile(editor, index, slot, file) {
         const imageFile = relPath(uploaded);
         if (hasDuplicateGroupMedia(seg.refs, imageFile, slot)) {
             endSlotLoad(editor, key);
-            alert(t("ref.mediaDuplicate"));
+            void editor.showBdMessage?.(t("snapshot.errorTitle"), t("ref.mediaDuplicate"));
             return false;
         }
         seg.refs = (seg.refs || []).filter((r) => Number(r.index ?? r.slot) !== slot);
@@ -1208,7 +1208,7 @@ async function assignSegAudioFromFile(editor, index, slot, file) {
         if (!seg) return false;
         if (hasDuplicateReferenceAudio(seg.refAudios, prepared.relPath, slot)) {
             endSlotLoad(editor, key);
-            alert(t("ref.audioDuplicate"));
+            void editor.showBdMessage?.(t("snapshot.errorTitle"), t("ref.audioDuplicate"));
             return false;
         }
         seg.refAudios = (seg.refAudios || []).filter((r) => Number(r.index ?? r.slot) !== slot);
@@ -1226,7 +1226,7 @@ async function assignSegAudioFromFile(editor, index, slot, file) {
     } catch (err) {
         endSlotLoad(editor, key);
         console.error("[MiniMax H3Director] batch audio upload failed:", err);
-        alert(t("upload.refAudioFailed", { err: err?.message || err }));
+        void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.refAudioFailed", { err: err?.message || err }));
         return false;
     }
 }
@@ -1263,7 +1263,7 @@ async function assignSegVideoFromFile(editor, index, slot, file) {
         const videoFile = relPath(uploaded);
         if (hasDuplicateGroupMedia(seg.refVideos, videoFile, slot)) {
             endSlotLoad(editor, key);
-            alert(t("ref.mediaDuplicate"));
+            void editor.showBdMessage?.(t("snapshot.errorTitle"), t("ref.mediaDuplicate"));
             return false;
         }
         seg.refVideos = (seg.refVideos || []).filter((r) => Number(r.index ?? r.slot) !== slot);
@@ -1281,7 +1281,7 @@ async function assignSegVideoFromFile(editor, index, slot, file) {
     } catch (err) {
         endSlotLoad(editor, key);
         console.error("[MiniMax H3Director] batch video upload failed:", err);
-        alert(t("upload.refVideoBatchFailed", { err: err?.message || err }));
+        void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.refVideoBatchFailed", { err: err?.message || err }));
         return false;
     }
 }
@@ -1363,7 +1363,7 @@ function dropFilesIntoGroupSlots(editor, index, files, e, {
                 reserved,
             );
         if (target < 0) {
-            if (i === 0) alert(t("mediaPicker.slotsFull"));
+            if (i === 0) void editor.showBdMessage?.(t("snapshot.errorTitle"), t("mediaPicker.slotsFull"));
             break;
         }
         reserved.add(target);
@@ -2682,7 +2682,7 @@ function commitSegmentPassMode(editor, index, mode) {
 async function clearGroupFirstPassCache(editor, index) {
     const node = editor?.node;
     if (!node) return;
-    if (!window.confirm(t("batch.pass.clearConfirm"))) return;
+    if (!await editor.showBdDialog?.({ title: t("batch.pass.clear"), message: t("batch.pass.clearConfirm"), confirmText: t("dialog.confirm"), cancelText: t("dialog.cancel") })) return;
     try {
         const response = await api.fetchApi("/minimax/director/clear_segment_cache", {
             method: "POST",
@@ -2700,13 +2700,13 @@ async function clearGroupFirstPassCache(editor, index) {
         closePassCachePopover();
         scheduleDirectorPassCacheRefresh(editor, 80);
     } catch (error) {
-        window.alert(`${t("batch.pass.clear")}: ${error?.message || error}`);
+        await editor.showBdMessage?.(t("batch.pass.clear"), error?.message || String(error));
     }
 }
 
 export async function clearAllDirectorCache(editor) {
     const node = editor?.node;
-    if (!node || !window.confirm(t("batch.cache.clearAllConfirm"))) return;
+    if (!node || !await editor.showBdDialog?.({ title: t("batch.cache.clearAll"), message: t("batch.cache.clearAllConfirm"), confirmText: t("dialog.confirm"), cancelText: t("dialog.cancel") })) return;
     try {
         const response = await api.fetchApi("/minimax/director/clear_segment_cache", {
             method: "POST",
@@ -2718,7 +2718,7 @@ export async function clearAllDirectorCache(editor) {
         scheduleDirectorPassCacheRefresh(editor, 80);
         editor.renderImageBatchGroups?.();
     } catch (error) {
-        window.alert(`${t("batch.cache.clearAll")}: ${error?.message || error}`);
+        await editor.showBdMessage?.(t("batch.cache.clearAll"), error?.message || String(error));
     }
 }
 
