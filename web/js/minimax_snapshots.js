@@ -1,9 +1,9 @@
 /** Server-side Director snapshots, stored as Director-pack zips. */
 import { api } from "../../scripts/api.js";
 import { t, applyI18nDom, onLocaleChange } from "./minimax_i18n.js";
-import { collectPackWidgets } from "./minimax_pack.js";
 
 const MAX_NAME = 80;
+const SNAPSHOT_WIDGET_NAMES = ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed"];
 
 async function request(path, body, method = "POST") {
     const options = { method, headers: { "Content-Type": "application/json" } };
@@ -16,6 +16,16 @@ async function request(path, body, method = "POST") {
 function timestampOf(snapshot) { return snapshot.updatedAt || snapshot.createdAt || 0; }
 function sort(items) { return [...items].sort((a, b) => timestampOf(b) - timestampOf(a) || a.name.localeCompare(b.name)); }
 function nameOf(value) { return String(value ?? "").trim().slice(0, MAX_NAME); }
+function collectSnapshotWidgets(editor) {
+    const widgets = {};
+    for (const name of SNAPSHOT_WIDGET_NAMES) {
+        const widget = editor.widget?.(name);
+        if (widget && widget.value != null && widget.value !== "") widgets[name] = widget.value;
+    }
+    const task = editor.taskTypeWidget?.value || editor.timeline?.global?.taskType || "";
+    if (task) widgets.task_type = task;
+    return widgets;
+}
 function timestampName(prefix = "快照") {
     const now = new Date();
     const stamp = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("")
@@ -33,7 +43,7 @@ export function bindSnapshotActions(editor) {
     modal.className = "bd-snapshot-modal hidden";
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
-    modal.innerHTML = `<div class="bd-snapshot-box"><header><strong data-i18n="snapshot.title">快照</strong><button class="bd-icon-btn" data-snap="close" aria-label="×">×</button></header><div class="bd-snapshot-body"><aside><button class="bd-btn bd-btn-primary" data-snap="save" data-i18n="snapshot.save">保存当前配置</button><div class="bd-snapshot-count" data-snap="count"></div><div class="bd-snapshot-list" data-snap="list"></div></aside><section><div class="bd-snapshot-detail" data-snap="detail"></div><div class="bd-snapshot-actions"><button class="bd-btn bd-btn-primary" data-snap="restore" data-i18n="snapshot.restore">还原</button><button class="bd-btn" data-snap="rename" data-i18n="snapshot.rename">重命名</button><button class="bd-btn" data-snap="duplicate" data-i18n="snapshot.duplicate">复制</button><button class="bd-btn bd-btn-danger" data-snap="remove" data-i18n="snapshot.remove">删除</button></div></section></div></div>`;
+     modal.innerHTML = `<div class="bd-snapshot-box"><header><strong data-i18n="snapshot.title">快照</strong><button class="bd-icon-btn" data-snap="close" aria-label="×">×</button></header><div class="bd-snapshot-body"><aside><button class="bd-btn bd-btn-primary" data-snap="save" data-i18n="snapshot.save">保存当前配置</button><div class="bd-snapshot-count" data-snap="count"></div><div class="bd-snapshot-list" data-snap="list"></div></aside><section><div class="bd-snapshot-detail" data-snap="detail"></div><div class="bd-snapshot-actions"><button class="bd-btn bd-btn-primary" data-snap="restore" data-i18n="snapshot.restore">还原</button><button class="bd-btn" data-snap="export" data-i18n="snapshot.export">导出</button><button class="bd-btn" data-snap="rename" data-i18n="snapshot.rename">重命名</button><button class="bd-btn" data-snap="duplicate" data-i18n="snapshot.duplicate">复制</button><button class="bd-btn bd-btn-danger" data-snap="remove" data-i18n="snapshot.remove">删除</button></div></section></div></div>`;
     document.body.appendChild(modal);
     editor._snapshotModal = modal;
     let items = [];
@@ -70,6 +80,17 @@ export function bindSnapshotActions(editor) {
         }, 0);
     };
     const setBusy = (value) => { busy = value; buttons.forEach((button) => { if (button.dataset.snap !== "close") button.disabled = value; }); };
+    const downloadSnapshot = async (snapshot) => {
+        const response = await api.fetchApi(`/minimax/director/snapshots/export?id=${encodeURIComponent(snapshot.id)}`);
+        if (!response.ok) throw new Error((await response.text()) || t("snapshot.exportError"));
+        const blob = await response.blob();
+        if (!blob.size) throw new Error(t("snapshot.exportError"));
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url; link.download = `${snapshot.name}.mmxsnapshot.zip`;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+    };
 
     const load = async () => {
         const data = await request("/minimax/director/snapshots", undefined, "GET");
@@ -142,8 +163,12 @@ export function bindSnapshotActions(editor) {
     modal.querySelector('[data-snap="save"]').onclick = () => operation(async () => {
         const name = timestampName();
         editor.flushTimelineSync?.();
-        const result = await request("/minimax/director/snapshots/save", { name, timeline: editor.buildTimelinePayload(), widgets: collectPackWidgets(editor) });
+        const result = await request("/minimax/director/snapshots/save", { name, timeline: editor.buildTimelinePayload(), widgets: collectSnapshotWidgets(editor) });
         selected = result.id;
+    });
+    modal.querySelector('[data-snap="export"]').onclick = () => operation(async () => {
+        const snapshot = selectedSnapshot(); if (!snapshot) return;
+        await downloadSnapshot(snapshot);
     });
     modal.querySelector('[data-snap="rename"]').onclick = () => {
         const snapshot = selectedSnapshot(); if (!snapshot) return;

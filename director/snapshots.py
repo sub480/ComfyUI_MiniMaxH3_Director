@@ -18,7 +18,7 @@ from typing import Any
 import folder_paths
 from aiohttp import web
 
-from .pack import build_export_pack, extract_pack_zip, import_extracted_pack
+from .pack import _send_zip_file, build_export_pack, extract_pack_zip, import_extracted_pack
 
 SNAPSHOT_EXT = ".mmxsnapshot.zip"
 _SNAPSHOT_NAME_RE = re.compile(r"^[^<>:\"/\\|?*\x00-\x1f]+$")
@@ -180,6 +180,17 @@ async def minimax_restore_snapshot(request):
     finally:
         if extracted:
             shutil.rmtree(extracted, ignore_errors=True)
+
+
+async def minimax_export_snapshot(request):
+    """Download one persisted snapshot without exposing arbitrary output paths."""
+    try:
+        path = _path_for(request.query.get("id") or request.query.get("filename"))
+    except ValueError as exc:
+        return web.Response(status=400, text=str(exc))
+    if not path.is_file():
+        return web.Response(status=404, text="Snapshot not found.")
+    return await _send_zip_file(request, path, "MiniMaxH3Snapshot.mmxsnapshot.zip")
 
 
 async def minimax_rename_snapshot(request):
