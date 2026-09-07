@@ -18,7 +18,8 @@ from typing import Any
 import folder_paths
 from aiohttp import web
 
-from .pack import _send_zip_file, build_export_pack, extract_pack_zip, import_extracted_pack
+from .pack import PACK_FORMAT, _read_json, _send_zip_file, build_export_pack, extract_pack_zip, import_extracted_pack
+from .output_layout import SNAPSHOTS_DIR_NAME, h3_output_path
 
 SNAPSHOT_EXT = ".mmxsnapshot.zip"
 _SNAPSHOT_NAME_RE = re.compile(r"^[^<>:\"/\\|?*\x00-\x1f]+$")
@@ -28,7 +29,7 @@ _LOCK = threading.RLock()
 
 
 def _snapshot_root() -> Path:
-    root = Path(folder_paths.get_output_directory()) / "minimax_director_snapshots"
+    root = h3_output_path(SNAPSHOTS_DIR_NAME)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -191,6 +192,61 @@ async def minimax_export_snapshot(request):
     if not path.is_file():
         return web.Response(status=404, text="Snapshot not found.")
     return await _send_zip_file(request, path, "MiniMaxH3Snapshot.mmxsnapshot.zip")
+
+
+async def minimax_import_snapshot(request):
+    """Validate and store an exported snapshot zip in the snapshot directory."""
+    upload_path: Path | None = None
+    extracted: Path | None = None
+    try:
+        if "multipart" not in (request.content_type or ""):
+            return web.Response(status=400, text="Missing snapshot file.")
+        post = await request.post()
+        upload = post.get("snapshot")
+        if upload is None or not hasattr(upload, "file"):
+            return web.Response(status=400, text="Missing snapshot file.")
+        original_name = str(getattr(upload, "filename", "") or "").strip()
+        if not original_name.lower().endswith(".zip"):
+            raise ValueError("Snapshot must be a ZIP file.")
+        base_name = original_name[:-4]
+        if base_name.lower().endswith(".mmxsnapshot"):
+            base_name = base_name[:-len(".mmxsnapshot")]
+        name = _snapshot_name(base_name)
+        upload_fd, upload_name = tempfile.mkstemp(prefix="mmx_snapshot_up_", suffix=SNAPSHOT_EXT)
+        os.close(upload_fd)
+        upload_path = Path(upload_name)
+        with upload_path.open("wb") as out:
+            shutil.copyfileobj(upload.file, out)
+        extracted = Path(tempfile.mkdtemp(prefix="mmx_snapshot_check_"))
+        extract_pack_zip(upload_path, extracted)
+        pack_meta_path = extracted / "pack.json"
+        pack_meta = _read_json(pack_meta_path) if pack_meta_path.is_file() else {}
+        if not isinstance(pack_meta, dict) or pack_meta.get("format") != PACK_FORMAT:
+            raise ValueError("Invalid snapshot format.")
+        target = _snapshot_root() / f"{name}{SNAPSHOT_EXT}"
+        with _LOCK:
+            if _same_name_exists(target.parent, target.name):
+                raise ValueError("A snapshot with this name already exists.")
+            try:
+                os.link(upload_path, target)
+                upload_path.unlink(missing_ok=True)
+                upload_path = None
+            except FileExistsError:
+                raise ValueError("A snapshot with this name already exists.")
+            except OSError:
+                with target.open("xb") as out:
+                    with upload_path.open("rb") as src:
+                        shutil.copyfileobj(src, out)
+                upload_path.unlink(missing_ok=True)
+                upload_path = None
+        return web.json_response(_metadata(target))
+    except Exception as exc:
+        return web.Response(status=400, text=str(exc))
+    finally:
+        if extracted:
+            shutil.rmtree(extracted, ignore_errors=True)
+        if upload_path:
+            upload_path.unlink(missing_ok=True)
 
 
 async def minimax_rename_snapshot(request):

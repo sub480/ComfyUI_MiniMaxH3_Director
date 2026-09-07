@@ -16,6 +16,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .frame_align import H3_FPS
+from .output_layout import INPUT_REFERENCES_DIR_NAME, INPUT_UPLOADS_DIR_NAME, h3_input_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director")
 
@@ -71,7 +72,8 @@ def _peek_image_size(path: str) -> tuple[int, int]:
 
 
 def _list_input_media(kind: str) -> list[dict]:
-    input_dir = folder_paths.get_input_directory()
+    input_dir = str(h3_input_path())
+    os.makedirs(input_dir, exist_ok=True)
     exts = _get_media_exts(kind)
     peek_video = None
     if kind == "video":
@@ -164,7 +166,8 @@ async def minimax_upload_video_chunk(request):
     if chunk_index + 1 < total_chunks:
         return web.json_response({"status": "ok", "chunk_index": chunk_index})
 
-    input_dir = folder_paths.get_input_directory()
+    input_dir = str(h3_input_path(INPUT_UPLOADS_DIR_NAME))
+    os.makedirs(input_dir, exist_ok=True)
     out_path = os.path.join(input_dir, filename)
     if os.path.exists(out_path):
         stem, ext = os.path.splitext(filename)
@@ -186,8 +189,9 @@ async def minimax_upload_video_chunk(request):
                 shutil.copyfileobj(src, out)
 
     shutil.rmtree(session_dir, ignore_errors=True)
-    log.info("MiniMax H3 Director uploaded video to input/: %s", filename)
-    return web.json_response({"name": filename, "subfolder": "", "type": "input"})
+    subfolder = f"H3_D/{INPUT_UPLOADS_DIR_NAME}"
+    log.info("MiniMax H3 Director uploaded video to input/%s: %s", subfolder, filename)
+    return web.json_response({"name": filename, "subfolder": subfolder, "type": "input"})
 
 
 def _reference_audio_result(path: str, *, reused: bool, source_kind: str) -> dict:
@@ -195,8 +199,8 @@ def _reference_audio_result(path: str, *, reused: bool, source_kind: str) -> dic
     return {
         "name": name,
         "fileName": name,
-        "relPath": name,
-        "subfolder": "",
+        "relPath": f"H3_D/{INPUT_REFERENCES_DIR_NAME}/{name}",
+        "subfolder": f"H3_D/{INPUT_REFERENCES_DIR_NAME}",
         "type": "input",
         "reused": bool(reused),
         "sourceKind": source_kind,
@@ -222,7 +226,8 @@ def _files_identical(first: str, second: str) -> bool:
 
 def _place_in_input_like_comfy_upload(temp_path: str, filename: str) -> tuple[str, bool]:
     """Use ComfyUI's non-overwrite rule: reuse identical, otherwise append ` (n)`."""
-    input_dir = folder_paths.get_input_directory()
+    input_dir = str(h3_input_path(INPUT_REFERENCES_DIR_NAME))
+    os.makedirs(input_dir, exist_ok=True)
     filename = _safe_basename(filename)
     stem, ext = os.path.splitext(filename)
     candidate_name = filename
@@ -250,7 +255,8 @@ def _prepare_reference_audio(source_path: str, display_name: str) -> dict:
     safe_name = _safe_basename(display_name or os.path.basename(source_path))
     safe_stem = os.path.splitext(safe_name)[0] or "reference_audio"
     output_name = f"{safe_stem}.flac"
-    output_dir = folder_paths.get_input_directory()
+    output_dir = str(h3_input_path(INPUT_REFERENCES_DIR_NAME))
+    os.makedirs(output_dir, exist_ok=True)
 
     from ..lib.audio_io import _ffmpeg_bin
 
@@ -669,6 +675,7 @@ def register_routes() -> bool:
         minimax_delete_snapshot,
         minimax_duplicate_snapshot,
         minimax_export_snapshot,
+        minimax_import_snapshot,
         minimax_list_snapshots,
         minimax_rename_snapshot,
         minimax_restore_snapshot,
@@ -678,6 +685,7 @@ def register_routes() -> bool:
     _register_route(routes, "GET", "/minimax/director/snapshots", minimax_list_snapshots)
     _register_route(routes, "POST", "/minimax/director/snapshots/save", minimax_save_snapshot)
     _register_route(routes, "GET", "/minimax/director/snapshots/export", minimax_export_snapshot)
+    _register_route(routes, "POST", "/minimax/director/snapshots/import", minimax_import_snapshot)
     _register_route(routes, "POST", "/minimax/director/snapshots/restore", minimax_restore_snapshot)
     _register_route(routes, "POST", "/minimax/director/snapshots/rename", minimax_rename_snapshot)
     _register_route(routes, "POST", "/minimax/director/snapshots/duplicate", minimax_duplicate_snapshot)

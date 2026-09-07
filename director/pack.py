@@ -28,6 +28,7 @@ from aiohttp import web
 from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
 from .fl2v_timeline import DEFAULT_FL2V_DURATION_SEC, MIN_FL2V_FRAMES, _duration_to_minimax_frames
 from .frame_align import H3_FPS
+from .output_layout import INPUT_PACKS_DIR_NAME, h3_input_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.pack")
 
@@ -912,7 +913,7 @@ def _prefix_pack_paths(obj: Any, prefix: str) -> None:
         if not val:
             continue
         rel = str(val).replace("\\", "/").strip().lstrip("/")
-        if rel.startswith("minimax_director_packs/"):
+        if rel.startswith("H3_D/packs/"):
             continue
         if rel.startswith(PACK_PREFIXES):
             new_rel = f"{prefix}/{rel}"
@@ -1004,8 +1005,8 @@ def import_extracted_pack(extracted: Path) -> dict[str, Any]:
         timeline = _assemble_timeline(extracted, pack_meta)
 
     pack_id = uuid.uuid4().hex[:12]
-    rel_prefix = f"minimax_director_packs/{pack_id}"
-    dest = _input_dir() / "minimax_director_packs" / pack_id
+    rel_prefix = f"H3_D/{INPUT_PACKS_DIR_NAME}/{pack_id}"
+    dest = h3_input_path(INPUT_PACKS_DIR_NAME, pack_id)
     _copy_tree_media(extracted, dest)
     _prefix_pack_paths(timeline, rel_prefix)
     missing: list[str] = []

@@ -546,6 +546,7 @@ async function uploadImage(file) {
     const body = new FormData();
     body.append("image", uploadFile, uploadFile.name);
     body.append("type", "input");
+    body.append("subfolder", "H3_D/references");
     body.append("overwrite", "false");
     const resp = await api.fetchApi("/upload/image", { method: "POST", body });
     if (!resp.ok) throw new Error(await resp.text() || `Upload failed (${resp.status})`);

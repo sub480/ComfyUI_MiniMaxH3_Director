@@ -43,7 +43,7 @@ export function bindSnapshotActions(editor) {
     modal.className = "bd-snapshot-modal hidden";
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
-     modal.innerHTML = `<div class="bd-snapshot-box"><header><strong data-i18n="snapshot.title">快照</strong><button class="bd-icon-btn" data-snap="close" aria-label="×">×</button></header><div class="bd-snapshot-body"><aside><button class="bd-btn bd-btn-primary" data-snap="save" data-i18n="snapshot.save">保存当前配置</button><div class="bd-snapshot-count" data-snap="count"></div><div class="bd-snapshot-list" data-snap="list"></div></aside><section><div class="bd-snapshot-detail" data-snap="detail"></div><div class="bd-snapshot-actions"><button class="bd-btn bd-btn-primary" data-snap="restore" data-i18n="snapshot.restore">还原</button><button class="bd-btn" data-snap="export" data-i18n="snapshot.export">导出</button><button class="bd-btn" data-snap="rename" data-i18n="snapshot.rename">重命名</button><button class="bd-btn" data-snap="duplicate" data-i18n="snapshot.duplicate">复制</button><button class="bd-btn bd-btn-danger" data-snap="remove" data-i18n="snapshot.remove">删除</button></div></section></div></div>`;
+     modal.innerHTML = `<div class="bd-snapshot-box"><header><strong data-i18n="snapshot.title">快照</strong><button class="bd-icon-btn" data-snap="close" aria-label="×">×</button></header><div class="bd-snapshot-body"><aside><button class="bd-btn bd-btn-primary" data-snap="save" data-i18n="snapshot.save">保存当前配置</button><div class="bd-snapshot-count" data-snap="count"></div><div class="bd-snapshot-list" data-snap="list"></div></aside><section><div class="bd-snapshot-detail" data-snap="detail"></div><div class="bd-snapshot-actions"><button class="bd-btn bd-btn-primary" data-snap="restore" data-i18n="snapshot.restore">还原</button><button class="bd-btn" data-snap="export" data-i18n="snapshot.export">导出</button><button class="bd-btn" data-snap="import" data-i18n="snapshot.import">导入</button><button class="bd-btn" data-snap="rename" data-i18n="snapshot.rename">重命名</button><button class="bd-btn" data-snap="duplicate" data-i18n="snapshot.duplicate">复制</button><button class="bd-btn bd-btn-danger" data-snap="remove" data-i18n="snapshot.remove">删除</button></div></section></div></div>`;
     document.body.appendChild(modal);
     editor._snapshotModal = modal;
     let items = [];
@@ -53,7 +53,20 @@ export function bindSnapshotActions(editor) {
     const detailEl = modal.querySelector('[data-snap="detail"]');
     const buttons = [...modal.querySelectorAll("button[data-snap]")];
     const selectedSnapshot = () => items.find((item) => item.id === selected);
-    const alertError = (error) => editor.showBdMessage?.(t("snapshot.errorTitle"), String(error?.message || error));
+    const alertInView = (message, title = t("snapshot.errorTitle")) => new Promise((resolve) => {
+        const bar = document.createElement("div");
+        bar.className = "bd-snapshot-confirm bd-snapshot-alert";
+        const text = document.createElement("span");
+        text.textContent = `${title}: ${message}`;
+        const close = document.createElement("button");
+        close.className = "bd-btn"; close.textContent = t("dialog.confirm");
+        const finish = () => { bar.remove(); resolve(); };
+        close.onclick = finish;
+        bar.append(text, close);
+        modal.querySelector(".bd-snapshot-actions").before(bar);
+        close.focus();
+    });
+    const alertError = (error) => alertInView(String(error?.message || error));
     const confirmInView = (message) => new Promise((resolve) => {
         const bar = document.createElement("div");
         bar.className = "bd-snapshot-confirm";
@@ -91,6 +104,21 @@ export function bindSnapshotActions(editor) {
         document.body.appendChild(link); link.click(); link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
     };
+    const importSnapshot = () => new Promise((resolve, reject) => {
+        const input = document.createElement("input");
+        input.type = "file"; input.accept = ".zip,application/zip"; input.style.display = "none";
+        input.onchange = async () => {
+            const file = input.files?.[0]; input.remove();
+            if (!file) return resolve(null);
+            try {
+                const body = new FormData(); body.append("snapshot", file, file.name);
+                const response = await api.fetchApi("/minimax/director/snapshots/import", { method: "POST", body });
+                if (!response.ok) throw new Error((await response.text()) || t("snapshot.importError"));
+                resolve(await response.json());
+            } catch (error) { reject(error); }
+        };
+        document.body.appendChild(input); input.click();
+    });
 
     const load = async () => {
         const data = await request("/minimax/director/snapshots", undefined, "GET");
@@ -169,6 +197,10 @@ export function bindSnapshotActions(editor) {
     modal.querySelector('[data-snap="export"]').onclick = () => operation(async () => {
         const snapshot = selectedSnapshot(); if (!snapshot) return;
         await downloadSnapshot(snapshot);
+    });
+    modal.querySelector('[data-snap="import"]').onclick = () => operation(async () => {
+        const result = await importSnapshot();
+        if (result?.id) selected = result.id;
     });
     modal.querySelector('[data-snap="rename"]').onclick = () => {
         const snapshot = selectedSnapshot(); if (!snapshot) return;

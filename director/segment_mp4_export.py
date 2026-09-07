@@ -1,7 +1,7 @@
 """Incremental per-segment MP4 export for「分段导出」runs.
 
 Best-effort: encode failures must never abort generation. Each run uses a
-timestamp folder: ``output/minimax_seg_export/<YYYYMMDD_HHMMSS>/``.
+timestamp folder: ``output/H3_D/segment_export/<YYYYMMDD_HHMMSS>/``.
 
 Files:
   ``seg_XXXX.mp4`` — final clip (last refine pass / no Refine)
@@ -18,10 +18,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import folder_paths
 import torch
 
 from .audio_export import prepare_segment_audio_for_file_export
+from .output_layout import SEGMENT_EXPORT_DIR_NAME, h3_output_path
 from .plan import DirectorPlan, SegmentPlan
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.mp4_export")
@@ -30,14 +30,14 @@ VIDEO_EXPORT_TASKS = frozenset({"t2v", "i2v", "r2v", "fl2v", "v2v", "rv2v"})
 
 
 def new_segment_mp4_run_dir(plan: DirectorPlan) -> Path | None:
-    """Create ``minimax_seg_export/<YYYYMMDD_HHMMSS>/`` for one Director execute.
+    """Create ``H3_D/segment_export/<YYYYMMDD_HHMMSS>/`` for one Director execute.
 
     Returns None when not in segments mode or the output dir is unavailable.
     """
     if getattr(plan, "export_mode", "all") != "segments":
         return None
     try:
-        base = Path(folder_paths.get_output_directory()) / "minimax_seg_export"
+        base = h3_output_path(SEGMENT_EXPORT_DIR_NAME)
         base.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         root = base / stamp

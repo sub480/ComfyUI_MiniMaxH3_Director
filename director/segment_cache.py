@@ -16,8 +16,6 @@ from typing import Any, Callable
 
 import torch
 
-import folder_paths
-
 from .h3_motion_context import (
     CONTINUITY_PIPELINE_ID,
     CONTINUITY_TASK_KEYS,
@@ -25,6 +23,7 @@ from .h3_motion_context import (
     trim_export_tail,
 )
 from .plan import DirectorPlan, SegmentPlan, resolve_ref_image_size
+from .output_layout import SEGMENT_CACHE_DIR_NAME, h3_output_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.cache")
 
@@ -101,7 +100,7 @@ def _reject_source_stale(
 
 def _cache_root(node_id: str) -> Path | None:
     try:
-        root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+        root = h3_output_path(SEGMENT_CACHE_DIR_NAME, str(node_id))
         root.mkdir(parents=True, exist_ok=True)
         return root
     except OSError as exc:
@@ -465,7 +464,7 @@ def inspect_segment_cache(
     }
     if not node_id:
         return result
-    root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+    root = h3_output_path(SEGMENT_CACHE_DIR_NAME, str(node_id))
     tensor_path = root / f"seg_{seg.index:04d}.pt"
     meta_path = root / f"seg_{seg.index:04d}.meta.json"
     audio_path = root / f"seg_{seg.index:04d}.audio.pt"
@@ -921,7 +920,7 @@ def prune_segment_cache(node_id: str | None, valid_indices) -> None:
     if not node_id:
         return
     try:
-        root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+        root = h3_output_path(SEGMENT_CACHE_DIR_NAME, str(node_id))
         if not root.is_dir():
             return
         valid = {int(i) for i in valid_indices}
@@ -951,7 +950,7 @@ def first_pass_cache_disk_signature(node_id: str | None) -> str:
     """
     if not node_id:
         return ""
-    root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+    root = h3_output_path(SEGMENT_CACHE_DIR_NAME, str(node_id))
     if not root.is_dir():
         return ""
     parts: list[str] = []
@@ -996,7 +995,7 @@ def inspect_first_pass_cache(
     if not node_id:
         return result
 
-    root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+    root = h3_output_path(SEGMENT_CACHE_DIR_NAME, str(node_id))
     all_segments = list(getattr(plan, "segments", None) or [])
     run_indices = getattr(plan, "run_indices", None)
     selected_set = frozenset(run_indices) if run_indices is not None else None
@@ -1114,7 +1113,7 @@ def clear_segment_cache(
             raise ValueError("segment_index must be an integer") from exc
         if segment_index < 0:
             raise ValueError("segment_index must be >= 0")
-    root = Path(folder_paths.get_output_directory()) / "minimax_seg_cache" / str(node_id)
+    root = h3_output_path(SEGMENT_CACHE_DIR_NAME, str(node_id))
     if not root.is_dir():
         return 0
     try:
