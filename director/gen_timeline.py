@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import torch
@@ -139,6 +140,37 @@ def _resolve_gen_image_ref(
     return None
 
 
+def _image_ref_identity(ref: dict | None) -> str:
+    if not isinstance(ref, dict):
+        return ""
+    file_name = str(ref.get("imageFile") or ref.get("fileName") or "").replace("\\", "/").strip()
+    if file_name:
+        return file_name
+    image_b64 = str(ref.get("imageB64") or "")
+    return f"inline:{hashlib.sha256(image_b64.encode('utf-8')).hexdigest()}" if image_b64 else ""
+
+
+def _segment_source_media_identity(
+    seg_data: dict,
+    *,
+    task_key: str,
+    edit_mode: str,
+    global_block: dict,
+) -> tuple[str, ...]:
+    if task_key == "i2v":
+        identity = _image_ref_identity(
+            _resolve_gen_image_ref(seg_data, edit_mode=edit_mode, global_block=global_block)
+        )
+        return (f"first:{identity}",) if identity else ()
+    if task_key == "fl2v":
+        identities = (
+            f"first:{_image_ref_identity(seg_data.get('startImage') or seg_data.get('genImage'))}",
+            f"last:{_image_ref_identity(seg_data.get('endImage'))}",
+        )
+        return tuple(identity for identity in identities if not identity.endswith(":"))
+    return ()
+
+
 def _load_gen_image_tensor(ref: dict) -> torch.Tensor:
     from .plan import load_reference_tensor
 
@@ -194,11 +226,15 @@ def _build_gen_source_clips(
     width: int,
     output_mode: str,
     ref_max_size: int,
+    active_indices: frozenset[int] | None = None,
 ) -> list[torch.Tensor]:
     chunks: list[torch.Tensor] = []
-    for _start, end, seg_data in ranges:
+    for index, (_start, end, seg_data) in enumerate(ranges):
         frame_count = end - _start
         if frame_count <= 0:
+            continue
+        if active_indices is not None and index not in active_indices:
+            chunks.append(torch.empty((0, 16, 16, 3), dtype=torch.float32))
             continue
         if submode == "gen_blank":
             # t2v/r2v duration lives on the segment range. Do not allocate
@@ -229,7 +265,7 @@ def _build_gen_source_clips(
             else:
                 clip = fit_video_long_edge(clip, ref_max_size)
         chunks.append(clip)
-    if not chunks:
+    if not any(int(chunk.shape[0]) > 0 for chunk in chunks):
         if submode == "gen_blank":
             return []
         raise ValueError("Generation timeline has no frames.")
@@ -275,6 +311,7 @@ def build_gen_director_plan(
     width: int,
     height: int,
     ref_max_size: int,
+    load_media: bool = True,
 ):
     """Build DirectorPlan for generation timeline modes (lazy import avoids cycles)."""
     from .plan import (
@@ -283,6 +320,9 @@ def build_gen_director_plan(
         _load_ref_audios,
         _load_ref_videos,
         _load_refs,
+        _ref_audio_metadata,
+        _ref_metadata,
+        _ref_video_metadata,
         _parse_run_selection,
         _resolve_export_mode,
         resolve_ref_image_size,
@@ -305,10 +345,14 @@ def build_gen_director_plan(
 
     submode = gen_submode(timeline, task_key)
     prompt = global_block.get("prompt") or global_prompt or ""
-    global_refs = _load_refs(global_block.get("refs") or [])
+    global_refs = (
+        _load_refs(global_block.get("refs") or [])
+        if load_media else _ref_metadata(global_block.get("refs") or [])
+    )
     shared_ref_audios = (
-        _load_ref_audios(
-            global_block.get("refAudios") or []
+        (
+            _load_ref_audios(global_block.get("refAudios") or [])
+            if load_media else _ref_audio_metadata(global_block.get("refAudios") or [])
         )
         if edit_mode == "global"
         else []
@@ -323,6 +367,7 @@ def build_gen_director_plan(
         default_frame_count=default_fc,
         task_key=task_key,
     )
+    run_indices = _parse_run_selection(timeline, len(segment_ranges))
 
     if submode == "gen_blank":
         out_mode = "fixed"
@@ -382,18 +427,22 @@ def build_gen_director_plan(
             width=out_w,
             output_mode=out_mode,
             ref_max_size=ref_max,
+            active_indices=run_indices,
         )
         attach_source_clips = is_prompt_batch_timeline(timeline, task_key) and task_key in ("i2i", "i2v")
         if attach_source_clips:
             # Placeholder timeline index only — spatial data comes from each segment's source_clip.
             source_video = torch.full((len(source_clips), 16, 16, 3), 0.5, dtype=torch.float32)
         else:
-            source_video = cat_frames_variable_size(source_clips)
+            source_video = cat_frames_variable_size(
+                [clip for clip in source_clips if int(clip.shape[0]) > 0]
+            )
 
     from .segment_continuity import resolve_segment_continuity_from_prev
 
     segments: list[SegmentPlan] = []
     for idx, (start, end, seg_data) in enumerate(segment_ranges):
+        is_selected = run_indices is None or idx in run_indices
         if edit_mode == "global":
             seg_prompt = prompt
             seg_task = task_type
@@ -410,7 +459,11 @@ def build_gen_director_plan(
                 seg_task_key_preview = resolve_task_key(seg_task)
             local_prompt = (seg_data.get("prompt") or "").strip()
             seg_prompt = local_prompt or prompt
-            seg_refs = _load_refs(seg_data.get("refs") or [])
+            seg_refs = (
+                _load_refs(seg_data.get("refs") or [])
+                if load_media and is_selected
+                else _ref_metadata(seg_data.get("refs") or [])
+            )
             seg_negative = (
                 (seg_data.get("negativePrompt") or "").strip()
             )
@@ -420,10 +473,16 @@ def build_gen_director_plan(
             if task_key == MIXED_KEY
             else resolve_task_key(seg_task)
         )
+        source_media_identity = _segment_source_media_identity(
+            seg_data if isinstance(seg_data, dict) else {},
+            task_key=seg_task_key,
+            edit_mode=edit_mode,
+            global_block=global_block,
+        )
         mixed_fl2v_refs = None
         mixed_fl2v_source = None
         mixed_i2v_source = None
-        if task_key == MIXED_KEY and seg_task_key == "fl2v":
+        if load_media and is_selected and task_key == MIXED_KEY and seg_task_key == "fl2v":
             from .fl2v_timeline import load_fl2v_segment_media
 
             mixed_fl2v_refs, mixed_fl2v_source = load_fl2v_segment_media(
@@ -434,7 +493,7 @@ def build_gen_director_plan(
                 ref_max_size=ref_max,
                 frame_count=max(1, int(end) - int(start)),
             )
-        elif task_key == MIXED_KEY and seg_task_key == "i2v":
+        elif load_media and is_selected and task_key == MIXED_KEY and seg_task_key == "i2v":
             img_ref = _resolve_gen_image_ref(
                 seg_data if isinstance(seg_data, dict) else {},
                 edit_mode="segment",
@@ -473,13 +532,20 @@ def build_gen_director_plan(
         else:
             local_audios = segment_ref_audios_for_context(
                 seg_task_key,
-                _load_ref_audios(seg_data.get("refAudios") or []),
+                (
+                    _load_ref_audios(seg_data.get("refAudios") or [])
+                    if load_media and is_selected
+                    else _ref_audio_metadata(seg_data.get("refAudios") or [])
+                ),
             )
             seg_ref_audios = local_audios
             if seg_task_key == "r2v":
                 seg_len = max(5, int(end) - int(start))
                 raw_vids = list(seg_data.get("refVideos") or [])
-                seg_ref_videos = _load_ref_videos(raw_vids, timeline, seg_len)
+                seg_ref_videos = (
+                    _load_ref_videos(raw_vids, timeline, seg_len)
+                    if load_media and is_selected else _ref_video_metadata(raw_vids)
+                )
         if seg_task_key in ("r2v", "r2i") and not seg_refs and not seg_ref_videos and not seg_ref_audios:
             log.warning(
                 "gen segment #%d task=%s has no reference media — will behave like "
@@ -513,6 +579,7 @@ def build_gen_director_plan(
                 ref_videos=seg_ref_videos,
                 negative_prompt=seg_negative,
                 source_clip=seg_source,
+                source_media_identity=source_media_identity,
                 continuity_from_prev=resolve_segment_continuity_from_prev(
                     seg_data if isinstance(seg_data, dict) else {},
                     segment_index=idx,
@@ -566,7 +633,7 @@ def build_gen_director_plan(
         edit_mode=edit_mode,
         raw=raw,
         export_mode=export_mode,
-        run_indices=_parse_run_selection(timeline, len(segments)),
+        run_indices=run_indices,
         continuity_enabled=continuity_enabled,
         continuity_overlap_frames=continuity_overlap,
         continuity_mode=resolve_continuity_mode(timeline),

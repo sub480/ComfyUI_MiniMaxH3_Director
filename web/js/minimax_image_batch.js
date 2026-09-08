@@ -321,7 +321,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-run-all.hidden{display:none!important}
 .bd-batch-run-all input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#4fff8f}
 /* Default cap; batch-fill mode overrides via .bd-wrap.bd-batch-fill + JS max-height. */
-.bd-batch-list{display:flex;flex-direction:column;gap:8px;width:100%;max-height:640px;overflow-y:auto;padding-right:2px;min-height:0}
+.bd-batch-list{display:flex;flex-direction:column;gap:8px;width:100%;max-height:none;overflow-y:visible;padding-right:2px;min-height:0}
 .bd-batch-card{background:linear-gradient(165deg,#1a1a1a 0%,#141414 55%,#111 100%);border:1px solid #2c2c2c;border-radius:10px;padding:12px 14px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:10px;align-items:stretch;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);flex:0 0 auto;box-sizing:border-box;min-height:195px;overflow:hidden;resize:vertical}
 /* t2v: 提示词 | 预览（开实时预览才出第三列） */
 .bd-batch-card.bd-batch-plain{grid-template-columns:minmax(0,1fr)}
@@ -395,6 +395,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-pass-status.mismatch{background:#f0bd58}
 .bd-batch-pass-status.error{background:#ef7777}
 .bd-batch-pass-status.pending{background:#666}
+.bd-batch-pass-status.unchecked{background:#444}
 .bd-batch-pass-status.checking{background:#55aaff;box-shadow:0 0 0 0 rgba(85,170,255,.65);animation:bd-pass-checking 1.1s ease-in-out infinite}
 @keyframes bd-pass-checking{50%{box-shadow:0 0 0 4px rgba(85,170,255,0)}}
 .bd-batch-pass-clear{background:transparent;border:1px solid #553;color:#f88;border-radius:4px;padding:3px 6px;font-size:10px;cursor:pointer}
@@ -817,7 +818,7 @@ export function addImageBatchGroup(editor) {
     editor.syncMixedCommonLayout?.();
     editor.commit();
     editor.updateVideoNameLabel?.();
-    editor.updateDomWidgetHeight?.();
+    editor.resizeNodeForContentMinChange?.();
 }
 
 export function deleteImageBatchGroup(editor, index) {
@@ -837,7 +838,7 @@ export function deleteImageBatchGroup(editor, index) {
     editor.syncMixedCommonLayout?.();
     editor.commit();
     editor.updateVideoNameLabel?.();
-    editor.updateDomWidgetHeight?.();
+    editor.resizeNodeForContentMinChange?.();
 }
 
 function pickFile(accept, onFile) {
@@ -2530,7 +2531,7 @@ function directorHasSigmasLink(node) {
     return Array.isArray(inp.links) && inp.links.length > 0;
 }
 
-function passCachePayload(editor) {
+function passCachePayload(editor, index) {
     const node = editor?.node;
     if (!node) return null;
     try {
@@ -2538,7 +2539,7 @@ function passCachePayload(editor) {
     } catch {
         /* best effort */
     }
-    return {
+    const payload = {
         node_id: String(node.id),
         timeline_data: String(_batchWidgetValue(node, "timeline_data", "")),
         task_type: String(_batchWidgetValue(node, "task_type", "")),
@@ -2558,6 +2559,8 @@ function passCachePayload(editor) {
         sigmas_linked: directorHasSigmasLink(node),
         lora_trigger_words: readLoraTriggerWords(editor),
     };
+    if (Number.isInteger(index) && index >= 0) payload.cache_index = index;
+    return payload;
 }
 
 function passCacheRowForIndex(data, index) {
@@ -2574,10 +2577,10 @@ function passDiffLabel(key) {
 }
 
 function passStatusKind(row) {
-    if (!row) return "missing";
+    if (!row) return "pending";
     if (row.error) return "error";
     const status = String(row.status || "");
-    if (status === "valid" || status === "mismatch" || status === "missing") return status;
+    if (["valid", "mismatch", "missing", "unchecked", "pending"].includes(status)) return status;
     if (row.matches) return "valid";
     if (row.exists) return "mismatch";
     return "missing";
@@ -2640,13 +2643,20 @@ function showPassCachePopover(anchor, row) {
 function paintPassCacheStatus(editor, data) {
     const list = editor?.batchList;
     if (!list) return;
-    editor._mmxPassCache = data || null;
+    const previous = Array.isArray(editor._mmxPassCache?.segments)
+        ? editor._mmxPassCache.segments
+        : [];
+    const incoming = Array.isArray(data?.segments) ? data.segments : [];
+    const rows = new Map(previous.map((row) => [Number(row?.ui_index ?? row?.index), row]));
+    for (const row of incoming) rows.set(Number(row?.ui_index ?? row?.index), row);
+    editor._mmxPassCache = { ...(editor._mmxPassCache || {}), ...(data || {}), segments: [...rows.values()] };
     for (const el of list.querySelectorAll("[data-batch-pass-status]")) {
         const index = Number(el.getAttribute("data-batch-pass-index"));
-        const row = passCacheRowForIndex(data, index);
-        const kind = data?.error ? "error" : passStatusKind(row);
+        const row = passCacheRowForIndex(editor._mmxPassCache, index);
+        const selected = editor.isSegmentRunEnabled?.(index) !== false;
+        const kind = selected ? passStatusKind(row) : "unchecked";
         el.className = `bd-batch-pass-status ${kind}`;
-        el.title = data?.error ? String(data.error) : t(`batch.pass.status.${kind}`);
+        el.title = row?.error ? String(row.error) : t(`batch.pass.status.${kind}`);
         el._mmxPassRow = row;
     }
 }
@@ -2669,7 +2679,7 @@ function syncBatchPassButtons(editor) {
     return hasRefine;
 }
 
-async function refreshBatchPassCacheStatus(editor) {
+async function refreshBatchPassCacheStatus(editor, index) {
     if (!editor?.node || !editor.batchList?.querySelector("[data-batch-pass-status]")) return;
     // A status refresh is only informational.  Never let an older filesystem
     // scan remain in flight while a newer one is requested after UI edits.
@@ -2678,11 +2688,15 @@ async function refreshBatchPassCacheStatus(editor) {
     editor._mmxPassCacheAbort = controller;
     const seq = (editor._mmxPassCacheSeq || 0) + 1;
     editor._mmxPassCacheSeq = seq;
-    const payload = passCachePayload(editor);
+    const payload = passCachePayload(editor, index);
     if (!payload) return;
-    for (const el of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
-        el.className = "bd-batch-pass-status checking";
-        el.title = t("batch.pass.status.checking");
+    const batch = index === "selected";
+    for (const status of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
+        const itemIndex = Number(status.getAttribute("data-batch-pass-index"));
+        if (!batch && itemIndex !== index) continue;
+        const selected = editor.isSegmentRunEnabled?.(itemIndex) !== false;
+        status.className = `bd-batch-pass-status ${selected ? "checking" : "unchecked"}`;
+        status.title = t(`batch.pass.status.${selected ? "checking" : "unchecked"}`);
     }
     try {
         const response = await api.fetchApi("/minimax/director/first_pass_cache_status", {
@@ -2700,21 +2714,45 @@ async function refreshBatchPassCacheStatus(editor) {
     } catch (error) {
         if (error?.name === "AbortError") return;
         if (seq !== editor._mmxPassCacheSeq) return;
-        paintPassCacheStatus(editor, { error: error?.message || String(error), segments: [] });
+        const message = error?.message || String(error);
+        const selectedVisibleIndices = [...editor.batchList.querySelectorAll("[data-batch-pass-status]")]
+            .map((status) => Number(status.getAttribute("data-batch-pass-index")))
+            .filter((itemIndex) => editor.isSegmentRunEnabled?.(itemIndex) !== false);
+        paintPassCacheStatus(editor, {
+            segments: batch
+                ? selectedVisibleIndices.map((ui_index) => ({ ui_index, status: "error", error: message }))
+                : [{ ui_index: index, status: "error", error: message }],
+        });
     }
 }
 
-export function scheduleDirectorPassCacheRefresh(nodeOrEditor, delay = 120) {
+export function scheduleDirectorPassCacheRefresh(nodeOrEditor, delay = 120, index = null) {
     const editor = nodeOrEditor?._minimaxEditor || nodeOrEditor;
     if (!editor?.batchList) return;
     closePassCachePopover();
     syncBatchPassButtons(editor);
-    for (const el of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
-        el.className = "bd-batch-pass-status checking";
-        el.title = t("batch.pass.status.checking");
+    const batch = index === "selected";
+    if (!batch && (!Number.isInteger(index) || index < 0)) {
+        editor._mmxPassCache = null;
+        for (const el of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
+            const itemIndex = Number(el.getAttribute("data-batch-pass-index"));
+            const selected = editor.isSegmentRunEnabled?.(itemIndex) !== false;
+            const kind = selected ? "pending" : "unchecked";
+            el.className = `bd-batch-pass-status ${kind}`;
+            el.title = t(`batch.pass.status.${kind}`);
+            el._mmxPassRow = null;
+        }
+        return;
+    }
+    for (const status of editor.batchList.querySelectorAll("[data-batch-pass-status]")) {
+        const itemIndex = Number(status.getAttribute("data-batch-pass-index"));
+        if (!batch && itemIndex !== index) continue;
+        const selected = editor.isSegmentRunEnabled?.(itemIndex) !== false;
+        status.className = `bd-batch-pass-status ${selected ? "checking" : "unchecked"}`;
+        status.title = t(`batch.pass.status.${selected ? "checking" : "unchecked"}`);
     }
     clearTimeout(editor._mmxPassCacheTimer);
-    editor._mmxPassCacheTimer = setTimeout(() => refreshBatchPassCacheStatus(editor), delay);
+    editor._mmxPassCacheTimer = setTimeout(() => refreshBatchPassCacheStatus(editor, index), delay);
 }
 
 function hasDuplicateGroupMedia(list, mediaPath, slot) {
@@ -2758,7 +2796,7 @@ async function clearGroupFirstPassCache(editor, index) {
             throw new Error(data?.error || `HTTP ${response.status}`);
         }
         closePassCachePopover();
-        scheduleDirectorPassCacheRefresh(editor, 80);
+        scheduleDirectorPassCacheRefresh(editor, 80, index);
     } catch (error) {
         await editor.showBdMessage?.(t("batch.pass.clear"), error?.message || String(error));
     }
@@ -2775,7 +2813,7 @@ export async function clearAllDirectorCache(editor) {
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data?.error) throw new Error(data?.error || `HTTP ${response.status}`);
-        scheduleDirectorPassCacheRefresh(editor, 80);
+        scheduleDirectorPassCacheRefresh(editor, 80, "selected");
         editor.renderImageBatchGroups?.();
     } catch (error) {
         await editor.showBdMessage?.(t("batch.cache.clearAll"), error?.message || String(error));
@@ -2825,7 +2863,7 @@ function appendBatchPassControls(meta, editor, seg, index) {
         e.stopPropagation();
         // Hover is informational; an explicit click always refreshes the
         // filesystem-backed status and does not open a stale popover.
-        scheduleDirectorPassCacheRefresh(editor, 0);
+        scheduleDirectorPassCacheRefresh(editor, 0, index);
     };
     const clearBtn = document.createElement("button");
     clearBtn.type = "button";
@@ -2907,6 +2945,11 @@ export function renderImageBatchGroups(editor) {
     updateR2vToolbarBtns(editor);
     refreshPromptTokenEditors(list);
     editor.updateDomWidgetHeight?.();
+    if (editor._batchAutosizeFrame) cancelAnimationFrame(editor._batchAutosizeFrame);
+    editor._batchAutosizeFrame = requestAnimationFrame(() => {
+        editor._batchAutosizeFrame = 0;
+        editor.resizeNodeForContentMinChange?.();
+    });
     closePassCachePopover();
     syncBatchPassButtons(editor);
     // Re-rendering the batch cards recreates the status buttons.  Reapply the
@@ -2918,15 +2961,9 @@ export function renderImageBatchGroups(editor) {
     // Cache status is refreshed when the cache popover is opened or after an
     // explicit cache operation, not after every repaint of the batch panel.
     restoreSlotLoadOverlays(editor);
-    // Perform one status scan when the Director UI is first materialized after
-    // opening a workflow.  The guard prevents ordinary card re-renders from
-    // turning into repeated filesystem scans.
-    if (
-        !editor._mmxPassCacheInitialCheckStarted
-        && editor.batchList.querySelector("[data-batch-pass-status]")
-    ) {
+    if (!editor._mmxPassCacheInitialCheckStarted) {
         editor._mmxPassCacheInitialCheckStarted = true;
-        scheduleDirectorPassCacheRefresh(editor, 250);
+        scheduleDirectorPassCacheRefresh(editor, 250, "selected");
     }
 }
 
@@ -2965,9 +3002,19 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             card.style.height = `${startHeight}px`;
             card.style.flex = "0 0 auto";
             card.dataset.userResizing = "1";
+            let resizeFrame = 0;
+            const syncNodeHeight = () => {
+                if (resizeFrame) return;
+                resizeFrame = requestAnimationFrame(() => {
+                    resizeFrame = 0;
+                    editor.resizeNodeForContentMinChange?.();
+                });
+            };
             const finishResize = () => {
                 window.removeEventListener("pointerup", finishResize, true);
                 window.removeEventListener("pointercancel", finishResize, true);
+                window.removeEventListener("pointermove", syncNodeHeight, true);
+                if (resizeFrame) cancelAnimationFrame(resizeFrame);
                 const nextHeight = card.offsetHeight;
                 delete card.dataset.userResizing;
                 if (Math.abs(nextHeight - startHeight) < 2) {
@@ -2981,7 +3028,9 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 live.uiCardHeight = nextHeight;
                 editor.scheduleTimelineSync?.();
                 editor.flushTimelineSync?.();
+                editor.resizeNodeForContentMinChange?.();
             };
+            window.addEventListener("pointermove", syncNodeHeight, true);
             window.addEventListener("pointerup", finishResize, true);
             window.addEventListener("pointercancel", finishResize, true);
         });
@@ -3020,6 +3069,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             editor.scheduleTimelineSync?.();
             editor.flushTimelineSync?.();
             editor.renderImageBatchGroups?.();
+            editor.resizeNodeForContentMinChange?.();
         };
         head.appendChild(collapseBtn);
         // Timeline + cards stay in sync for run-select (incl. r2v).
@@ -3106,7 +3156,9 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             const contCb = document.createElement("input");
             contCb.type = "checkbox";
             contCb.className = "bd-batch-continuity-check";
-            contCb.checked = isSegmentContinuityFromPrev(seg, index);
+            const canReferencePrevious = editor.previousRunSegmentIndex?.(index) != null;
+            contCb.checked = canReferencePrevious && isSegmentContinuityFromPrev(seg, index);
+            contCb.disabled = !canReferencePrevious;
             contCb.onchange = (e) => {
                 e.stopPropagation();
                 seg.continuityFromPrev = !!contCb.checked;
@@ -3388,24 +3440,56 @@ export function bindImageBatchEvents(editor) {
     });
 }
 
-/** Default list viewport when the node is at content-sized height (not user-stretched). */
-export const BATCH_LIST_MAX_H = 640;
+/** Kept for compatibility; the batch list now grows with all visible groups. */
+export const BATCH_LIST_MAX_H = Number.POSITIVE_INFINITY;
 const BATCH_LIST_MIN_H = 160;
 const BATCH_LIST_GAP = 8;
 const BATCH_TOOLBAR_H = 48;
 const BATCH_PANEL_CHROME = 28;
+const BATCH_COLLAPSED_ROW_H = 34;
 
 export function getImageBatchUiHeight(editor) {
     const solo = isBatchDetailSolo(editor);
-    const n = solo ? 1 : Math.max(1, editor?.timeline?.segments?.length || 1);
+    const segments = editor?.timeline?.segments || [];
+    const visibleSegments = solo
+        ? [segments[Math.max(0, Math.min(segments.length - 1, editor?.selectedIndex || 0))]].filter(Boolean)
+        : segments;
     const key = resolveTaskKey(editor?.getTaskKey?.() || editor?.taskTypeWidget?.value);
-    // r2v cards are tall; list scrolls inside BATCH_LIST_MAX_H — do NOT sum full card
-    // heights into node size or the DOM widget grows a huge empty region below.
-    const rowH = key === "r2v" ? 420 : (isVideoBatchTask(key) ? 155 : 130);
-    const showPicker = solo && (editor?.timeline?.segments?.length || 0) > 1 && !editor?.usesBatchTimeline?.();
+    const defaultRowHeight = (segment) => {
+        const segmentKey = key === "mixed" ? resolveMixedGroupKey(segment) : key;
+        return segmentKey === "r2v" ? 490 : 195;
+    };
+    const showPicker = solo && segments.length > 1 && !editor?.usesBatchTimeline?.();
     const pickerH = showPicker ? 56 : 0;
-    const listContentH = n * rowH + Math.max(0, n - 1) * BATCH_LIST_GAP + pickerH;
-    const listH = Math.min(listContentH, BATCH_LIST_MAX_H);
+    const renderedCards = [...(editor?.batchList?.querySelectorAll?.(":scope > .bd-batch-card") || [])];
+    const measuredRowsH = renderedCards.length === visibleSegments.length && renderedCards.length > 0
+        ? Math.ceil(editor.batchList.scrollHeight)
+        : 0;
+    const estimatedRowsH = visibleSegments.length
+        ? visibleSegments.reduce((sum, segment) => {
+            if (segment.uiCollapsed) return sum + BATCH_COLLAPSED_ROW_H;
+            const savedHeight = Number(segment.uiCardHeight);
+            return sum + (Number.isFinite(savedHeight) && savedHeight > 0
+                ? savedHeight
+                : defaultRowHeight(segment));
+        }, 0)
+        : defaultRowHeight(null);
+    const listRowsH = measuredRowsH || (
+        estimatedRowsH + Math.max(0, visibleSegments.length - 1) * BATCH_LIST_GAP
+    );
+    const panel = editor?.batchPanel;
+    if (panel) {
+        const children = [...panel.children].filter((child) => (
+            !child.classList?.contains("hidden") && getComputedStyle(child).display !== "none"
+        ));
+        if (children.length) {
+            const childrenHeight = children.reduce((sum, child) => (
+                sum + (child === editor.batchList ? listRowsH : child.offsetHeight)
+            ), 0);
+            return Math.ceil(childrenHeight + Math.max(0, children.length - 1) * BATCH_LIST_GAP);
+        }
+    }
+    const listH = Math.min(listRowsH + pickerH, BATCH_LIST_MAX_H);
     return BATCH_TOOLBAR_H + BATCH_PANEL_CHROME + listH;
 }
 
@@ -3672,17 +3756,13 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
             0,
             batchH - (batchToolbar?.offsetHeight || 0) - noticeH - pickerH - 10,
         );
-        list.style.flex = "1 1 0";
-        list.style.minHeight = "0";
-        if (hasUsableBudget) {
-            list.style.height = `${listH}px`;
-            list.style.maxHeight = `${listH}px`;
-        } else {
-            list.style.height = "";
-            list.style.maxHeight = "";
-        }
-
         const solo = (editor.timeline?.segments?.length || 0) <= 1 || isBatchDetailSolo(editor);
+        list.style.flex = "0 0 auto";
+        list.style.minHeight = "0";
+        list.style.overflowY = "visible";
+        list.style.height = "";
+        list.style.maxHeight = "";
+
         list.classList.toggle("bd-batch-solo", solo);
         for (const card of list.querySelectorAll(".bd-batch-card")) {
             const index = Number.parseInt(card.dataset.batchIndex, 10);
@@ -3693,10 +3773,6 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
                 card.style.flex = "0 0 auto";
                 card.style.minHeight = "";
                 card.style.height = `${Math.round(savedHeight)}px`;
-            } else if (solo && (listH > 0 || !trusted)) {
-                card.style.flex = "1 1 auto";
-                card.style.minHeight = "";
-                card.style.height = "100%";
             } else {
                 card.style.flex = "";
                 card.style.minHeight = "";
@@ -3840,13 +3916,3 @@ export function updateR2vToolbarBtns(editor) {
     del.setAttribute("data-i18n-title", "tooltip.deleteSelectedPromptGroup");
     del.title = t("tooltip.deleteSelectedPromptGroup");
 }
-
-api.addEventListener?.("executed", () => {
-    const graph = app.graph ?? app.canvas?.graph;
-    for (const node of graph?._nodes ?? graph?.nodes ?? []) {
-        const cls = node?.comfyClass || node?.type || "";
-        if (cls === "MiniMaxH3Director") {
-            scheduleDirectorPassCacheRefresh(node, 250);
-        }
-    }
-});

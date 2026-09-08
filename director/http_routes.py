@@ -571,7 +571,9 @@ async def minimax_first_pass_cache_status(request):
         plan.sample_sigmas_linked = bool(body.get("sigmas_linked"))
         plan.sample_shift_video = float(body.get("shift_video") or 12.0)
         plan.sample_shift_audio = float(body.get("shift_audio") or 3.0)
-        return web.json_response(inspect_first_pass_cache(node_id, plan))
+        raw_cache_index = body.get("cache_index")
+        cache_index = int(raw_cache_index) if raw_cache_index is not None else None
+        return web.json_response(inspect_first_pass_cache(node_id, plan, ui_index=cache_index))
     except Exception as exc:
         log.warning("MiniMax H3 Director first-pass cache inspection failed: %s", exc)
         return web.json_response(

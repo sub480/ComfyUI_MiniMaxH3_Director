@@ -109,6 +109,20 @@ def _cache_root(node_id: str) -> Path | None:
         return None
 
 
+def _previous_run_segment(seg: SegmentPlan, plan: DirectorPlan) -> SegmentPlan | None:
+    segments = list(getattr(plan, "segments", None) or [])
+    run_indices = getattr(plan, "run_indices", None)
+    run_list = sorted(run_indices) if run_indices is not None else list(range(len(segments)))
+    try:
+        position = run_list.index(int(seg.index))
+    except ValueError:
+        return None
+    if position <= 0:
+        return None
+    previous_index = run_list[position - 1]
+    return segments[previous_index] if 0 <= previous_index < len(segments) else None
+
+
 def _segment_uses_motion_context(seg: SegmentPlan, plan: DirectorPlan) -> bool:
     """True when this segment's first-pass sample pins the previous AV tail.
 
@@ -118,7 +132,7 @@ def _segment_uses_motion_context(seg: SegmentPlan, plan: DirectorPlan) -> bool:
     """
     if not bool(getattr(plan, "continuity_enabled", False)):
         return False
-    if int(getattr(seg, "index", 0) or 0) <= 0:
+    if _previous_run_segment(seg, plan) is None:
         return False
     if not bool(getattr(seg, "continuity_from_prev", True)):
         return False
@@ -181,6 +195,7 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         "ref_videos": ref_video_files,
         "ref_video": ref_video_file,
         "ref_video_start": seg.reference_video_start_frame,
+        "source_media": list(getattr(seg, "source_media_identity", ()) or ()),
         SOURCE_VIDEO_FP_KEY: source_video_identity(plan),
         "continuity": uses_mc,
         "continuity_overlap": (
@@ -215,12 +230,20 @@ def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[s
     else:
         fp["steps"] = int(getattr(plan, "sample_steps", 25) or 25)
         fp["scheduler"] = str(getattr(plan, "sample_scheduler", "") or "")
+    if fp.get("continuity"):
+        previous = _previous_run_segment(seg, plan)
+        if previous is not None:
+            fp["continuity_predecessor"] = first_pass_cache_fingerprint(previous, plan)
     return fp
 
 
 def segment_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Stable identity for a segment — cache invalidates when edit params change."""
     fp = _segment_identity_fingerprint(seg, plan)
+    if fp.get("continuity"):
+        previous = _previous_run_segment(seg, plan)
+        if previous is not None:
+            fp["continuity_predecessor"] = first_pass_cache_fingerprint(previous, plan)
     from .refine_pack import refine_fingerprint
 
     fp.update(refine_fingerprint(plan))
@@ -1032,10 +1055,12 @@ def first_pass_cache_disk_signature(node_id: str | None) -> str:
 def inspect_first_pass_cache(
     node_id: str | None,
     plan: DirectorPlan,
+    *,
+    ui_index: int | None = None,
 ) -> dict[str, Any]:
     """Inspect first-pass cache files without loading their tensor payloads.
 
-    Always walks the whole timeline so「选择运行」unselected slots stay visible.
+    Unselected「选择运行」slots are reported without touching their cache files.
     ``final_cached_count`` is file presence only (``seg_XXXX.pt``), not a
     fingerprint match — Refine knobs are not on this status request.
     """
@@ -1069,8 +1094,26 @@ def inspect_first_pass_cache(
     rows: list[dict[str, Any]] = []
     final_cached = 0
     for seg in all_segments:
+        if ui_index is not None and int(seg.timeline_index) != int(ui_index):
+            continue
         is_selected = selected_set is None or int(seg.index) in selected_set
         idx = int(seg.index)
+        if not is_selected:
+            rows.append(
+                {
+                    "segment": idx + 1,
+                    "index": idx,
+                    "ui_index": int(seg.timeline_index),
+                    "exists": False,
+                    "matches": False,
+                    "status": "unchecked",
+                    "selected": False,
+                    "cached_seed": None,
+                    "diff_keys": [],
+                    "error": "",
+                }
+            )
+            continue
         meta_path = root / f"seg_{idx:04d}.pre.meta.json"
         latent_path = root / f"seg_{idx:04d}.pre.av.pt"
         meta_exists = meta_path.is_file()
@@ -1126,15 +1169,14 @@ def inspect_first_pass_cache(
             }
         )
 
-    cached_count = sum(1 for row in rows if row["exists"])
-    matched_count = sum(1 for row in rows if row["matches"])
     selected_rows = [row for row in rows if row["selected"]]
+    cached_count = sum(1 for row in selected_rows if row["exists"])
+    matched_count = sum(1 for row in selected_rows if row["matches"])
     selected_total = len(selected_rows) if selected_set is not None else len(rows)
-    total = len(rows)
     result.update(
         {
             "exists": cached_count > 0,
-            "matches": total > 0 and matched_count == total,
+            "matches": selected_total > 0 and matched_count == selected_total,
             "cached_seeds": sorted(cached_seeds),
             "cached_count": cached_count,
             "matched_count": matched_count,

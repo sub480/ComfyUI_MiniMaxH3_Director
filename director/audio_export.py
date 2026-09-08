@@ -486,6 +486,31 @@ def build_director_audio_outputs(
     end = max(0, int(output_frame_end if output_frame_end is not None else plan.total_frames))
     if images_out and hasattr(images_out[0], "shape"):
         end = max(end, int(images_out[0].shape[0]))
+    if plan.run_indices is not None:
+        selected_segments = [plan.segments[index] for index in sorted(plan.run_indices)]
+        parts: list[dict[str, Any] | None] = []
+        for seg in selected_segments:
+            part = extract_timeline_audio(
+                timeline,
+                seg.start_frame,
+                seg.end_frame,
+                fps,
+                audio_cache=_execution_audio_cache(plan),
+            )
+            if mode == AUDIO_MODE_SOURCE and not _audio_has_samples(part):
+                part = _ref_audio_for_segment(seg, plan)
+            parts.append(part)
+        if any(_audio_has_samples(part) for part in parts):
+            merged = _merge_generated_segment_audios(
+                plan,
+                parts,
+                total_frames=end,
+                fps=fps,
+                frame_counts=segment_frame_counts,
+            )
+            return [merged], None
+        if mode == AUDIO_MODE_SOURCE:
+            return [empty_audio_dict(silent_sample_rate)], "silent"
     extracted = (
         extract_timeline_audio(
             timeline, 0, end, fps, audio_cache=_execution_audio_cache(plan),

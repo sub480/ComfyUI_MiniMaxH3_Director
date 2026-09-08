@@ -239,6 +239,7 @@ class SegmentPlan:
     reference_video_start_frame: int = 0
     negative_prompt: str = ""
     source_clip: torch.Tensor | None = None
+    source_media_identity: tuple[str, ...] = ()
     # When external groups filter by「选择运行」, plan.index is the compact run
     # order (0..N-1) while ui_index keeps the Director timeline card index.
     ui_index: int | None = None
@@ -465,6 +466,20 @@ def _load_ref_audios(audio_list: list[dict]) -> list[SegmentRefAudio]:
     return sorted(out, key=lambda a: a.index)
 
 
+def _ref_audio_metadata(audio_list: list[dict]) -> list[SegmentRefAudio]:
+    out: list[SegmentRefAudio] = []
+    for item in audio_list or []:
+        if not isinstance(item, dict):
+            continue
+        index = int(item.get("index", item.get("slot", len(out))))
+        if index < 0 or index >= MAX_REFERENCE_AUDIOS:
+            continue
+        rel, file_path = _reference_audio_file(item)
+        if rel:
+            out.append(SegmentRefAudio(index=index, audio=None, audio_file=rel, audio_path=file_path))
+    return sorted(out, key=lambda audio: audio.index)
+
+
 def segment_ref_audios_for_context(task_key: str, audios: list[SegmentRefAudio]) -> list[SegmentRefAudio]:
     """Standalone ref audios apply to r2v / rv2v (official ReferenceToVideo)."""
     if task_key not in {"r2v", "rv2v"}:
@@ -533,6 +548,19 @@ def _load_ref_videos(
         rel = str(item.get("videoFile") or item.get("fileName") or "").strip()
         out.append(SegmentRefVideo(index=index, tensor=tensor, video_file=rel, meta=dict(item)))
     return sorted(out, key=lambda v: v.index)
+
+
+def _ref_video_metadata(video_list: list[dict]) -> list[SegmentRefVideo]:
+    out: list[SegmentRefVideo] = []
+    for item in video_list or []:
+        if not isinstance(item, dict) or not _ref_video_entry_has_file(item):
+            continue
+        index = int(item.get("index", item.get("slot", len(out))))
+        if index < 0 or index >= MAX_REFERENCE_VIDEOS:
+            continue
+        rel = str(item.get("videoFile") or item.get("fileName") or "").strip()
+        out.append(SegmentRefVideo(index=index, tensor=torch.empty(0), video_file=rel, meta=dict(item)))
+    return sorted(out, key=lambda video: video.index)
 
 
 def ref_videos_to_dict(videos: list[SegmentRefVideo]) -> dict | None:
@@ -774,6 +802,7 @@ def build_director_plan(
             width=width,
             height=height,
             ref_max_size=ref_max_size,
+            load_media=load_media,
         )
 
     frame_map = logical_frame_map(timeline)

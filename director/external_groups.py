@@ -587,7 +587,7 @@ def build_plan_from_external_groups(
         global_task_type=task_label,
         global_task_key=task_key,
         global_prompt=fallback_prompt,
-        global_refs=list(common_refs_raw) if family == "r2v" else [],
+        global_refs=[],
         source_video=source_video,
         segments=segments,
         edit_mode="segment",
@@ -598,5 +598,5 @@ def build_plan_from_external_groups(
         continuity_overlap_frames=continuity_overlap,
         continuity_mode=resolve_continuity_mode(timeline),
         continuity_redraw=resolve_continuity_redraw(timeline),
-        global_ref_audios=list(common_audios_raw) if family == "r2v" else [],
+        global_ref_audios=[],
     )

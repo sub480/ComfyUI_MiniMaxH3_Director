@@ -948,6 +948,8 @@ const STYLES = `
  .bd-snapshot-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;background:#302a20;border:1px solid #80652d;border-radius:4px}.bd-snapshot-confirm::first-line{flex:1}
  @media(max-width:600px){.bd-snapshot-body{grid-template-columns:1fr}.bd-snapshot-body aside{border-right:0;border-bottom:1px solid #414951;max-height:42%}}
 .bd-wrap.bd-batch-fill{height:100%!important;min-height:0!important;max-height:100%;flex:1 1 0;overflow:hidden}
+.bd-bottom-inset{display:none}
+.bd-wrap.bd-batch-fill>.bd-bottom-inset{display:block;flex:0 0 4px;height:4px}
 .bd-wrap>.bd-toolbar-wrap{flex-shrink:0}
 .bd-main{flex:1 1 0;min-height:0;display:flex;flex-direction:column;gap:6px;width:100%;overflow:hidden}
 .bd-wrap>.bd-live-sample{flex-shrink:0;position:relative;z-index:4;width:100%;margin:0}
@@ -970,7 +972,7 @@ const STYLES = `
 }
 .bd-wrap.bd-batch-fill .bd-batch-toolbar,.bd-wrap.bd-batch-fill .bd-batch-i2v-notice,.bd-wrap.bd-batch-fill .bd-batch-picker{flex-shrink:0}
 .bd-wrap.bd-batch-fill .bd-batch-list{
-  flex:1 1 0;min-height:0;max-height:none!important;overflow-y:auto;height:auto;
+    flex:0 0 auto;min-height:0;max-height:none!important;overflow-y:visible;height:auto;
   display:flex;flex-direction:column
 }
 .bd-wrap.bd-batch-fill .bd-live-sample,.bd-wrap.bd-batch-fill .bd-run-status{flex:0 0 auto;margin-top:0;flex-shrink:0}
@@ -978,9 +980,9 @@ const STYLES = `
 .bd-run-status{min-height:52px;box-sizing:border-box}
 /* Solo material group fills leftover node height. Prompt text scrolls inside
    the editor; do not size the card to content or the DOM widget ratchets. */
-.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card{flex:1 1 auto;align-self:stretch}
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card{flex:0 0 auto;align-self:stretch}
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-r2v{
-    display:flex;flex-direction:column;flex:1 1 auto;overflow:hidden
+    display:flex;flex-direction:column;flex:0 0 auto;overflow:hidden
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo .bd-batch-r2v-body{
   flex:1 1 auto;min-height:0;overflow:hidden;align-self:stretch
@@ -1278,7 +1280,7 @@ const STYLES = `
 .bd-output .bd-out-fixed{display:flex;gap:4px;align-items:center}
 .bd-output .bd-out-fixed.hidden{display:none}
 /* Do not use margin-top:auto — with an oversized min-height it creates a huge empty gap above the status bar. */
- .bd-run-status{width:100%;box-sizing:border-box;padding:8px 10px;background:#151515;border:1px solid #333;border-radius:6px;display:flex;flex-direction:column;gap:5px;margin-top:6px;margin-bottom:0;flex-shrink:0}
+ .bd-run-status{width:100%;box-sizing:border-box;padding:8px 10px;background:#151515;border:1px solid #333;border-radius:6px;display:flex;flex-direction:column;gap:5px;margin:0;flex-shrink:0}
  .bd-run-io{color:#bbb;font-size:11px;line-height:1.45;word-break:break-word;white-space:pre-line}
 .bd-run-status.idle .bd-run-title{color:#888}
 .bd-run-status.active .bd-run-title{color:#4fff8f}
@@ -1624,6 +1626,24 @@ const CLIP_SEGMENT_COLORS = ["rgba(255,200,50,0.9)", "rgba(102,170,255,0.9)", "r
 function getDirectorUiHeight(editor) {
     if (editor?.getDirectorMode?.() === "prompt_batch") {
         const batchH = getImageBatchUiHeight(editor);
+        const main = editor?.mainBody;
+        const root = editor?.root;
+        if (main && root && editor?.batchPanel) {
+            const visibleChildren = (parent) => [...parent.children].filter((child) => (
+                child.tagName !== "STYLE"
+                && !child.classList?.contains("hidden")
+                && getComputedStyle(child).display !== "none"
+            ));
+            const mainChildren = visibleChildren(main);
+            const mainH = mainChildren.reduce((sum, child) => (
+                sum + (child === editor.batchPanel ? batchH : child.offsetHeight)
+            ), 0) + Math.max(0, mainChildren.length - 1) * 6;
+            const rootChildren = visibleChildren(root);
+            const rootH = rootChildren.reduce((sum, child) => (
+                sum + (child === main ? mainH : child.offsetHeight)
+            ), 0) + Math.max(0, rootChildren.length - 1) * 6;
+            if (rootH > 0) return Math.ceil(rootH);
+        }
         // t2v / i2v / r2v show the main timeline track above batch cards.
         if (editor?.usesBatchTimeline?.()) {
             const track = editor?.canvasHeight || RULER_H + SEG_LABEL_H + TRACK_H;
@@ -1710,7 +1730,7 @@ function healOversizedDirectorNode(node, editor) {
 function scheduleDirectorLayoutSettle(editor) {
     if (!editor) return;
     const run = () => {
-        if (editor.isPlaying || editor._pauseSettling) return;
+        if (editor._pauseSettling) return;
         bindDomWidgetContentComputeSize(editor);
         // Do not ensure/heal here — preserve workflow size; only re-fill batch panel.
         syncBatchPanelFillHeight(editor, { settle: true });
@@ -1726,8 +1746,6 @@ function scheduleDirectorLayoutSettle(editor) {
 /** Grow once when content min increases (mode switch); never shrink; never use stretch. */
 function ensureDirectorNodeFitsContent(node, editor) {
     if (!node?.size || !node.computeSize) return false;
-    // Progress ticks must not grow the node — status text / rebuild noise used to ratchet.
-    if (editor?.runStatusEl?.classList?.contains("active")) return false;
     bindDomWidgetContentComputeSize(editor);
     const ideal = node.computeSize()?.[1];
     if (ideal == null) return false;
@@ -1739,7 +1757,6 @@ function ensureDirectorNodeFitsContent(node, editor) {
 }
 
 function syncDirectorNodeSize(node, editor) {
-    if (editor?.isPlaying) return;
     // Update CSS/content min. Avoid stretch bookkeeping + Vue RO feedback loops.
     // User-dragged height is preserved by never shrinking (#7).
     editor?.updateDomWidgetHeight?.();
@@ -1963,7 +1980,6 @@ function patchDirectorDomWidgetLayout() {
     canvas.onDrawForeground = function (ctx) {
         const graph = app.graph ?? canvas.graph;
         for (const node of graph?._nodes ?? graph?.nodes ?? []) {
-            if (node._minimaxEditor?.isPlaying) continue;
             ensureDirectorDomWidgetWidth(node);
         }
         return prev?.apply(this, arguments);
@@ -2623,7 +2639,7 @@ class MiniMaxH3DirectorEditor {
         if (!this.viewport || typeof ResizeObserver === "undefined") return;
         this._resizeObserver?.disconnect();
         this._resizeObserver = new ResizeObserver(() => {
-            if (this.isPlaying || this._pauseSettling) return;
+            if (this._pauseSettling) return;
             this.scheduleRender();
         });
         this._resizeObserver.observe(this.viewport);
@@ -2639,7 +2655,6 @@ class MiniMaxH3DirectorEditor {
      * stretches segment thumbnails.
      */
     _measureDrawWidth() {
-        if (this.isPlaying && this._playCanvasWidth > 0) return this._playCanvasWidth;
         if (this.getTimelineZoom() > 1) {
             const zoomed = this.canvas?.clientWidth || this.canvas?.offsetWidth || 0;
             if (zoomed > 0) return zoomed;
@@ -2660,7 +2675,7 @@ class MiniMaxH3DirectorEditor {
             this._settleRenderTimer = null;
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
-                    if (!this.isPlaying) this.scheduleRender();
+                    this.scheduleRender();
                 });
             });
         }, 0);
@@ -2668,7 +2683,7 @@ class MiniMaxH3DirectorEditor {
         clearTimeout(this._settleRenderLateTimer);
         this._settleRenderLateTimer = setTimeout(() => {
             this._settleRenderLateTimer = null;
-            if (!this.isPlaying) this.scheduleRender();
+            this.scheduleRender();
         }, 100);
     }
 
@@ -2686,7 +2701,6 @@ class MiniMaxH3DirectorEditor {
     }
 
     _resetLayoutStyles() {
-        if (this.isPlaying) return;
         for (const el of [this.container, this.root, this.viewport]) {
             if (!el) continue;
             el.style.removeProperty("width");
@@ -2705,21 +2719,28 @@ class MiniMaxH3DirectorEditor {
         return getDirectorUiHeight(this);
     }
 
+    resizeNodeForContentMinChange() {
+        const nextMinHeight = this.getDirectorUiMinHeight();
+        if (!this.node?.size) return;
+        bindDomWidgetContentComputeSize(this);
+        const idealHeight = Number(this.node.computeSize?.()?.[1]);
+        if (!Number.isFinite(idealHeight) || Math.abs(this.node.size[1] - idealHeight) < 1) return;
+        this.node.setSize?.([this.node.size[0], Math.max(nextMinHeight, idealHeight)]);
+        this.node.setDirtyCanvas?.(true, true);
+        this.updateDomWidgetHeight({ settle: true });
+    }
+
     updateDomWidgetHeight(opts = {}) {
         const h = contentDomWidgetMinHeight(this) || getDirectorUiHeight(this);
         this.container?.style.setProperty("--comfy-widget-min-height", `${h}px`);
         if (this.container) this.container.style.minHeight = `${h}px`;
         // Content min only — never bake node.size / stretch into computeSize.
         bindDomWidgetContentComputeSize(this);
-        const runActive = !!this.runStatusEl?.classList?.contains("active");
         // Grow only when content needs more room (e.g. mode switch). Never shrink
-        // a user-enlarged node (#7). During live progress: never grow; heal runaway.
-        if (!this.isPlaying) {
-            if (runActive) healOversizedDirectorNode(this.node, this);
-            else ensureDirectorNodeFitsContent(this.node, this);
-        }
+        // a user-enlarged node (#7).
+        ensureDirectorNodeFitsContent(this.node, this);
         syncBatchPanelFillHeight(this, {
-            settle: opts.settle !== false && !runActive,
+            settle: opts.settle !== false,
             restore: opts.restore === true,
         });
     }
@@ -3364,8 +3385,12 @@ class MiniMaxH3DirectorEditor {
                 <div class="bd-run-bar" data-i18n-title="run.bar.overall"><div class="bd-run-bar-fill" data-r="run-overall" style="width:0%"></div></div>
                 <div class="bd-run-bar bd-run-bar-sub" data-i18n-title="run.bar.phase"><div class="bd-run-bar-fill" data-r="run-phase" style="width:0%"></div></div>
             </div>`;
+        this.root.insertBefore(runStatus, toolbarWrap);
         this.root.appendChild(liveSample);
-        this.root.appendChild(runStatus);
+        const bottomInset = document.createElement("div");
+        bottomInset.className = "bd-bottom-inset";
+        bottomInset.setAttribute("aria-hidden", "true");
+        this.root.appendChild(bottomInset);
 
         if (this.container) {
             for (const wrap of [...this.container.querySelectorAll(":scope > .bd-wrap")]) {
@@ -4338,6 +4363,14 @@ class MiniMaxH3DirectorEditor {
         return (this.timeline.runSelection || []).includes(index);
     }
 
+    previousRunSegmentIndex(index) {
+        if (index <= 0) return null;
+        if (!this.isRunSelectEnabled()) return index - 1;
+        const selected = [...new Set(this.timeline.runSelection || [])].sort((a, b) => a - b);
+        const position = selected.indexOf(index);
+        return position > 0 ? selected[position - 1] : null;
+    }
+
     toggleSegmentRun(index) {
         if (!this.isRunSelectEnabled()) return;
         if (this.isFl2vMode()) {
@@ -4352,8 +4385,10 @@ class MiniMaxH3DirectorEditor {
         this.timeline.runSelection = [...sel].sort((a, b) => a - b);
         this.updateRunSelectUI();
         this.commit(false, { syncTimeline: true });
-        if (this.isImageBatch()) this.renderImageBatchGroups();
-        else this.scheduleRender();
+        if (this.isImageBatch()) {
+            this.renderImageBatchGroups();
+            scheduleDirectorPassCacheRefresh(this, 0);
+        } else this.scheduleRender();
     }
 
     toggleRunSelectMode() {
@@ -4373,8 +4408,10 @@ class MiniMaxH3DirectorEditor {
         }
         this.updateRunSelectUI();
         this.commit(false, { syncTimeline: true });
-        if (this.isImageBatch()) this.renderImageBatchGroups();
-        else this.scheduleRender();
+        if (this.isImageBatch()) {
+            this.renderImageBatchGroups();
+            scheduleDirectorPassCacheRefresh(this, 0);
+        } else this.scheduleRender();
     }
 
     setRunSelectionAll(on) {
@@ -4390,8 +4427,10 @@ class MiniMaxH3DirectorEditor {
         this.timeline.runSelection = on ? Array.from({ length: n }, (_, i) => i) : [];
         this.updateRunSelectUI();
         this.commit(false, { syncTimeline: true });
-        if (this.isImageBatch()) this.renderImageBatchGroups();
-        else this.scheduleRender();
+        if (this.isImageBatch()) {
+            this.renderImageBatchGroups();
+            scheduleDirectorPassCacheRefresh(this, 0);
+        } else this.scheduleRender();
     }
 
     updateRunSelectUI() {
@@ -6424,7 +6463,9 @@ class MiniMaxH3DirectorEditor {
         wrap.hidden = !show;
         if (!show) return;
         const seg = this.timeline.segments?.[idx];
-        cb.checked = isSegmentContinuityFromPrev(seg, idx);
+        const canReferencePrevious = this.previousRunSegmentIndex(idx) != null;
+        cb.checked = canReferencePrevious && isSegmentContinuityFromPrev(seg, idx);
+        cb.disabled = !canReferencePrevious;
         wrap.title = t("tooltip.segmentContinuityFromPrev");
     }
 
@@ -8695,7 +8736,7 @@ class MiniMaxH3DirectorEditor {
     }
 
     onNodeResize() {
-        if (this.isPlaying || this._pauseSettling) return;
+        if (this._pauseSettling) return;
         // Growable layout (no computeSize) → LiteGraph puts free space into computedHeight.
         bindDomWidgetContentComputeSize(this);
         this._resetLayoutStyles();
@@ -9473,6 +9514,7 @@ class MiniMaxH3DirectorEditor {
         } else if (this._drag?.kind === "segment-pending" && this.isImageBatch()) {
             if (toggleBatchGroupCollapsed(this, this._drag.index)) {
                 this.renderImageBatchGroups();
+                this.resizeNodeForContentMinChange();
                 this.flushTimelineSync();
             }
         } else if (this._drag) {
@@ -11917,7 +11959,7 @@ class MiniMaxH3DirectorEditor {
                 this.renderImageBatchGroups();
                 // Re-rendering recreates the status buttons. Schedule the
                 // post-run inspection afterwards so it updates the live DOM.
-                scheduleDirectorPassCacheRefresh(this, 500);
+                scheduleDirectorPassCacheRefresh(this, 500, "selected");
             } else this.scheduleRender();
             return;
         }
@@ -12840,7 +12882,7 @@ app.registerExtension({
                 for (const node of graph?._nodes ?? graph?.nodes ?? []) {
                     const editor = node?._minimaxEditor;
                     if (editor?.isImageBatch?.()) {
-                        scheduleDirectorPassCacheRefresh(editor, 0);
+                        scheduleDirectorPassCacheRefresh(editor, 0, "selected");
                     }
                 }
                 clearAllDirectorRunStatus();
@@ -13001,11 +13043,10 @@ app.registerExtension({
                 getMinHeight: () => getDirectorUiHeight(self._minimaxEditor),
                 hideOnZoom: false,
                 onDraw() {
-                    if (self._minimaxEditor?.isPlaying) return;
                     ensureDirectorDomWidgetWidth(self);
                 },
                 afterResize: () => {
-                    if (self._minimaxEditor?.isPlaying || self._minimaxEditor?._pauseSettling) return;
+                    if (self._minimaxEditor?._pauseSettling) return;
                     ensureDirectorDomWidgetWidth(self);
                     self._minimaxEditor?.onNodeResize?.();
                 },
@@ -13027,7 +13068,7 @@ app.registerExtension({
         nodeType.prototype.onResize = function (size) {
             ensureDirectorDomWidgetWidth(this);
             const out = onResize?.apply(this, arguments);
-            if (!this._minimaxEditor?.isPlaying && !this._minimaxEditor?._pauseSettling) {
+            if (!this._minimaxEditor?._pauseSettling) {
                 this._minimaxEditor?.onNodeResize?.(size);
             }
             return out;

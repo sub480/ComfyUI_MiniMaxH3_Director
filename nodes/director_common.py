@@ -25,7 +25,7 @@ from ..director.plan import (
 )
 from ..director.progress import report_director_planning
 from ..director.segment_mp4_export import released_output_slots
-from ..lib.image_prep import fit_canvas, fit_video_long_edge
+from ..lib.image_prep import cat_frames_variable_size, fit_canvas, fit_video_long_edge
 from ..lib.video_io import load_timeline_segment
 from ..lib.task_prompts import task_type_combo_options
 
@@ -273,6 +273,7 @@ def build_source_images_output(
     images_out: list[torch.Tensor],
     *,
     split_outputs: bool,
+    segment_frame_counts: list[int] | None = None,
 ) -> list[torch.Tensor]:
     if split_outputs:
         chunks: list[torch.Tensor] = []
@@ -293,6 +294,19 @@ def build_source_images_output(
         return chunks
 
     target_len = int(images_out[0].shape[0]) if images_out else int(plan.total_frames or 0)
+    if plan.run_indices is not None:
+        chunks: list[torch.Tensor] = []
+        for pos, index in enumerate(sorted(plan.run_indices)):
+            seg = plan.segments[index]
+            raw = load_timeline_segment(plan.raw, seg.start_frame, seg.end_frame)
+            fitted = _fit_source_clip_to_plan(plan, raw)
+            chunk_len = (
+                int(segment_frame_counts[pos])
+                if segment_frame_counts is not None and pos < len(segment_frame_counts)
+                else int(seg.frame_count)
+            )
+            chunks.append(pad_or_trim_frames(fitted, chunk_len).cpu().float())
+        return [pad_or_trim_frames(cat_frames_variable_size(chunks), target_len)]
     raw = load_timeline_segment(plan.raw, 0, target_len)
     fitted = _fit_source_clip_to_plan(plan, raw)
     return [pad_or_trim_frames(fitted, target_len).cpu().float()]
@@ -491,6 +505,7 @@ def finalize_director_outputs(
                 plan,
                 images_out,
                 split_outputs=split_source_outputs,
+                segment_frame_counts=segment_frame_counts,
             )
             source_frames = sum(int(batch.shape[0]) for batch in source_images_out)
             report = report + (
