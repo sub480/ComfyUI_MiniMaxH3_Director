@@ -1147,7 +1147,11 @@ def execute_director_plan_core(
         if first_pass_gpu is not None and upscale_frames is None:
             del first_pass_gpu
             first_pass_gpu = None
-        export_len = int(num_frames)
+        export_len = (
+            int(target_len)
+            if seg.task_key in {"v2v", "rv2v"} and seg.source_clip is not None
+            else int(num_frames)
+        )
         if not skip_first_sample:
             save_first_pass_cache(
                 node_id,
@@ -1251,11 +1255,14 @@ def execute_director_plan_core(
         decoded, audio_dict = _decode_av_latent(
             samples, vae, audio_vae, decode_audio=decode_audio,
         )
-        # Official H3 keeps the 17k+5 sample length. Cropping back to the
-        # unaligned UI duration (e.g. 120 vs 124) chopped the last ~167 ms of
-        # audio. With motion context, sample is longer; after prefix trim,
-        # crop to aligned visible ``num_frames``.
-        export_len = int(num_frames)
+        # Generated tasks keep the official 17k+5 sample length. Video-edit
+        # tasks still sample on that grid, but export the exact selected source
+        # range so no aligned tail leaks past the user's trim handles.
+        export_len = (
+            int(target_len)
+            if seg.task_key in {"v2v", "rv2v"} and seg.source_clip is not None
+            else int(num_frames)
+        )
         decoded, audio_dict = _trim_decoded_to_export(
             decoded,
             audio_dict,

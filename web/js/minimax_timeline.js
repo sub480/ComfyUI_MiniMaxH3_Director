@@ -349,6 +349,12 @@ function sanitizeSegmentForPayload(seg) {
         sourceVideo: rest.sourceVideo
             ? {
                 totalFrames: Number(rest.sourceVideo.totalFrames) || 0,
+                rangeStart: rest.sourceVideo.rangeStart == null
+                    ? undefined
+                    : Math.max(0, Math.round(Number(rest.sourceVideo.rangeStart) || 0)),
+                rangeEnd: rest.sourceVideo.rangeEnd == null
+                    ? undefined
+                    : Math.max(0, Math.round(Number(rest.sourceVideo.rangeEnd) || 0)),
                 video: sanitizeVideoMedia(rest.sourceVideo.video || {}),
                 videoClips: Array.isArray(rest.sourceVideo.videoClips)
                     ? rest.sourceVideo.videoClips.map(sanitizeVideoMedia)
@@ -1286,6 +1292,7 @@ const STYLES = `
 .bd-video-tag{color:#4fff8f;font-size:10px}
 .bd-num{width:42px;background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:5px 4px;font-size:11px;text-align:center;-moz-appearance:textfield}
 .bd-num::-webkit-outer-spin-button,.bd-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.bd-removed-video-split-control{display:none!important}
 .bd-output label{color:#888;font-size:10px;white-space:nowrap}
 .bd-output .bd-out-fixed{display:flex;gap:4px;align-items:center}
 .bd-output .bd-out-fixed.hidden{display:none}
@@ -3018,10 +3025,10 @@ class MiniMaxH3DirectorEditor {
                     <button type="button" class="bd-btn bd-btn-primary" data-a="video" data-i18n="toolbar.uploadVideo">上传视频</button>
                     <button type="button" class="bd-btn bd-btn-primary hidden" data-a="fl2v-add-shot" data-i18n="toolbar.addShot" data-i18n-title="tooltip.addShot">添加一组</button>
                     <button type="button" class="bd-btn" data-a="video-append" data-i18n="toolbar.appendVideo" data-i18n-title="tooltip.appendVideo">追加视频</button>
-                    <button type="button" class="bd-btn" data-a="split" data-i18n="toolbar.split">+ 分割</button>
-                    <input type="number" class="bd-num" data-r="equal-n" min="2" max="64" value="2" data-i18n-title="tooltip.equalSplitN">
-                    <button type="button" class="bd-btn" data-a="equal" data-i18n="toolbar.equalSplit">均分</button>
-                    <button type="button" class="bd-btn" data-a="smart-split" data-i18n="toolbar.smartSplit" data-i18n-title="tooltip.smartSplit">智能分割</button>
+                    <button type="button" class="bd-btn bd-removed-video-split-control" data-a="split" data-i18n="toolbar.split">+ 分割</button>
+                    <input type="number" class="bd-num bd-removed-video-split-control" data-r="equal-n" min="2" max="64" value="2" data-i18n-title="tooltip.equalSplitN">
+                    <button type="button" class="bd-btn bd-removed-video-split-control" data-a="equal" data-i18n="toolbar.equalSplit">均分</button>
+                    <button type="button" class="bd-btn bd-removed-video-split-control" data-a="smart-split" data-i18n="toolbar.smartSplit" data-i18n-title="tooltip.smartSplit">智能分割</button>
                     <button type="button" class="bd-btn" data-a="run-select-toggle" data-i18n="toolbar.runSelect" data-i18n-title="tooltip.runSelect">选择运行</button>
                     <label class="bd-run-select-all-wrap hidden" data-r="run-select-all-wrap" data-i18n-title="tooltip.runSelectAll">
                         <input type="checkbox" data-r="run-select-all-cb">
@@ -3699,6 +3706,15 @@ class MiniMaxH3DirectorEditor {
             }, true);
         }
         this.viewport?.addEventListener("wheel", (e) => {
+            if (e.altKey) {
+                const zoomDelta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+                if (zoomDelta === 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (!this.zoomEnabled) this.zoomEnabled = true;
+                this.adjustZoom(zoomDelta < 0 ? 0.25 : -0.25);
+                return;
+            }
             if (this.getTimelineZoom() <= 1) return;
             const scrollDelta = e.deltaX !== 0 ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
             if (scrollDelta === 0) return;

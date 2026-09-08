@@ -196,6 +196,9 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         "ref_video": ref_video_file,
         "ref_video_start": seg.reference_video_start_frame,
         "source_media": list(getattr(seg, "source_media_identity", ()) or ()),
+        "video_edit_export": (
+            "source_range_v1" if seg.task_key in {"v2v", "rv2v"} else ""
+        ),
         SOURCE_VIDEO_FP_KEY: source_video_identity(plan),
         "continuity": uses_mc,
         "continuity_overlap": (

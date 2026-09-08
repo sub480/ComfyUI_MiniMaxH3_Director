@@ -5,7 +5,7 @@ const MIN_SEGMENT_FRAMES = 5;
 
 const STYLES = `
 .bd-group-video-timeline{display:flex;flex-direction:column;gap:7px;min-width:0;background:#0b0d0e;border:1px solid #293033;border-radius:8px;padding:8px;box-sizing:border-box}
-.bd-group-video-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.bd-group-video-toolbar{display:none!important;align-items:center;gap:5px;flex-wrap:wrap}
 .bd-group-video-toolbar button{border:1px solid #3b4448;background:#171b1d;color:#c8ced1;border-radius:4px;padding:3px 7px;font-size:10px;line-height:1.35;cursor:pointer}
 .bd-group-video-toolbar button:hover{border-color:#66747a;color:#fff}
 .bd-group-video-toolbar button:disabled{opacity:.45;cursor:not-allowed}
@@ -32,6 +32,18 @@ const STYLES = `
 `;
 
 let stylesInjected = false;
+const timelineViewStates = new WeakMap();
+
+function timelineViewState(editor, seg) {
+    let states = timelineViewStates.get(editor);
+    if (!states) {
+        states = new Map();
+        timelineViewStates.set(editor, states);
+    }
+    const key = seg?.id ?? seg;
+    if (!states.has(key)) states.set(key, { zoom: 1, scrollLeft: 0 });
+    return states.get(key);
+}
 
 function injectStyles() {
     if (stylesInjected) return;
@@ -291,6 +303,36 @@ export function mountGroupVideoTimeline(container, options) {
     let rangeDragStart = 0;
     let rangeDragEnd = 0;
     let rangeDragCurrent = 0;
+    const viewState = timelineViewState(editor, seg);
+    let trackZoom = clamp(Number(viewState.zoom) || 1, 1, 10);
+    track.style.width = `${trackZoom * 100}%`;
+    requestAnimationFrame(() => {
+        trackViewport.scrollLeft = Math.max(0, Number(viewState.scrollLeft) || 0);
+    });
+    trackViewport.addEventListener("scroll", () => {
+        viewState.scrollLeft = trackViewport.scrollLeft;
+    });
+
+    trackViewport.addEventListener("wheel", (event) => {
+        if (!event.altKey) return;
+        const zoomDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+        if (zoomDelta === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const viewportRect = trackViewport.getBoundingClientRect();
+        const pointerX = event.clientX - viewportRect.left;
+        const oldWidth = track.getBoundingClientRect().width || viewportRect.width;
+        const anchorRatio = oldWidth > 0
+            ? (trackViewport.scrollLeft + pointerX) / oldWidth
+            : 0.5;
+        trackZoom = clamp(trackZoom + (zoomDelta < 0 ? 0.25 : -0.25), 1, 10);
+        viewState.zoom = trackZoom;
+        track.style.width = `${trackZoom * 100}%`;
+        requestAnimationFrame(() => {
+            trackViewport.scrollLeft = Math.max(0, anchorRatio * track.offsetWidth - pointerX);
+            viewState.scrollLeft = trackViewport.scrollLeft;
+        });
+    }, { passive: false });
 
     const selectedRanges = () => detectionRanges(model).map((range) => ({
         ...range,
@@ -405,7 +447,7 @@ export function mountGroupVideoTimeline(container, options) {
         onSplit?.([0, ...valid.map((value) => value - rangeStart), rangeEnd - rangeStart]);
     };
 
-    split.onclick = () => splitAt([currentFrame]);
+    split.onclick = () => splitAt([currentFrame + 1]);
     equal.onclick = () => {
         const count = clamp(parseInt(equalCount.value || "2", 10) || 2, 2, 64);
         const points = [];

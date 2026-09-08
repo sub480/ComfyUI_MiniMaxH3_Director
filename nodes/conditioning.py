@@ -133,14 +133,14 @@ def run_minimax_conditioning(
         if audio_vae is None:
             raise ValueError("MiniMax H3 r2v/v2v/rv2v / reference conditioning requires audio_vae.")
         out = MiniMaxH3ReferenceToVideo.execute(
-            clip,
-            vae,
-            audio_vae,
-            prompt,
-            width,
-            height,
-            length,
-            ref_image_size,
+            clip=clip,
+            vae=vae,
+            audio_vae=audio_vae,
+            prompt=prompt,
+            width=width,
+            height=height,
+            length=length,
+            ref_image_size=ref_image_size,
             ref_images=ref_images,
             ref_videos=ref_videos,
             ref_video_audios=ref_video_audios,
