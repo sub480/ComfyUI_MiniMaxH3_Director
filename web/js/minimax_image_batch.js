@@ -322,7 +322,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-run-all input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#4fff8f}
 /* Default cap; batch-fill mode overrides via .bd-wrap.bd-batch-fill + JS max-height. */
 .bd-batch-list{display:flex;flex-direction:column;gap:8px;width:100%;max-height:640px;overflow-y:auto;padding-right:2px;min-height:0}
-.bd-batch-card{background:linear-gradient(165deg,#1a1a1a 0%,#141414 55%,#111 100%);border:1px solid #2c2c2c;border-radius:10px;padding:12px 14px;display:grid;gap:10px;align-items:stretch;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);flex:0 0 auto}
+.bd-batch-card{background:linear-gradient(165deg,#1a1a1a 0%,#141414 55%,#111 100%);border:1px solid #2c2c2c;border-radius:10px;padding:12px 14px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:10px;align-items:stretch;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);flex:0 0 auto;box-sizing:border-box;min-height:195px;overflow:hidden;resize:vertical}
 /* t2v: 提示词 | 预览（开实时预览才出第三列） */
 .bd-batch-card.bd-batch-plain{grid-template-columns:minmax(0,1fr)}
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-plain{grid-template-columns:minmax(0,1fr) minmax(180px,.55fr)}
@@ -360,7 +360,9 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-plain .bd-batch-preview,.bd-batch-source .bd-batch-preview,.bd-batch-fl2v .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-preview{border-radius:10px;border-color:#262626;background:#0c0c0c}
 /* ——— r2v asset stage (polished) ——— */
-.bd-batch-card.bd-batch-r2v{display:flex;flex-direction:column;gap:12px;padding:14px 16px;background:linear-gradient(165deg,#1c1c1c 0%,#141414 52%,#111 100%);border:1px solid #2c2c2c;border-radius:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.035);align-items:stretch}
+.bd-batch-card.bd-batch-r2v{display:flex;flex-direction:column;align-items:stretch;min-height:490px}
+.bd-batch-card.bd-batch-collapsed{display:flex;flex:0 0 auto!important;flex-direction:column;height:auto!important;min-height:0;resize:none}
+.bd-batch-card.bd-batch-collapsed>:not(.bd-batch-head){display:none!important}
 .bd-batch-card.running{border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.25)}
 .bd-batch-card.done{border-color:#3a5080}
 .bd-batch-card.run-skipped{opacity:.42}
@@ -368,19 +370,21 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-card.selected,.bd-batch-card.selected.done{border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.35)}
 .bd-batch-card.run-on:not(.run-skipped){border-color:#3a7a55}
 .bd-batch-card.selected.run-on,.bd-batch-card.selected.run-on.done{border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.4)}
-.bd-batch-head{grid-column:1/-1;display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap}
+.bd-batch-head{grid-column:1/-1;display:flex;align-items:center;align-self:start;justify-content:flex-start;gap:8px;flex-wrap:nowrap;flex:0 0 auto;width:100%;min-width:0}
 .bd-batch-r2v .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px;flex-shrink:0}
 .bd-batch-head b{color:#ccc;font-size:11px}
-.bd-batch-r2v .bd-batch-head b{color:#f0f0f0;font-size:13px;font-weight:650;letter-spacing:.02em}
+.bd-batch-head>b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bd-batch-r2v .bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
+.bd-batch-collapse{appearance:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;background:transparent;color:#aaa;font-size:13px;line-height:1;cursor:pointer;flex-shrink:0}
+.bd-batch-collapse:hover,.bd-batch-collapse:focus-visible{color:#eee;background:#252525;border-radius:4px;outline:none}
+.bd-batch-title-input{min-width:100px;max-width:220px;height:24px;box-sizing:border-box;background:#181818;border:1px solid #4a7a5a;border-radius:4px;color:#eee;padding:2px 6px;font:inherit;font-size:12px}
 .bd-batch-run-check{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#4fff8f;flex-shrink:0}
 .bd-batch-continuity{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#9ab;cursor:pointer;user-select:none;flex-shrink:0}
 .bd-batch-continuity input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#6ab0ff;flex-shrink:0}
 .bd-batch-continuity span{white-space:nowrap}
-.bd-batch-head-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.bd-batch-head-meta{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto}
 .bd-batch-fc{display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px}
-.bd-batch-r2v .bd-batch-fc{color:#c8c8c8;font-size:12px;gap:8px;background:#0e0e0e;border:1px solid #2a2a2a;border-radius:8px;padding:5px 10px}
 .bd-batch-fc input{width:72px;background:#181818;border:1px solid #444;border-radius:5px;color:#eee;padding:5px 8px;font-size:13px}
-.bd-batch-r2v .bd-batch-fc input{width:76px;background:#161616;border-color:#3a3a3a;border-radius:6px;padding:5px 8px;font-size:13px}
 .bd-batch-pass{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
 .bd-batch-pass-btn{background:#181818;border:1px solid #444;color:#ccc;border-radius:5px;padding:3px 7px;font-size:11px;cursor:pointer;line-height:1.2}
 .bd-batch-pass-btn.active{border-color:#4fff8f;color:#4fff8f;background:#163022}
@@ -396,10 +400,9 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-pass-clear{background:transparent;border:1px solid #553;color:#f88;border-radius:4px;padding:3px 6px;font-size:10px;cursor:pointer}
 .bd-batch-pass-clear:hover{background:#3a1515}
 .bd-batch-pass-pop{position:fixed;z-index:10000;max-width:300px;padding:8px 10px;background:#1a1a1a;border:1px solid #444;border-radius:8px;color:#ddd;font:12px/1.45 sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.45);white-space:pre-wrap;word-break:break-word}
-.bd-batch-refsize{display:flex;align-items:center;gap:6px;color:#c8c8c8;font-size:12px;background:#0e0e0e;border:1px solid #2a2a2a;border-radius:8px;padding:5px 10px;white-space:nowrap}
+.bd-batch-refsize{display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px;white-space:nowrap}
 .bd-batch-refsize select{background:#161616;border:1px solid #3a3a3a;border-radius:6px;color:#eee;padding:5px 6px;font-size:12px;max-width:88px}
 .bd-batch-del{background:transparent;border:1px solid #553;color:#f88;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer}
-.bd-batch-r2v .bd-batch-del{border-radius:8px;padding:5px 10px;font-size:11px;border-color:#4a3030;color:#f0a0a0}
 .bd-batch-del:disabled{border-color:#3a3a3a;color:#777;opacity:.55;cursor:not-allowed}
 .bd-batch-del:not(:disabled):hover{background:#3a1515}
 .bd-batch-media{display:flex;flex-direction:column;gap:4px;min-width:88px;max-width:140px}
@@ -415,6 +418,8 @@ export const IMAGE_BATCH_STYLES = `
 .bd-r2v-section-title{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#eaeaea;min-width:0}
 .bd-r2v-section-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .bd-r2v-section-count{font-size:11px;color:#7d7d7d;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.bd-r2v-section-actions .bd-batch-refsize{font-size:11px;gap:4px}
+.bd-r2v-section-actions .bd-batch-refsize select{padding:2px 5px;font-size:11px;max-width:76px}
 
 .bd-batch-src{position:relative;width:88px;height:88px;border:1px dashed #555;border-radius:4px;background:#111;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;color:#666;font-size:9px;text-align:center;padding:4px;box-sizing:border-box}
 .bd-batch-src .x{position:absolute;top:1px;right:1px;width:18px;height:18px;border-radius:4px;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);color:#ff8a8a;font-size:14px;font-weight:700;z-index:3;line-height:1}
@@ -1048,6 +1053,7 @@ function appendMixedFl2vSlots(card, editor, seg, index) {
         const src = document.createElement("div");
         src.className = "bd-batch-src";
         const file = kind === "end" ? seg.endImage?.imageFile : seg.startImage?.imageFile;
+        const label = t(kind === "end" ? "fl2v.tag.end" : "fl2v.tag.start");
         renderSourceSlot(src, file);
         if (!file) {
             src.innerHTML = `<span class="ph">${t(kind === "end" ? "panel.fl2v.endOptional" : "panel.fl2v.startRequired")}</span>`;
@@ -1057,8 +1063,20 @@ function appendMixedFl2vSlots(card, editor, seg, index) {
             tag.textContent = t(kind === "end" ? "fl2v.tag.end" : "fl2v.tag.start");
             src.appendChild(tag);
         }
-        src.title = t(kind === "end" ? "tooltip.fl2vEndSlot" : "tooltip.fl2vStartSlot");
-        src.onclick = () => uploadSegFl2v(editor, index, kind);
+        src.title = file
+            ? t("source.imageTitleFilled", { label, file })
+            : t(kind === "end" ? "tooltip.fl2vEndSlot" : "tooltip.fl2vStartSlot");
+        bindSlotActivate(src, {
+            editor,
+            hasMedia: !!file,
+            onPick: () => uploadSegFl2v(editor, index, kind),
+            onPreview: () => openSlotPreview({
+                kind: "image",
+                src: viewUrl(file),
+                label,
+                onReplace: () => uploadSegFl2v(editor, index, kind),
+            }),
+        });
         bindOsFileDrop(src, (files) => {
             const image = files.find(isBatchImageFile);
             if (image) void assignSegFl2vFromFile(editor, index, kind, image);
@@ -1618,6 +1636,38 @@ function appendR2vMediaSections(card, seg, index, editor) {
         t("batch.r2v.sectionPictures"),
         `${counts.imgs}/${picSlots}`,
     );
+    const imageActions = imgSection.querySelector(".bd-r2v-section-actions");
+    const sizeRow = document.createElement("label");
+    sizeRow.className = "bd-batch-refsize";
+    sizeRow.title = t("tooltip.refImageSize");
+    const sizeLabel = document.createElement("span");
+    sizeLabel.setAttribute("data-i18n", "output.refImageSize.label");
+    sizeLabel.textContent = t("output.refImageSize.label");
+    const sizeSelect = document.createElement("select");
+    sizeSelect.className = "bd-select";
+    const currentSize = resolveSegmentRefImageSize(seg, editor.timeline?.output);
+    seg.refImageSize = currentSize;
+    for (const optionKey of ["match", "max"]) {
+        const option = document.createElement("option");
+        option.value = optionKey;
+        option.setAttribute("data-i18n", `output.refImageSize.${optionKey}`);
+        option.textContent = t(`output.refImageSize.${optionKey}`);
+        option.selected = optionKey === currentSize;
+        sizeSelect.appendChild(option);
+    }
+    sizeSelect.onchange = (event) => {
+        event.stopPropagation();
+        const live = (editor.timeline.segments || []).find((item) => item?.id && item.id === seg.id)
+            || editor.timeline.segments?.[index];
+        if (!live) return;
+        live.refImageSize = resolveSegmentRefImageSize({ refImageSize: sizeSelect.value });
+        editor.scheduleTimelineSync?.();
+        editor.flushTimelineSync?.();
+    };
+    sizeSelect.onclick = (event) => event.stopPropagation();
+    sizeRow.appendChild(sizeLabel);
+    sizeRow.appendChild(sizeSelect);
+    imageActions?.insertBefore(sizeRow, imageActions.firstChild);
     const refs = document.createElement("div");
     refs.className = "bd-batch-refs";
     bindOsFileDrop(refs, (files, e) => dropFilesIntoGroupSlots(editor, index, files, e, {
@@ -2308,7 +2358,9 @@ export function selectBatchGroup(editor, index) {
     const segs = editor?.timeline?.segments || [];
     if (!segs.length) return;
     const next = Math.max(0, Math.min(segs.length - 1, Number(index) || 0));
+    const expanded = expandBatchGroup(editor, next);
     if (next === editor.selectedIndex) {
+        if (expanded) editor.renderImageBatchGroups?.();
         editor._syncR2vCardSelection?.();
         return;
     }
@@ -2322,6 +2374,22 @@ export function selectBatchGroup(editor, index) {
         editor.scheduleRender?.();
     }
     editor.updateVideoNameLabel?.();
+}
+
+export function expandBatchGroup(editor, index) {
+    const seg = editor?.timeline?.segments?.[index];
+    if (!seg?.uiCollapsed) return false;
+    seg.uiCollapsed = false;
+    editor.scheduleTimelineSync?.();
+    return true;
+}
+
+export function toggleBatchGroupCollapsed(editor, index) {
+    const seg = editor?.timeline?.segments?.[index];
+    if (!seg) return false;
+    seg.uiCollapsed = !seg.uiCollapsed;
+    editor.scheduleTimelineSync?.();
+    return true;
 }
 
 function batchCardEl(editor, segmentIndex) {
@@ -2877,6 +2945,46 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         card.className = `bd-batch-card ${layoutClass}`;
         card.dataset.batchIndex = String(index);
         if (seg.id) card.dataset.batchSegId = String(seg.id);
+        const collapsed = !!seg.uiCollapsed;
+        card.classList.toggle("bd-batch-collapsed", collapsed);
+        const savedCardHeight = Number(seg.uiCardHeight);
+        if (!collapsed && Number.isFinite(savedCardHeight) && savedCardHeight > 0) {
+            card.style.height = `${Math.round(savedCardHeight)}px`;
+            card.style.flex = "0 0 auto";
+        }
+        card.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0) return;
+            const rect = card.getBoundingClientRect();
+            const gripSize = 24;
+            const onResizeGrip = event.clientX >= rect.right - gripSize
+                && event.clientY >= rect.bottom - gripSize;
+            if (!onResizeGrip) return;
+            const startHeight = card.offsetHeight;
+            const previousHeight = card.style.height;
+            const previousFlex = card.style.flex;
+            card.style.height = `${startHeight}px`;
+            card.style.flex = "0 0 auto";
+            card.dataset.userResizing = "1";
+            const finishResize = () => {
+                window.removeEventListener("pointerup", finishResize, true);
+                window.removeEventListener("pointercancel", finishResize, true);
+                const nextHeight = card.offsetHeight;
+                delete card.dataset.userResizing;
+                if (Math.abs(nextHeight - startHeight) < 2) {
+                    card.style.height = previousHeight;
+                    card.style.flex = previousFlex;
+                    return;
+                }
+                const live = (editor.timeline.segments || []).find((item) => item?.id && item.id === seg.id)
+                    || editor.timeline.segments?.[index];
+                if (!live || !card.isConnected) return;
+                live.uiCardHeight = nextHeight;
+                editor.scheduleTimelineSync?.();
+                editor.flushTimelineSync?.();
+            };
+            window.addEventListener("pointerup", finishResize, true);
+            window.addEventListener("pointercancel", finishResize, true);
+        });
         const runSelectOn = !!(editor.isRunSelectEnabled?.() && editor.supportsRunSelect?.());
         const runEnabled = !runSelectOn || !!editor.isSegmentRunEnabled?.(index);
         // r2v / mixed: always show focus selected. t2v/i2v: only run-select participation chrome.
@@ -2897,6 +3005,23 @@ function appendBatchCard(list, editor, seg, index, ctx) {
 
         const head = document.createElement("div");
         head.className = "bd-batch-head";
+        const collapseBtn = document.createElement("button");
+        collapseBtn.type = "button";
+        collapseBtn.className = "bd-batch-collapse";
+        collapseBtn.textContent = collapsed ? "▸" : "▾";
+        collapseBtn.title = t(collapsed ? "tooltip.batchGroupExpand" : "tooltip.batchGroupCollapse");
+        collapseBtn.setAttribute("aria-expanded", String(!collapsed));
+        collapseBtn.onclick = (event) => {
+            event.stopPropagation();
+            const live = (editor.timeline.segments || []).find((item) => item?.id && item.id === seg.id)
+                || editor.timeline.segments?.[index];
+            if (!live) return;
+            live.uiCollapsed = !live.uiCollapsed;
+            editor.scheduleTimelineSync?.();
+            editor.flushTimelineSync?.();
+            editor.renderImageBatchGroups?.();
+        };
+        head.appendChild(collapseBtn);
         // Timeline + cards stay in sync for run-select (incl. r2v).
         if (runSelectOn) {
             const runCb = document.createElement("input");
@@ -2911,10 +3036,47 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             head.appendChild(runCb);
         }
         const title = document.createElement("b");
-        title.textContent = t(
+        const defaultTitle = t(
             mixed ? "batch.groupTitle.mixed" : (isR2v ? "batch.groupTitle.asset" : "batch.groupTitle.prompt"),
             { n: index + 1 },
         );
+        title.textContent = String(seg.uiGroupName || "").trim() || defaultTitle;
+        title.title = t("tooltip.batchGroupRename");
+        title.ondblclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "bd-batch-title-input";
+            input.value = String(seg.uiGroupName || "").trim() || defaultTitle;
+            title.replaceWith(input);
+            input.focus();
+            input.select();
+            let cancelled = false;
+            const finish = () => {
+                const live = (editor.timeline.segments || []).find((item) => item?.id && item.id === seg.id)
+                    || editor.timeline.segments?.[index];
+                if (live && !cancelled) {
+                    const name = input.value.trim();
+                    live.uiGroupName = name === defaultTitle ? "" : name;
+                    editor.scheduleTimelineSync?.();
+                    editor.flushTimelineSync?.();
+                }
+                title.textContent = String(live?.uiGroupName || "").trim() || defaultTitle;
+                input.replaceWith(title);
+            };
+            input.onclick = (inputEvent) => inputEvent.stopPropagation();
+            input.ondblclick = (inputEvent) => inputEvent.stopPropagation();
+            input.onkeydown = (keyEvent) => {
+                keyEvent.stopPropagation();
+                if (keyEvent.key === "Enter") input.blur();
+                if (keyEvent.key === "Escape") {
+                    cancelled = true;
+                    input.blur();
+                }
+            };
+            input.onblur = finish;
+        };
         head.appendChild(title);
         if (mixed && !externalLocked) {
             const typeSel = document.createElement("select");
@@ -2936,6 +3098,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         }
         // Per-segment continuity (master「段间引导」must be on; skip segment 1).
         const masterCont = isContinuityMasterEnabled(editor.timeline?.output);
+        let continuityLabel = null;
         if (masterCont && index > 0 && isVideo) {
             const contLabel = document.createElement("label");
             contLabel.className = "bd-batch-continuity";
@@ -2957,43 +3120,11 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             contText.textContent = t("batch.continuityFromPrev");
             contLabel.appendChild(contCb);
             contLabel.appendChild(contText);
-            head.appendChild(contLabel);
+            continuityLabel = contLabel;
         }
+        if (continuityLabel) head.appendChild(continuityLabel);
         const meta = document.createElement("div");
         meta.className = "bd-batch-head-meta";
-        if (isR2v) {
-            const sizeRow = document.createElement("label");
-            sizeRow.className = "bd-batch-refsize";
-            sizeRow.title = t("tooltip.refImageSize");
-            const sizeLabel = document.createElement("span");
-            sizeLabel.setAttribute("data-i18n", "output.refImageSize.label");
-            sizeLabel.textContent = t("output.refImageSize.label");
-            const sizeSel = document.createElement("select");
-            sizeSel.className = "bd-select";
-            const curSize = resolveSegmentRefImageSize(seg, editor.timeline?.output);
-            seg.refImageSize = curSize;
-            for (const opt of ["match", "max"]) {
-                const o = document.createElement("option");
-                o.value = opt;
-                o.setAttribute("data-i18n", `output.refImageSize.${opt}`);
-                o.textContent = t(`output.refImageSize.${opt}`);
-                if (opt === curSize) o.selected = true;
-                sizeSel.appendChild(o);
-            }
-            sizeSel.onchange = (e) => {
-                e.stopPropagation();
-                const liveIdx = (editor.timeline.segments || []).findIndex((s) => s?.id && s.id === seg.id);
-                const live = editor.timeline.segments?.[liveIdx >= 0 ? liveIdx : index];
-                if (!live) return;
-                live.refImageSize = resolveSegmentRefImageSize({ refImageSize: sizeSel.value });
-                editor.commit?.(false, { syncTimeline: true });
-                editor.flushTimelineSync?.();
-            };
-            sizeSel.onclick = (e) => e.stopPropagation();
-            sizeRow.appendChild(sizeLabel);
-            sizeRow.appendChild(sizeSel);
-            meta.appendChild(sizeRow);
-        }
         if (isVideo) {
             const secRow = document.createElement("label");
             secRow.className = "bd-batch-fc";
@@ -3073,8 +3204,23 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             media.className = "bd-batch-media";
             const src = document.createElement("div");
             src.className = "bd-batch-src";
-            renderSourceSlot(src, seg.genImage?.imageFile);
-            src.onclick = () => uploadSegSource(editor, index);
+            const file = seg.genImage?.imageFile || "";
+            const label = t("panel.uploadSourceImage");
+            renderSourceSlot(src, file);
+            src.title = file
+                ? t("source.imageTitleFilled", { label, file })
+                : t("tooltip.uploadSourceImage");
+            bindSlotActivate(src, {
+                editor,
+                hasMedia: !!file,
+                onPick: () => uploadSegSource(editor, index),
+                onPreview: () => openSlotPreview({
+                    kind: "image",
+                    src: viewUrl(file),
+                    label,
+                    onReplace: () => uploadSegSource(editor, index),
+                }),
+            });
             bindOsFileDrop(src, (files) => {
                 const file = files.find(isBatchImageFile);
                 if (file) void assignSegSourceFromFile(editor, index, file);
@@ -3539,9 +3685,17 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         const solo = (editor.timeline?.segments?.length || 0) <= 1 || isBatchDetailSolo(editor);
         list.classList.toggle("bd-batch-solo", solo);
         for (const card of list.querySelectorAll(".bd-batch-card")) {
-            if (solo && (listH > 0 || !trusted)) {
+            const index = Number.parseInt(card.dataset.batchIndex, 10);
+            const savedHeight = Number(editor.timeline?.segments?.[index]?.uiCardHeight);
+            if (card.dataset.userResizing === "1") {
+                continue;
+            } else if (Number.isFinite(savedHeight) && savedHeight > 0) {
+                card.style.flex = "0 0 auto";
+                card.style.minHeight = "";
+                card.style.height = `${Math.round(savedHeight)}px`;
+            } else if (solo && (listH > 0 || !trusted)) {
                 card.style.flex = "1 1 auto";
-                card.style.minHeight = "0";
+                card.style.minHeight = "";
                 card.style.height = "100%";
             } else {
                 card.style.flex = "";

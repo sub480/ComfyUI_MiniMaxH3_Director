@@ -30,7 +30,7 @@ from .h3_motion_context import (
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.h3_latent_continue")
 
-CONTINUE_PIPELINE_ID = "minimax_h3_latent_continue_v3"
+CONTINUE_PIPELINE_ID = "minimax_h3_latent_continue_v4"
 PREFIX_STEPS_KEY = "_director_continue_prefix_steps"
 CONTINUE_SEAM_KEY = "_director_continue_seam_min"
 SEAM_TAPER_TOKENS = 4

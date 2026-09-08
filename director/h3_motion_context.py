@@ -33,9 +33,9 @@ DEFAULT_CONTEXT_FRAMES = 22
 VIDEO_RUN_GRID = (124, 107, 90, 73, 56, 39, 22, 5, 1)
 
 CONTINUITY_TASK_KEYS = frozenset({"t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"})
-# v8: v7 + export audio cache + fps in fingerprint + trim hydrate on partial re-run.
+# v9: plain guide also applies to i2v segments with an explicit start image.
 # Single source of truth — imported by segment_cache.segment_cache_fingerprint.
-CONTINUITY_PIPELINE_ID = "minimax_h3_motion_context_v8"
+CONTINUITY_PIPELINE_ID = "minimax_h3_motion_context_v9"
 # Example workflow tested value (NikoDemon80): audio_context_length=24 with video=22.
 DEFAULT_AUDIO_CONTEXT_FRAMES = 24
 

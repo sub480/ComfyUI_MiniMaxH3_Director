@@ -22,6 +22,7 @@ import {
 } from "./minimax_gen_timeline.js";
 import { t } from "./minimax_i18n.js";
 import { patchGroupLivePreview } from "./minimax_image_batch.js";
+import { openSlotPreview } from "./minimax_ref_slots.js";
 
 export const FL2V_STYLES = `
 .bd-fl2v-detail-wrap{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;min-height:0}
@@ -1046,14 +1047,14 @@ function renderFl2vShotCards(editor) {
                 <div class="bd-fl2v-params">
                     <div class="bd-fl2v-slots">
                         <div class="bd-fl2v-slot-wrap${startUrl ? " has-img" : ""}">
-                            <div class="bd-fl2v-slot${startUrl ? " has-img" : ""}" data-slot="start" title="${t("tooltip.fl2vStartSlot")}">
+                            <div class="bd-fl2v-slot${startUrl ? " has-img" : ""}" data-slot="start">
                                 ${startUrl ? `<span class="tag start">${t("fl2v.tag.start")}</span>` : ""}
                                 ${startUrl ? `<img src="${startUrl}" alt="">` : `<span class="ph">${t("panel.fl2v.startRequired")}</span>`}
                             </div>
                             ${startUrl ? `<button type="button" class="x" data-clear="start" title="${t("tooltip.fl2vClear")}" draggable="false">×</button>` : ""}
                         </div>
                         <div class="bd-fl2v-slot-wrap${endUrl ? " has-img" : ""}">
-                            <div class="bd-fl2v-slot${endUrl ? " has-img" : ""}" data-slot="end" title="${t("tooltip.fl2vEndSlot")}">
+                            <div class="bd-fl2v-slot${endUrl ? " has-img" : ""}" data-slot="end">
                                 ${endUrl ? `<span class="tag end">${t("fl2v.tag.end")}</span>` : ""}
                                 ${endUrl ? `<img src="${endUrl}" alt="">` : `<span class="ph">${t("panel.fl2v.endOptional")}</span>`}
                             </div>
@@ -1127,6 +1128,11 @@ function renderFl2vShotCards(editor) {
         bindFl2vShotCardDnD(editor, card, i);
         card.querySelectorAll("[data-slot]").forEach((slot) => {
             const kind = slot.dataset.slot;
+            const imageFile = kind === "end" ? shot.endImage?.imageFile : shot.startImage?.imageFile;
+            const label = t(kind === "end" ? "fl2v.tag.end" : "fl2v.tag.start");
+            slot.title = imageFile
+                ? t("source.imageTitleFilled", { label, file: imageFile })
+                : t(kind === "end" ? "tooltip.fl2vEndSlot" : "tooltip.fl2vStartSlot");
             bindFl2vSlotDnD(editor, slot, i, kind);
             slot.addEventListener("click", (e) => {
                 if (Date.now() < (editor._fl2vIgnoreSlotClickUntil || 0)) return;
@@ -1134,13 +1140,25 @@ function renderFl2vShotCards(editor) {
                 e.stopPropagation();
                 if (editor.selectedIndex !== i) flushFl2vPromptDraft(editor);
                 editor.selectedIndex = i;
-                editor._fl2vUploadMode = "slot";
-                editor._fl2vSlotKind = kind;
-                editor._fl2vSlotShotIndex = i;
-                const input = ui.fileInput;
-                if (!input) return;
-                input.multiple = false;
-                input.click();
+                const pick = () => {
+                    editor._fl2vUploadMode = "slot";
+                    editor._fl2vSlotKind = kind;
+                    editor._fl2vSlotShotIndex = i;
+                    const input = ui.fileInput;
+                    if (!input) return;
+                    input.multiple = false;
+                    input.click();
+                };
+                if (imageFile) {
+                    openSlotPreview({
+                        kind: "image",
+                        src: fl2vViewUrl(imageFile),
+                        label,
+                        onReplace: pick,
+                    });
+                } else {
+                    pick();
+                }
             });
         });
         card.querySelectorAll("[data-clear]").forEach((btn) => {

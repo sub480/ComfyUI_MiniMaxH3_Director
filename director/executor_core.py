@@ -794,13 +794,12 @@ def execute_director_plan_core(
             plan, seg, clip_frames=clip_frames, ctx_w=ctx_w, ctx_h=ctx_h, prev_tail=None,
         )
 
-        # i2v with an explicit new start image = fresh anchor (skip motion context).
+        # All eligible tasks enter continuity even when i2v has an explicit start image.
+        # Plain guide lets the context own the head; guide+redraw keeps the i2v anchor.
         # fl2v keeps last_frame when continuity is on; first_frame yields to context head.
         # r2v/v2v/rv2v: always eligible for MC when continuity_active (refs stay).
-        i2v_new_anchor = seg.task_key == "i2v" and first_frame is not None
         use_motion_context = (
             continuity_active
-            and not i2v_new_anchor
             and (prev_av is not None or prev_tail is not None)
         )
         if skip_first_sample:
@@ -809,7 +808,7 @@ def execute_director_plan_core(
         # OFF → context_n=0 → sample_len == official segment length only.
         context_n = snap_context_frames(plan.continuity_overlap_frames) if use_motion_context else 0
         sample_len, _planned_trim = generation_frame_budget(num_frames, context_n)
-        if use_motion_context:
+        if use_motion_context and not is_continue_mode(plan):
             # Clear single-frame first lock so multi-frame context owns the head.
             first_frame = None
         refine_keyframe_first = first_frame

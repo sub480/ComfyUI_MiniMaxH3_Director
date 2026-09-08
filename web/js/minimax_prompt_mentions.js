@@ -50,9 +50,6 @@ const MENTION_STYLES = `
 }
 .bd-token-editor:focus{border-color:#4a7a5a;box-shadow:0 0 0 1px rgba(79,255,143,.18)}
 .bd-token-editor:empty:before{content:attr(data-placeholder);color:#666;pointer-events:none}
-.bd-token-resize-handle{
-  display:none
-}
 .bd-rv2v-layout .bd-token-editor,.bd-v2v-layout .bd-token-editor{
   min-height:220px;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45
 }
@@ -645,98 +642,6 @@ function positionMenu(menu, editor) {
     left = Math.min(Math.max(pad, left), window.innerWidth - pad - menuW);
     menu.style.left = `${Math.round(left)}px`;
     menu.style.top = `${Math.round(top)}px`;
-}
-
-/**
- * Native CSS resize handles are unreliable inside ComfyUI's transformed canvas.
- * This explicit grip converts viewport pointer movement back into the editor's
- * unscaled CSS height, so dragging remains accurate at every canvas zoom level.
- */
-function installTokenResizeHandle(wrap, editor) {
-    if (!wrap || !editor || wrap.querySelector(":scope > .bd-token-resize-handle")) return;
-
-    const handle = document.createElement("button");
-    handle.type = "button";
-    handle.className = "bd-token-resize-handle";
-    handle.dataset.role = "prompt-resize-handle";
-    handle.setAttribute("aria-label", t("tooltip.promptEditorResize"));
-    handle.dataset.i18nTitle = "tooltip.promptEditorResize";
-    handle.title = t("tooltip.promptEditorResize");
-    wrap.appendChild(handle);
-
-    const applyHeight = (height, minHeight = 96) => {
-        const nextHeight = Math.max(minHeight, Math.round(height));
-        editor.style.height = `${nextHeight}px`;
-        wrap.style.height = `${nextHeight}px`;
-    };
-
-    handle.addEventListener("keydown", (event) => {
-        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-        event.preventDefault();
-        event.stopPropagation();
-        const computed = getComputedStyle(editor);
-        const current = Number.parseFloat(computed.height) || editor.offsetHeight || 96;
-        const minHeight = Number.parseFloat(computed.minHeight) || 96;
-        const step = event.shiftKey ? 80 : 24;
-        applyHeight(current + (event.key === "ArrowDown" ? step : -step), minHeight);
-    });
-
-    handle.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-    });
-
-    handle.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.stopPropagation();
-
-        const computed = getComputedStyle(editor);
-        const rect = editor.getBoundingClientRect();
-        const startHeight = Number.parseFloat(computed.height) || editor.offsetHeight || 96;
-        const minHeight = Number.parseFloat(computed.minHeight) || 96;
-        const scaleY = rect.height > 0 ? rect.height / startHeight : 1;
-        const startY = event.clientY;
-        const pointerId = event.pointerId;
-
-        wrap.classList.add("bd-token-resizing");
-        document.body.classList.add("bd-token-resizing");
-        try {
-            handle.setPointerCapture(pointerId);
-        } catch {
-            /* Window listeners below keep dragging active without pointer capture. */
-        }
-
-        const onMove = (moveEvent) => {
-            if (moveEvent.pointerId !== pointerId) return;
-            moveEvent.preventDefault();
-            moveEvent.stopPropagation();
-            applyHeight(
-                startHeight + (moveEvent.clientY - startY) / Math.max(scaleY, 0.01),
-                minHeight
-            );
-        };
-
-        const stop = (endEvent) => {
-            if (endEvent.pointerId !== pointerId) return;
-            endEvent.preventDefault();
-            endEvent.stopPropagation();
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", stop);
-            window.removeEventListener("pointercancel", stop);
-            wrap.classList.remove("bd-token-resizing");
-            document.body.classList.remove("bd-token-resizing");
-            try {
-                handle.releasePointerCapture(pointerId);
-            } catch {
-                /* Ignore when capture already ended. */
-            }
-        };
-
-        window.addEventListener("pointermove", onMove, { passive: false });
-        window.addEventListener("pointerup", stop);
-        window.addEventListener("pointercancel", stop);
-    });
 }
 
 function ensureTokenShell(textarea) {

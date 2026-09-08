@@ -65,6 +65,7 @@ import {
     scheduleDirectorPassCacheRefresh,
     setImageBatchPreview,
     patchGroupLivePreview,
+    toggleBatchGroupCollapsed,
     LIVE_PREVIEW_SPEED_DEFAULT,
     LIVE_PREVIEW_SPEED_MAX,
     LIVE_PREVIEW_SPEED_MIN,
@@ -214,6 +215,7 @@ const CONTINUITY_TASKS = new Set(["t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v", "m
 
 function normalizeContinuityMode(raw) {
     const mode = String(raw || "").trim().toLowerCase();
+    if (mode === "guide") return "guide";
     return ["continue", "continuation", "latent", "guide_redraw", "guide+redraw", "redraw"].includes(mode)
         ? "continue"
         : DEFAULT_CONTINUITY_MODE;
@@ -976,9 +978,9 @@ const STYLES = `
 .bd-run-status{min-height:52px;box-sizing:border-box}
 /* Solo material group fills leftover node height. Prompt text scrolls inside
    the editor; do not size the card to content or the DOM widget ratchets. */
-.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card{flex:1 1 auto;min-height:0;align-self:stretch}
+.bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card{flex:1 1 auto;align-self:stretch}
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo>.bd-batch-card.bd-batch-r2v{
-  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden
+    display:flex;flex-direction:column;flex:1 1 auto;overflow:hidden
 }
 .bd-wrap.bd-batch-fill .bd-batch-list.bd-batch-solo .bd-batch-r2v-body{
   flex:1 1 auto;min-height:0;overflow:hidden;align-self:stretch
@@ -2832,6 +2834,11 @@ class MiniMaxH3DirectorEditor {
                         continuityFromPrev: isSegmentContinuityFromPrev(clean, i),
                         refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
                         passMode: resolveSegmentPassMode(clean),
+                        uiCardHeight: Number.isFinite(Number(clean.uiCardHeight))
+                            ? Math.round(Number(clean.uiCardHeight))
+                            : undefined,
+                        uiCollapsed: !!clean.uiCollapsed,
+                        uiGroupName: String(clean.uiGroupName || "").trim(),
                     };
                 }),
                 ...this._runSelectionPayload(),
@@ -3654,15 +3661,14 @@ class MiniMaxH3DirectorEditor {
                 e.preventDefault();
                 e.stopPropagation();
             }, true);
-            this.zoomSlider.addEventListener("wheel", (e) => e.stopPropagation(), true);
         }
         this.viewport?.addEventListener("wheel", (e) => {
             if (this.getTimelineZoom() <= 1) return;
+            const scrollDelta = e.deltaX !== 0 ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
+            if (scrollDelta === 0) return;
+            e.preventDefault();
             e.stopPropagation();
-            if (e.deltaX === 0 && e.deltaY !== 0) {
-                e.preventDefault();
-                this.viewport.scrollLeft += e.deltaY;
-            }
+            this.viewport.scrollLeft += scrollDelta;
         }, { passive: false });
         if (this.runSelectAllCb) {
             this.runSelectAllCb.onchange = (e) => {
@@ -3793,8 +3799,8 @@ class MiniMaxH3DirectorEditor {
             );
         }
 
-        this.genGlobalImg?.addEventListener("click", (e) => { stopDomEvent(e); this.pickGenSrcImage(true); });
-        this.genSegImg?.addEventListener("click", (e) => { stopDomEvent(e); this.pickGenSrcImage(false); });
+        this.genGlobalImg?.addEventListener("click", (e) => { stopDomEvent(e); this.activateGenSrcImage(true); });
+        this.genSegImg?.addEventListener("click", (e) => { stopDomEvent(e); this.activateGenSrcImage(false); });
         this.genDefaultFc?.addEventListener("change", () => this.onGenDefaultFcChange());
         this.genSegFc?.addEventListener("change", () => this.onGenSegFcChange());
 
@@ -3875,6 +3881,62 @@ class MiniMaxH3DirectorEditor {
 
         this.root.addEventListener("mouseenter", () => { this._isHovering = true; });
         this.root.addEventListener("mouseleave", () => { this._isHovering = false; });
+        this._onRootCanvasWheel = (e) => {
+            if (e.defaultPrevented) return;
+            const target = e.target instanceof Element ? e.target : null;
+            const focusedControl = target?.closest(
+                "textarea, select, input[type='number'], input[type='range'], [contenteditable='true']",
+            );
+            if (focusedControl?.contains(document.activeElement)) return;
+
+            for (let el = target; el && el !== this.root; el = el.parentElement) {
+                const style = getComputedStyle(el);
+                const scrollsY = /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight;
+                const scrollsX = /(auto|scroll)/.test(style.overflowX) && el.scrollWidth > el.clientWidth;
+                if ((e.deltaY !== 0 && scrollsY) || (e.deltaX !== 0 && scrollsX)) return;
+            }
+
+            const canvas = app.canvas;
+            if (typeof canvas?.processMouseWheel !== "function") return;
+            e.stopPropagation();
+            canvas.processMouseWheel(e);
+        };
+        this.root.addEventListener("wheel", this._onRootCanvasWheel, { passive: false });
+        this._canvasPanPointerId = null;
+        this._onRootCanvasPointerDown = (e) => {
+            if (e.button !== 1 || this._canvasPanPointerId != null) return;
+            const canvas = app.canvas;
+            if (typeof canvas?.processMouseDown !== "function") return;
+            this._canvasPanPointerId = e.pointerId;
+            e.preventDefault();
+            e.stopPropagation();
+            canvas.processMouseDown(e);
+        };
+        this._onRootCanvasPointerMove = (e) => {
+            if (e.pointerId !== this._canvasPanPointerId) return;
+            e.preventDefault();
+            e.stopPropagation();
+            app.canvas?.processMouseMove?.(e);
+        };
+        this._onRootCanvasPointerUp = (e) => {
+            if (e.pointerId !== this._canvasPanPointerId) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._canvasPanPointerId = null;
+            app.canvas?.processMouseUp?.(e);
+        };
+        this._onRootCanvasPointerCancel = (e) => {
+            if (e.pointerId !== this._canvasPanPointerId) return;
+            e.stopPropagation();
+            this._canvasPanPointerId = null;
+            const canvas = app.canvas;
+            if (typeof canvas?.processMouseCancel === "function") canvas.processMouseCancel(e);
+            else canvas?.processMouseUp?.(e);
+        };
+        this.root.addEventListener("pointerdown", this._onRootCanvasPointerDown, true);
+        window.addEventListener("pointermove", this._onRootCanvasPointerMove, true);
+        window.addEventListener("pointerup", this._onRootCanvasPointerUp, true);
+        window.addEventListener("pointercancel", this._onRootCanvasPointerCancel, true);
         this._onKeyDown = (e) => {
             if (!this._isHovering) return;
             const el = document.activeElement;
@@ -3961,6 +4023,11 @@ class MiniMaxH3DirectorEditor {
         this.canvas?.removeEventListener("mousemove", this._onCanvasHover);
         this.canvas?.classList.remove("bd-grab", "bd-grabbing");
         window.removeEventListener("keydown", this._onKeyDown, true);
+        this.root?.removeEventListener("wheel", this._onRootCanvasWheel);
+        this.root?.removeEventListener("pointerdown", this._onRootCanvasPointerDown, true);
+        window.removeEventListener("pointermove", this._onRootCanvasPointerMove, true);
+        window.removeEventListener("pointerup", this._onRootCanvasPointerUp, true);
+        window.removeEventListener("pointercancel", this._onRootCanvasPointerCancel, true);
         this.root?.remove();
         this.root = null;
         if (this.node?._minimaxEditor === this) this.node._minimaxEditor = null;
@@ -5218,11 +5285,31 @@ class MiniMaxH3DirectorEditor {
     renderGenSrcSlot(el, imageFile, label) {
         if (!el) return;
         el.classList.toggle("has-img", !!imageFile);
+        el.title = imageFile
+            ? t("source.imageTitleFilled", { label, file: imageFile })
+            : t("tooltip.uploadSourceImage");
         if (imageFile) {
             el.innerHTML = `<img src="${refViewUrl(imageFile)}" alt="">`;
         } else {
             el.textContent = label;
         }
+    }
+
+    activateGenSrcImage(isGlobal) {
+        if (!this.isGenImage()) return;
+        const imageFile = isGlobal
+            ? this.timeline.global?.genImage?.imageFile
+            : this.timeline.segments?.[this.selectedIndex]?.genImage?.imageFile;
+        if (!imageFile) {
+            this.pickGenSrcImage(isGlobal);
+            return;
+        }
+        openSlotPreview({
+            kind: "image",
+            src: refViewUrl(imageFile),
+            label: t(isGlobal ? "panel.uploadSourceImage" : "panel.uploadSegmentSourceImage"),
+            onReplace: () => this.pickGenSrcImage(isGlobal),
+        });
     }
 
     _paintRefVideoSlot(el, nameEl, refBlock) {
@@ -9383,6 +9470,11 @@ class MiniMaxH3DirectorEditor {
             this._reorderFromRank = -1;
             this.canvas.classList.remove("bd-grabbing");
             this.canvas.style.cursor = "";
+        } else if (this._drag?.kind === "segment-pending" && this.isImageBatch()) {
+            if (toggleBatchGroupCollapsed(this, this._drag.index)) {
+                this.renderImageBatchGroups();
+                this.flushTimelineSync();
+            }
         } else if (this._drag) {
             this.seekBar.value = this.currentFrame;
             this.scheduleRender();
@@ -10026,7 +10118,8 @@ class MiniMaxH3DirectorEditor {
             if (pxWidth > 40) {
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                const title = t("batch.groupTitle.prompt", { n: idx + 1 });
+                const title = String(seg.uiGroupName || "").trim()
+                    || t("batch.groupTitle.prompt", { n: idx + 1 });
                 const sec = Number(seg.durationSec);
                 const sub = Number.isFinite(sec) && sec > 0
                     ? `${sec.toFixed(1)}s`
