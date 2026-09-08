@@ -24,8 +24,9 @@ TASK_PROMPT_SPECS: tuple[TaskPromptSpec, ...] = (
         "mixed",
         "混合模式(Mixed Groups)",
         "",
-        "添加组后每组可改类型（t2v / i2v / fl2v / r2v），行为与对应原模式一致。"
-        "t2v/i2v/fl2v 用 model（ImageToVideo / fl2va）；r2v 组用可选 model_r2v（ReferenceToVideo / ref2va）。",
+        "添加组后每组可改类型（t2v / i2v / fl2v / r2v / v2v / rv2v），行为与对应原模式一致。"
+        "t2v/i2v/fl2v 用 model（ImageToVideo / fl2va）；"
+        "r2v/v2v/rv2v 组用可选 model_r2v（ReferenceToVideo / ref2va）。",
     ),
     TaskPromptSpec(
         "t2v",
@@ -68,7 +69,7 @@ TASK_PROMPT_SPECS: tuple[TaskPromptSpec, ...] = (
 )
 
 TASK_PROMPT_BY_KEY = {spec.key: spec for spec in TASK_PROMPT_SPECS}
-HIDDEN_TASK_TYPE_KEYS: frozenset[str] = frozenset({"t2v", "i2v", "fl2v", "r2v"})
+HIDDEN_TASK_TYPE_KEYS: frozenset[str] = frozenset({"t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"})
 
 
 def task_type_option_label(spec: TaskPromptSpec) -> str:
@@ -85,10 +86,11 @@ def task_type_combo_options() -> tuple[list[str], dict]:
     return options, {
         "default": task_type_option_label(default_spec),
         "tooltip": (
-            "MiniMax H3 顶层模式：mixed / v2v / rv2v。"
+            "MiniMax H3 顶层模式：mixed。旧版 v2v / rv2v 工作流仍可兼容执行。"
             "提示词直接送入 MiniMaxH3ImageToVideo 或 MiniMaxH3ReferenceToVideo（内部 tokenize）。"
-            "mixed 每组可选 t2v / i2v / fl2v / r2v；r2v 组请另接 model_r2v。"
-            "v2v/rv2v 为源视频时间轴编辑（自动绑定 <Video 1>）；rv2v 另可挂参考图。"
+            "mixed 每组可选 t2v / i2v / fl2v / r2v / v2v / rv2v；"
+            "r2v/v2v/rv2v 组请另接 model_r2v。"
+            "v2v/rv2v 的源视频与专属参考素材在各自组内设置。"
         ),
     }
 

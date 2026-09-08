@@ -578,12 +578,11 @@ def execute_director_plan_core(
         )
 
         target_len = max(1, int(seg.frame_count or plan.total_frames or 124))
-        raw_clip = resolve_segment_raw_clip(plan, seg)
-
         if seg.source_clip is not None:
             body_raw = seg.source_clip
             target_len = max(target_len, int(body_raw.shape[0]))
         else:
+            raw_clip = resolve_segment_raw_clip(plan, seg)
             body_raw = raw_clip[:target_len] if int(raw_clip.shape[0]) > target_len else raw_clip
 
         if body_raw is not None and body_raw.shape[0] > 0:
@@ -1426,6 +1425,12 @@ def execute_director_plan_core(
             chunk, audio_dict, pre_chunk = _run_one_segment(
                 seg, progress_index=progress_pos[seg.index]
             )
+        except Exception:
+            cleanup_segment_vram(
+                enabled=clear_vram_between_segments,
+                unload_models=True,
+            )
+            raise
         finally:
             _release_segment_file_ref_audios(plan, seg)
         segment_outputs.append(chunk)

@@ -150,8 +150,8 @@ export function resolutionFromSelector(aspectRatio, megapixels, multiple = MINIM
 
 export const IMAGE_BATCH_TASKS = new Set();
 export const FL2V_TASKS = new Set(["fl2v"]);
-/** Per-group types allowed inside mixed mode (v2v/rv2v stay on the source timeline). */
-export const MIXED_GROUP_TASKS = ["t2v", "i2v", "fl2v", "r2v"];
+/** Per-group types allowed inside mixed mode. */
+export const MIXED_GROUP_TASKS = ["t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"];
 /** Blank-canvas / subject-ref batch generation (not source-video editing). */
 export const VIDEO_BATCH_TASKS = new Set(["t2v", "i2v", "r2v", "mixed"]);
 export const PROMPT_BATCH_TASKS = new Set([...VIDEO_BATCH_TASKS, ...FL2V_TASKS]);

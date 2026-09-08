@@ -38,7 +38,13 @@ import {
     fileForComfyUpload,
     safeUploadFilename,
 } from "./minimax_gen_timeline.js";
-import { refreshPromptTokenEditors, teardownPromptImageMentions, wirePromptImageMentions } from "./minimax_prompt_mentions.js";
+import {
+    promptVideosFor,
+    refreshPromptTokenEditors,
+    teardownPromptImageMentions,
+    wirePromptImageMentions,
+} from "./minimax_prompt_mentions.js";
+import { mountGroupVideoTimeline } from "./minimax_group_video_timeline.js";
 import { t } from "./minimax_i18n.js";
 import {
     hasDuplicateReferenceAudio,
@@ -259,6 +265,7 @@ export function flushBatchDurationInputs(editor) {
     const taskKey = resolveTaskKey(editor.getTaskKey?.() || editor.taskTypeWidget?.value);
     if (!isVideoBatchTask(taskKey)) return;
     for (const input of list.querySelectorAll("input[data-batch-sec-index]")) {
+        if (input.readOnly) continue;
         const live = liveBatchSegmentFromEl(editor, input, "data-batch-sec-index");
         if (!live?.seg) continue;
         clearTimeout(input._t);
@@ -323,6 +330,12 @@ export const IMAGE_BATCH_STYLES = `
 /* Default cap; batch-fill mode overrides via .bd-wrap.bd-batch-fill + JS max-height. */
 .bd-batch-list{display:flex;flex-direction:column;gap:8px;width:100%;max-height:none;overflow-y:visible;padding-right:2px;min-height:0}
 .bd-batch-card{background:linear-gradient(165deg,#1a1a1a 0%,#141414 55%,#111 100%);border:1px solid #2c2c2c;border-radius:10px;padding:12px 14px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:10px;align-items:stretch;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);flex:0 0 auto;box-sizing:border-box;min-height:195px;overflow:hidden;resize:vertical}
+.bd-batch-card.bd-batch-task-t2v{background:linear-gradient(165deg,#1d231f 0%,#171b18 55%,#121412 100%);border-color:#344039}
+.bd-batch-card.bd-batch-task-i2v{background:linear-gradient(165deg,#1b2229 0%,#161b20 55%,#111416 100%);border-color:#34434f}
+.bd-batch-card.bd-batch-task-fl2v{background:linear-gradient(165deg,#25231d 0%,#1d1b17 55%,#151411 100%);border-color:#494436}
+.bd-batch-card.bd-batch-task-r2v{background:linear-gradient(165deg,#261f21 0%,#1e181a 55%,#151213 100%);border-color:#4b393e}
+.bd-batch-card.bd-batch-task-v2v{background:linear-gradient(165deg,#192525 0%,#151d1d 55%,#101515 100%);border-color:#324949}
+.bd-batch-card.bd-batch-task-rv2v{background:linear-gradient(165deg,#232129 0%,#1b1920 55%,#131216 100%);border-color:#423d4d}
 /* t2v: 提示词 | 预览（开实时预览才出第三列） */
 .bd-batch-card.bd-batch-plain{grid-template-columns:minmax(0,1fr)}
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-plain{grid-template-columns:minmax(0,1fr) minmax(180px,.55fr)}
@@ -331,14 +344,38 @@ export const IMAGE_BATCH_STYLES = `
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-source,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-fl2v,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-refs:not(.bd-batch-r2v){grid-template-columns:auto minmax(0,1fr) minmax(180px,.55fr)}
+.bd-batch-card.bd-batch-v2v{grid-template-columns:minmax(180px,280px) minmax(0,1fr)}
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-v2v{grid-template-columns:minmax(180px,280px) minmax(0,1fr) minmax(180px,.55fr)}
+/* mixed: 素材区与预览区等宽，提示词区稍宽；t2v 无素材区。 */
+.bd-batch-card.bd-batch-mixed:not(.bd-batch-r2v){grid-template-columns:minmax(0,1fr) minmax(0,1.3fr)}
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-mixed:not(.bd-batch-r2v){grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr)}
+.bd-batch-card.bd-batch-mixed.bd-batch-plain{grid-template-columns:minmax(0,1.3fr)}
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-mixed.bd-batch-plain{grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr)}
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-mixed.bd-batch-plain>.bd-batch-prompts{grid-column:1/3}
 .bd-batch-type{max-width:168px;min-width:108px;font-size:11px;padding:2px 6px;height:24px}
 .bd-batch-fl2v-media{display:flex;flex-direction:column;gap:6px;min-width:220px;max-width:280px;width:100%}
+.bd-batch-mixed>.bd-batch-fl2v-media{min-width:0;max-width:none}
 .bd-batch-fl2v-slots{display:grid;grid-template-columns:1fr 1fr;gap:6px;width:100%;min-width:0}
-.bd-batch-fl2v-slots .bd-batch-src{width:100%;height:auto;aspect-ratio:16/9;min-height:72px;font-size:10px;line-height:1.35;padding:6px}
+.bd-batch-fl2v-slots .bd-batch-src{width:100%;height:auto;aspect-ratio:var(--batch-fl2v-slot-ar,16/9);min-height:72px;font-size:10px;line-height:1.35;padding:6px}
 .bd-batch-fl2v-slots .bd-batch-src .ph{color:#666;font-size:10px;text-align:center;line-height:1.35;pointer-events:none}
 .bd-batch-fl2v-slots .bd-batch-src .tag{position:absolute;top:4px;padding:1px 5px;border-radius:2px;font-size:9px;font-weight:700;line-height:1.4;pointer-events:none;z-index:2}
 .bd-batch-fl2v-slots .bd-batch-src .tag.start{left:4px;background:rgba(79,255,143,.92);color:#111}
 .bd-batch-fl2v-slots .bd-batch-src .tag.end{right:4px;left:auto;background:rgba(240,160,48,.92);color:#111}
+.bd-batch-video-source{width:100%;max-width:320px;height:auto;aspect-ratio:16/9;padding:0}
+.bd-batch-video-source video{width:100%;height:100%;object-fit:contain;background:#000;pointer-events:none}
+.bd-batch-video-source .ph{padding:12px;color:#777;font-size:11px}
+.bd-batch-r2v-assets .bd-batch-video-source{max-width:none}
+.bd-batch-v2v .bd-batch-media{width:100%;max-width:none;min-width:0;min-height:0;height:100%;align-self:stretch;overflow:auto;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;box-sizing:border-box}
+.bd-batch-source-video-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
+.bd-batch-source-video-title{color:#eaeaea;font-size:11px;font-weight:700}
+.bd-batch-source-video-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+.bd-batch-video-resolution{min-width:0;max-width:132px;background:#161616;border:1px solid #3a3a3a;border-radius:6px;color:#eee;padding:3px 6px;font-size:11px}
+.bd-batch-source-video-restore{background:#181818;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer;white-space:nowrap}
+.bd-batch-source-video-restore:disabled{opacity:.45;cursor:not-allowed}
+.bd-batch-source-video-restore:not(:disabled):hover{border-color:#666;color:#fff}
+.bd-batch-source-video-delete{background:transparent;border:1px solid #553;color:#f88;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer;white-space:nowrap}
+.bd-batch-source-video-delete:disabled{border-color:#3a3a3a;color:#777;opacity:.55;cursor:not-allowed}
+.bd-batch-source-video-delete:not(:disabled):hover{background:#3a1515}
 
 .bd-preview-col{display:flex;flex-direction:column;gap:6px;min-width:0;height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;box-sizing:border-box}
 .bd-preview-col-head{display:flex;align-items:center;justify-content:flex-start;gap:6px;flex-shrink:0}
@@ -355,9 +392,9 @@ export const IMAGE_BATCH_STYLES = `
 .bd-wrap:not(.bd-live-preview-on) .bd-preview-col{display:none!important}
 .bd-batch-plain .bd-batch-head,.bd-batch-source .bd-batch-head,.bd-batch-fl2v .bd-batch-head,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px}
 .bd-batch-plain .bd-batch-head b,.bd-batch-source .bd-batch-head b,.bd-batch-fl2v .bd-batch-head b,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
-.bd-batch-plain .bd-batch-prompts,.bd-batch-source .bd-batch-prompts,.bd-batch-fl2v .bd-batch-prompts,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts,.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;height:100%;min-height:0;align-self:stretch;display:flex;flex-direction:column;overflow:hidden}
-.bd-batch-plain .bd-batch-prompts .bd-label,.bd-batch-source .bd-batch-prompts .bd-label,.bd-batch-fl2v .bd-batch-prompts .bd-label,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-label,.bd-batch-r2v .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.02em;flex-shrink:0}
-.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
+.bd-batch-plain .bd-batch-prompts,.bd-batch-source .bd-batch-prompts,.bd-batch-fl2v .bd-batch-prompts,.bd-batch-v2v .bd-batch-prompts,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts,.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;height:100%;min-height:0;align-self:stretch;display:flex;flex-direction:column;overflow:hidden}
+.bd-batch-plain .bd-batch-prompts .bd-label,.bd-batch-source .bd-batch-prompts .bd-label,.bd-batch-fl2v .bd-batch-prompts .bd-label,.bd-batch-v2v .bd-batch-prompts .bd-label,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-label,.bd-batch-r2v .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.02em;flex-shrink:0}
+.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-v2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-plain .bd-batch-preview,.bd-batch-source .bd-batch-preview,.bd-batch-fl2v .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-preview{border-radius:10px;border-color:#262626;background:#0c0c0c}
 /* ——— r2v asset stage (polished) ——— */
 .bd-batch-card.bd-batch-r2v{display:flex;flex-direction:column;align-items:stretch;min-height:490px}
@@ -407,10 +444,14 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-del:disabled{border-color:#3a3a3a;color:#777;opacity:.55;cursor:not-allowed}
 .bd-batch-del:not(:disabled):hover{background:#3a1515}
 .bd-batch-media{display:flex;flex-direction:column;gap:4px;min-width:88px;max-width:140px}
+.bd-batch-mixed.bd-batch-source>.bd-batch-media{width:100%;max-width:none;min-width:0}
+.bd-batch-mixed.bd-batch-source>.bd-batch-media>.bd-batch-src{width:100%;height:100%;min-height:88px}
 
 /* Left = 参考素材 · Middle = 提示词 · Right = 预览 */
 .bd-batch-r2v-body{display:grid;grid-template-columns:minmax(240px,.85fr) minmax(0,1.4fr);gap:12px;width:100%;align-items:stretch;min-height:420px;flex:1 1 auto;overflow:hidden}
 .bd-wrap.bd-live-preview-on .bd-batch-r2v-body{grid-template-columns:minmax(220px,.8fr) minmax(0,1.3fr) minmax(200px,.7fr)}
+.bd-batch-mixed .bd-batch-r2v-body{grid-template-columns:minmax(0,1fr) minmax(0,1.3fr)}
+.bd-wrap.bd-live-preview-on .bd-batch-mixed .bd-batch-r2v-body{grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr)}
 .bd-batch-r2v-body>.bd-batch-r2v-main,.bd-batch-r2v-body>.bd-preview-col{height:0;min-height:100%;max-height:100%;overflow:hidden;align-self:stretch}
 .bd-batch-r2v-assets{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow:auto}
 .bd-batch-r2v-main{display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -425,7 +466,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-src{position:relative;width:88px;height:88px;border:1px dashed #555;border-radius:4px;background:#111;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;color:#666;font-size:9px;text-align:center;padding:4px;box-sizing:border-box}
 .bd-batch-src .x{position:absolute;top:1px;right:1px;width:18px;height:18px;border-radius:4px;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);color:#ff8a8a;font-size:14px;font-weight:700;z-index:3;line-height:1}
 .bd-batch-src.has-img:hover .x{display:flex}
-.bd-batch-src.has-img{border-style:solid;border-color:#444}
+.bd-batch-src.has-img{border-style:solid;border-color:#444;padding:0}
 .bd-batch-src img{width:100%;height:100%;object-fit:contain;background:#000}
 .bd-batch-refs{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;width:108px}
 .bd-batch-r2v .bd-batch-refs{grid-template-columns:repeat(3,minmax(0,1fr));width:100%;max-width:none;gap:6px}
@@ -488,8 +529,8 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-prompts .bd-label{color:#888;font-size:10px}
 .bd-batch-prompts textarea,.bd-batch-prompts .bd-token-wrap{width:100%;min-height:88px;box-sizing:border-box}
 .bd-batch-prompts textarea{background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:6px;resize:none;overflow-y:auto;font-size:11px;font-family:inherit;line-height:1.35}
-.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea,
-.bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;overflow:auto}
+.bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-v2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea,
+.bd-batch-plain .bd-batch-prompts .bd-token-wrap,.bd-batch-source .bd-batch-prompts .bd-token-wrap,.bd-batch-fl2v .bd-batch-prompts .bd-token-wrap,.bd-batch-v2v .bd-batch-prompts .bd-token-wrap,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-token-wrap,.bd-batch-r2v .bd-batch-prompts .bd-token-wrap{flex:1 1 auto;min-height:88px;height:auto;overflow:auto}
 .bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-batch-preview{background:#0d0d0d;border:1px solid #333;border-radius:4px;min-height:100px;display:flex;flex-direction:column;align-items:stretch;justify-content:center;overflow:hidden;color:#555;font-size:10px;text-align:center;padding:4px;box-sizing:border-box}
 .bd-batch-plain .bd-preview-col .bd-batch-preview,.bd-batch-source .bd-preview-col .bd-batch-preview,.bd-batch-refs:not(.bd-batch-r2v) .bd-preview-col .bd-batch-preview{width:100%;max-width:none;min-height:0;justify-self:stretch}
@@ -507,6 +548,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-preview-col .bd-batch-vpreview canvas,
 .bd-batch-plain .bd-preview-col .bd-batch-vpreview canvas,
 .bd-batch-source .bd-preview-col .bd-batch-vpreview canvas,
+.bd-batch-v2v .bd-preview-col .bd-batch-vpreview canvas,
 .bd-batch-r2v .bd-preview-col .bd-batch-vpreview canvas{max-height:none;min-height:0;flex:1 1 auto;height:100%}
 .bd-preview-col .bd-batch-preview,
 .bd-preview-col .bd-batch-vpreview,
@@ -521,17 +563,25 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-live-badge{position:absolute;left:8px;bottom:8px;padding:2px 7px;border-radius:999px;background:rgba(0,0,0,.72);color:#cfcfcf;font-size:10px;pointer-events:none}
 @media(max-width:860px){
 .bd-batch-r2v-body,.bd-batch-r2v-foot,.bd-wrap.bd-live-preview-on .bd-batch-r2v-body{grid-template-columns:1fr}
+.bd-batch-card.bd-batch-mixed.bd-batch-r2v .bd-batch-r2v-body,
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-mixed.bd-batch-r2v .bd-batch-r2v-body{grid-template-columns:1fr}
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-plain{grid-template-columns:minmax(0,1fr) minmax(140px,180px)}
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-source,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-fl2v,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-refs:not(.bd-batch-r2v){grid-template-columns:auto minmax(0,1fr) minmax(140px,180px)}
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-v2v{grid-template-columns:minmax(160px,220px) minmax(0,1fr) minmax(140px,180px)}
 }
 @media(max-width:720px){
-.bd-batch-card,.bd-batch-card.bd-batch-plain,.bd-batch-card.bd-batch-source,.bd-batch-card.bd-batch-fl2v,.bd-batch-card.bd-batch-refs:not(.bd-batch-r2v),
+.bd-batch-card,.bd-batch-card.bd-batch-plain,.bd-batch-card.bd-batch-source,.bd-batch-card.bd-batch-fl2v,.bd-batch-card.bd-batch-v2v,.bd-batch-card.bd-batch-refs:not(.bd-batch-r2v),
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-plain,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-source,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-fl2v,
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-v2v,
 .bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-refs:not(.bd-batch-r2v){grid-template-columns:1fr}
+.bd-batch-card.bd-batch-mixed:not(.bd-batch-r2v),
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-mixed:not(.bd-batch-r2v),
+.bd-batch-card.bd-batch-mixed.bd-batch-plain,
+.bd-wrap.bd-live-preview-on .bd-batch-card.bd-batch-mixed.bd-batch-plain{grid-template-columns:1fr}
 .bd-batch-r2v .bd-batch-refs{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 ` + SLOT_UI_STYLES;
@@ -719,10 +769,13 @@ export function ensureImageBatchTimeline(editor) {
     migrateGlobalRefsIntoBatchSegments(editor, taskKey);
     for (const seg of editor.timeline.segments) {
         if (isVideoBatchTask(taskKey)) {
-            const { frames, durationSec } = durationToClampedMiniMaxFrames(
-                resolveSegmentDurationSec(seg),
-                24,
-            );
+            const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
+            const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
+                ? sourceVideoFrameMap(seg.sourceVideo).length
+                : 0;
+            const { frames, durationSec } = sourceFrames > 0
+                ? { frames: sourceFrames, durationSec: framesToDurationSec(sourceFrames, 24) }
+                : durationToClampedMiniMaxFrames(resolveSegmentDurationSec(seg), 24);
             seg.durationSec = durationSec;
             seg.frameCount = frames;
             seg.length = frames;
@@ -770,10 +823,16 @@ export function normalizeImageBatchSegments(editor) {
         let fc = 1;
         let durationSec;
         if (isVideo) {
-            const resolved = durationToClampedMiniMaxFrames(
-                clamp(resolveSegmentDurationSec(seg) || defSec, minDurationSec(), maxDurationSec()),
-                24,
-            );
+            const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
+            const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
+                ? sourceVideoFrameMap(seg.sourceVideo).length
+                : 0;
+            const resolved = sourceFrames > 0
+                ? { frames: sourceFrames, durationSec: framesToDurationSec(sourceFrames, 24) }
+                : durationToClampedMiniMaxFrames(
+                    clamp(resolveSegmentDurationSec(seg) || defSec, minDurationSec(), maxDurationSec()),
+                    24,
+                );
             fc = resolved.frames;
             durationSec = resolved.durationSec;
             seg.durationSec = durationSec;
@@ -947,6 +1006,249 @@ async function uploadSegSource(editor, index) {
     });
 }
 
+async function assignSegSourceVideoFromFile(editor, index, file) {
+    if (!isBatchVideoFile(file)) return false;
+    const key = groupSlotKey(editor, index, "source-video", 0);
+    beginSlotLoad(editor, key, t("slot.loading.upload"));
+    try {
+        const uploaded = await uploadMedia(file, (ratio, cur, total) => {
+            updateSlotLoad(editor, key, { status: t("slot.loading.upload"), ratio, cur, total });
+        });
+        const videoFile = relPath(uploaded);
+        const prep = await editor._prepareVideoFrames({
+            fileName: uploaded?.name || file.name,
+            relPath: videoFile,
+            subfolder: uploaded?.subfolder || "",
+            type: uploaded?.type || "input",
+            statusPrefix: t("parse.prefix"),
+        });
+        const clip = editor._buildClipRecord(prep);
+        const seg = editor.timeline.segments[index];
+        if (!seg) return false;
+        seg.sourceVideo = {
+            totalFrames: prep.totalFrames,
+            video: { ...clip, frameMap: [], deletedSourceRanges: [] },
+            videoClips: [clip],
+        };
+        const durationSec = preferredDurationSecFromFrames(prep.totalFrames, 24);
+        const normalized = durationToClampedMiniMaxFrames(durationSec, 24);
+        seg.durationSec = normalized.durationSec;
+        seg.frameCount = normalized.frames;
+        seg.length = normalized.frames;
+        seg._videoFrameCount = normalized.frames;
+        endSlotLoad(editor, key);
+        editor.renderImageBatchGroups();
+        editor.commit(false, { syncTimeline: true });
+        editor.updateVideoNameLabel?.();
+        return true;
+    } catch (err) {
+        endSlotLoad(editor, key);
+        console.error("[MiniMax H3Director] mixed source video upload failed:", err);
+        void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.alertFailed", { err: err?.message || err }));
+        return false;
+    }
+}
+
+function uploadSegSourceVideo(editor, index) {
+    pickFile("video/*,.mp4,.mov,.webm,.mkv,.avi,.m4v,.mpg,.mpeg,.mts,.ts", (file) => {
+        void assignSegSourceVideoFromFile(editor, index, file);
+    });
+}
+
+function sourceVideoFullFrameMap(sourceVideo) {
+    const source = sourceVideo || {};
+    const video = source.video || source;
+    if (Array.isArray(video.frameMap) && video.frameMap.length) {
+        return video.frameMap.map((entry) => (
+            entry && typeof entry === "object" ? { ...entry } : entry
+        ));
+    }
+    const clips = Array.isArray(source.videoClips) && source.videoClips.length
+        ? source.videoClips
+        : ((video.videoFile || video.fileName) ? [video] : []);
+    return clips.flatMap((clip, clipIndex) => {
+        const count = Math.max(0, Number(clip.sourceFrameCount) || 0);
+        return Array.from({ length: count }, (_, frame) => ({ clip: clipIndex, frame }));
+    });
+}
+
+function sourceVideoFrameMap(sourceVideo) {
+    const source = sourceVideo || {};
+    const frameMap = sourceVideoFullFrameMap(source);
+    const start = Math.max(0, Math.min(frameMap.length, Math.round(Number(source.rangeStart) || 0)));
+    const rawEnd = Number(source.rangeEnd);
+    const end = Number.isFinite(rawEnd)
+        ? Math.max(start, Math.min(frameMap.length, Math.round(rawEnd)))
+        : frameMap.length;
+    return frameMap.slice(start, end);
+}
+
+function sourceVideoSlice(sourceVideo, start, end) {
+    const source = JSON.parse(JSON.stringify(sourceVideo || {}));
+    const frameMap = sourceVideoFrameMap(source).slice(start, end);
+    source.totalFrames = frameMap.length;
+    source.video = { ...(source.video || {}), frameMap, deletedSourceRanges: [] };
+    delete source.rangeStart;
+    delete source.rangeEnd;
+    return source;
+}
+
+function restoreSegSourceVideo(editor, seg) {
+    const source = seg.sourceVideo;
+    if (!source) return;
+    const video = source.video || source;
+    const clips = Array.isArray(source.videoClips) && source.videoClips.length
+        ? source.videoClips
+        : ((video.videoFile || video.fileName) ? [video] : []);
+    const totalFrames = clips.reduce(
+        (sum, clip) => sum + Math.max(0, Number(clip.sourceFrameCount) || 0),
+        0,
+    );
+    if (!totalFrames) return;
+    source.totalFrames = totalFrames;
+    source.video = { ...video, frameMap: [], deletedSourceRanges: [] };
+    delete source.rangeStart;
+    delete source.rangeEnd;
+    const durationSec = preferredDurationSecFromFrames(totalFrames, 24);
+    const normalized = durationToClampedMiniMaxFrames(durationSec, 24);
+    seg.durationSec = normalized.durationSec;
+    seg.frameCount = normalized.frames;
+    seg.length = normalized.frames;
+    seg._videoFrameCount = normalized.frames;
+    seg.previewB64 = "";
+    seg.previewFrames = [];
+    editor.renderImageBatchGroups();
+    editor.commit(false, { syncTimeline: true });
+    editor.updateVideoNameLabel?.();
+    editor.scheduleRender?.();
+}
+
+function splitSegSourceVideo(editor, index, points) {
+    const seg = editor.timeline.segments[index];
+    const total = sourceVideoFrameMap(seg?.sourceVideo).length;
+    if (!seg || total < 2) return;
+    const boundaries = [...new Set(points.map((value) => Math.round(Number(value) || 0)))]
+        .filter((value) => value >= 0 && value <= total)
+        .sort((a, b) => a - b);
+    if (boundaries[0] !== 0) boundaries.unshift(0);
+    if (boundaries[boundaries.length - 1] !== total) boundaries.push(total);
+    const ranges = boundaries.slice(0, -1)
+        .map((start, rangeIndex) => [start, boundaries[rangeIndex + 1]])
+        .filter(([start, end]) => end - start >= 5);
+    if (ranges.length < 2) return;
+    const replacements = ranges.map(([start, end], rangeIndex) => {
+        const frameCount = end - start;
+        const common = {
+            taskType: seg.taskType,
+            durationSec: preferredDurationSecFromFrames(frameCount, 24),
+            sourceVideo: sourceVideoSlice(seg.sourceVideo, start, end),
+            videoResolution: seg.videoResolution === "source" ? "source" : "target",
+            passMode: seg.passMode,
+            continuityFromPrev: rangeIndex === 0 ? seg.continuityFromPrev : true,
+        };
+        if (rangeIndex === 0) {
+            return newBatchSegment({
+                ...seg,
+                ...common,
+                id: seg.id,
+                previewB64: "",
+                previewFrames: [],
+            });
+        }
+        return newBatchSegment(common);
+    });
+    editor.timeline.segments.splice(index, 1, ...replacements);
+    normalizeImageBatchSegments(editor);
+    editor.selectedIndex = index;
+    editor.renderImageBatchGroups();
+    editor.commit(false, { syncTimeline: true });
+    editor.updateVideoNameLabel?.();
+}
+
+function appendSourceVideoResolutionControl(container, editor, seg, { showTitle = true } = {}) {
+    const head = document.createElement("div");
+    head.className = "bd-batch-source-video-head";
+    const actions = document.createElement("span");
+    actions.className = "bd-batch-source-video-actions";
+    const select = document.createElement("select");
+    select.className = "bd-batch-video-resolution";
+    const current = seg.videoResolution === "source" ? "source" : "target";
+    seg.videoResolution = current;
+    for (const value of ["source", "target"]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = t(`batch.videoResolution.${value}`);
+        option.selected = value === current;
+        select.appendChild(option);
+    }
+    select.onchange = () => {
+        seg.videoResolution = select.value === "source" ? "source" : "target";
+        editor.commit(false, { syncTimeline: true });
+    };
+    const hasVideo = sourceVideoFrameMap(seg.sourceVideo).length > 0;
+    const restoreButton = document.createElement("button");
+    restoreButton.type = "button";
+    restoreButton.className = "bd-batch-source-video-restore";
+    restoreButton.textContent = t("batch.restoreVideo");
+    restoreButton.disabled = !hasVideo;
+    restoreButton.onclick = (event) => {
+        event.stopPropagation();
+        restoreSegSourceVideo(editor, seg);
+    };
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "bd-batch-source-video-delete";
+    deleteButton.textContent = t("batch.delete");
+    deleteButton.disabled = !hasVideo;
+    deleteButton.onclick = (event) => {
+        event.stopPropagation();
+        delete seg.sourceVideo;
+        editor.renderImageBatchGroups();
+        editor.commit(false, { syncTimeline: true });
+        editor.updateVideoNameLabel?.();
+        editor.scheduleRender?.();
+    };
+    actions.append(select, restoreButton, deleteButton);
+    if (showTitle) {
+        const title = document.createElement("span");
+        title.className = "bd-batch-source-video-title";
+        title.textContent = t("batch.sourceVideo");
+        head.append(title, actions);
+        container.appendChild(head);
+    } else {
+        container.appendChild(actions);
+    }
+}
+
+function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader = true } = {}) {
+    if (showHeader) appendSourceVideoResolutionControl(container, editor, seg);
+    mountGroupVideoTimeline(container, {
+        editor,
+        seg,
+        onUpload: () => uploadSegSourceVideo(editor, index),
+        onDropFile: (file) => {
+            if (isBatchVideoFile(file)) void assignSegSourceVideoFromFile(editor, index, file);
+        },
+        onSplit: (points) => splitSegSourceVideo(editor, index, points),
+        onRangeChange: (start, end) => {
+            const source = seg.sourceVideo;
+            if (!source) return;
+            source.rangeStart = start;
+            source.rangeEnd = end;
+            const frameCount = Math.max(0, end - start);
+            seg.durationSec = preferredDurationSecFromFrames(frameCount, 24);
+            seg.frameCount = frameCount;
+            seg.length = frameCount;
+            seg._videoFrameCount = frameCount;
+            seg.previewB64 = "";
+            seg.previewFrames = [];
+            editor.commit(false, { syncTimeline: true });
+            editor.updateVideoNameLabel?.();
+            editor.scheduleRender?.();
+        },
+    });
+}
+
 function applySegFl2vImage(editor, index, kind, imageFile, width = 0, height = 0) {
     const segId = editor.timeline.segments[index]?.id;
     const seg = (editor.timeline.segments || []).find((s) => s.id === segId)
@@ -1049,6 +1351,16 @@ function appendMixedFl2vSlots(card, editor, seg, index) {
     media.className = "bd-batch-fl2v-media";
     const slots = document.createElement("div");
     slots.className = "bd-batch-fl2v-slots";
+    const output = editor.timeline?.output || {};
+    const outputWidth = parseInt(output.width, 10)
+        || parseInt(editor.timeline?.width, 10)
+        || parseInt(editor.widthWidget?.value, 10)
+        || 864;
+    const outputHeight = parseInt(output.height, 10)
+        || parseInt(editor.timeline?.height, 10)
+        || parseInt(editor.heightWidget?.value, 10)
+        || 480;
+    slots.style.setProperty("--batch-fl2v-slot-ar", `${Math.max(1, outputWidth)} / ${Math.max(1, outputHeight)}`);
     for (const kind of ["start", "end"]) {
         const wrap = document.createElement("div");
         const src = document.createElement("div");
@@ -1619,7 +1931,13 @@ function slotPreviewSrc(ref, kind) {
  * r2v layout: left = pictures/videos/audio · right = prompt + preview (returned).
  * @returns {HTMLElement} main column for prompt/preview
  */
-function appendR2vMediaSections(card, seg, index, editor) {
+function appendR2vMediaSections(
+    card,
+    seg,
+    index,
+    editor,
+    { sourceVideo = false, referenceVideos = true } = {},
+) {
     const picFree = groupFreeIndices(editor, "image");
     const audFree = groupFreeIndices(editor, "audio");
     const vidFree = groupFreeIndices(editor, "video");
@@ -1632,6 +1950,14 @@ function appendR2vMediaSections(card, seg, index, editor) {
 
     const assets = document.createElement("div");
     assets.className = "bd-batch-r2v-assets";
+
+    if (sourceVideo) {
+        const sourceSection = createR2vSection(t("batch.sourceVideo"), "");
+        const actions = sourceSection.querySelector(".bd-r2v-section-actions");
+        appendSourceVideoResolutionControl(actions, editor, seg, { showTitle: false });
+        mountSegSourceVideoTimeline(sourceSection, editor, seg, index, { showHeader: false });
+        assets.appendChild(sourceSection);
+    }
 
     const imgSection = createR2vSection(
         t("batch.r2v.sectionPictures"),
@@ -1755,42 +2081,44 @@ function appendR2vMediaSections(card, seg, index, editor) {
     }
     assets.appendChild(imgSection);
 
-    const videoSection = createR2vSection(
-        t("batch.r2v.sectionVideos"),
-        `${counts.videos}/${vidSlots}`,
-    );
-    const videos = document.createElement("div");
-    videos.className = "bd-batch-videos";
-    bindOsFileDrop(videos, (files, e) => dropFilesIntoGroupSlots(editor, index, files, e, {
-        isFile: isBatchVideoFile,
-        slotSelector: ".bd-batch-video",
-        freeIndices: vidFree,
-        itemsKey: "refVideos",
-        hasFn: refHasVideo,
-        kind: "video",
-        assignFile: assignSegVideoFromFile,
-    }));
-    for (const abs of vidFree) {
-        const ref = (seg.refVideos || []).find((r) => Number(r.index ?? r.slot) === abs);
-        const slot = document.createElement("div");
-        slot.dataset.refScope = "group";
-        renderVideoSlot(slot, ref, abs, index, editor, { r2v: true });
-        bindBatchKindSlot(
-            slot,
-            editor,
-            index,
-            "video",
-            abs,
-            refHasVideo(ref),
-            (file) => void assignSegVideoFromFile(editor, index, abs, file),
-            () => uploadSegVideo(editor, index, abs),
-            slotPreviewSrc(ref, "video"),
-            refVideoLabel(abs),
+    if (referenceVideos) {
+        const videoSection = createR2vSection(
+            t("batch.r2v.sectionVideos"),
+            `${counts.videos}/${vidSlots}`,
         );
-        videos.appendChild(slot);
+        const videos = document.createElement("div");
+        videos.className = "bd-batch-videos";
+        bindOsFileDrop(videos, (files, e) => dropFilesIntoGroupSlots(editor, index, files, e, {
+            isFile: isBatchVideoFile,
+            slotSelector: ".bd-batch-video",
+            freeIndices: vidFree,
+            itemsKey: "refVideos",
+            hasFn: refHasVideo,
+            kind: "video",
+            assignFile: assignSegVideoFromFile,
+        }));
+        for (const abs of vidFree) {
+            const ref = (seg.refVideos || []).find((r) => Number(r.index ?? r.slot) === abs);
+            const slot = document.createElement("div");
+            slot.dataset.refScope = "group";
+            renderVideoSlot(slot, ref, abs, index, editor, { r2v: true });
+            bindBatchKindSlot(
+                slot,
+                editor,
+                index,
+                "video",
+                abs,
+                refHasVideo(ref),
+                (file) => void assignSegVideoFromFile(editor, index, abs, file),
+                () => uploadSegVideo(editor, index, abs),
+                slotPreviewSrc(ref, "video"),
+                refVideoLabel(abs),
+            );
+            videos.appendChild(slot);
+        }
+        videoSection.appendChild(videos);
+        assets.appendChild(videoSection);
     }
-    videoSection.appendChild(videos);
-    assets.appendChild(videoSection);
 
     const audioSection = createR2vSection(
         t("batch.r2v.sectionAudios"),
@@ -2970,16 +3298,19 @@ export function renderImageBatchGroups(editor) {
 function appendBatchCard(list, editor, seg, index, ctx) {
         const { key, mixed, isVideo, runningIdx, fps, externalLocked } = ctx;
         const cardKey = mixed ? resolveMixedGroupKey(seg) : key;
-        const variant = imageBatchVariant(cardKey);
-        const isR2v = cardKey === "r2v";
+        const isRv2v = cardKey === "rv2v";
+        const isVideoEdit = cardKey === "v2v" || isRv2v;
+        const variant = isRv2v ? "refs" : imageBatchVariant(cardKey);
+        const isR2v = cardKey === "r2v" || isRv2v;
         const isFl2v = cardKey === "fl2v";
         const card = document.createElement("div");
         const layoutClass = isR2v
             ? "bd-batch-r2v"
-            : (isFl2v ? "bd-batch-fl2v"
+            : (isVideoEdit ? "bd-batch-v2v"
+                : (isFl2v ? "bd-batch-fl2v"
                 : (variant === "source" ? "bd-batch-source"
-                    : (variant === "refs" ? "bd-batch-refs" : "bd-batch-plain")));
-        card.className = `bd-batch-card ${layoutClass}`;
+                    : (variant === "refs" ? "bd-batch-refs" : "bd-batch-plain"))));
+        card.className = `bd-batch-card ${layoutClass} bd-batch-task-${cardKey}${mixed ? " bd-batch-mixed" : ""}`;
         card.dataset.batchIndex = String(index);
         if (seg.id) card.dataset.batchSegId = String(seg.id);
         const collapsed = !!seg.uiCollapsed;
@@ -3135,7 +3466,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             for (const optKey of MIXED_GROUP_TASKS) {
                 const o = document.createElement("option");
                 o.value = optKey;
-                o.textContent = t(`task.${optKey}`);
+                o.textContent = `${optKey.toUpperCase()} · ${t(`task.${optKey}`)}`;
                 if (optKey === cardKey) o.selected = true;
                 typeSel.appendChild(o);
             }
@@ -3180,14 +3511,20 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         if (isVideo) {
             const secRow = document.createElement("label");
             secRow.className = "bd-batch-fc";
-            const curSec = resolveSegmentDurationSec(seg);
-            const { frames, durationSec: syncedSec } = durationToClampedMiniMaxFrames(curSec, 24);
+            const sourceFrames = isVideoEdit ? sourceVideoFrameMap(seg.sourceVideo).length : 0;
+            const curSec = isVideoEdit && sourceFrames > 0
+                ? framesToDurationSec(sourceFrames, 24)
+                : resolveSegmentDurationSec(seg);
+            const { frames, durationSec: syncedSec } = isVideoEdit && sourceFrames > 0
+                ? { frames: sourceFrames, durationSec: curSec }
+                : durationToClampedMiniMaxFrames(curSec, 24);
             const playSec = framesToDurationSec(frames, 24);
             seg.durationSec = syncedSec;
             seg.frameCount = frames;
             seg.length = frames;
             seg._videoFrameCount = frames;
-            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="${minDurationSec()}" max="${maxDurationSec()}" step="0.1" value="${seg.durationSec}" title="${t("batch.durationTooltip", { frames, play: playSec })}">`;
+            const displayedSec = isVideoEdit && sourceFrames <= 0 ? 0 : seg.durationSec;
+            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="0" max="${maxDurationSec()}" step="0.01" value="${displayedSec}" title="${t("batch.durationTooltip", { frames, play: playSec })}">`;
             const secInput = secRow.querySelector("input");
             // Do not rewrite value/title while focused: frame snapping would
             // bounce 20.7↔20.5 and interrupt typing. Normalize on blur.
@@ -3213,7 +3550,10 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                     editor.totalFramesWidget.value = sumFrameCounts(editor.timeline.segments);
                 }
             };
-            if (externalLocked) {
+            if (isVideoEdit) {
+                secInput.readOnly = true;
+                secInput.title = t("batch.durationTooltip", { frames: sourceFrames, play: displayedSec });
+            } else if (externalLocked) {
                 secInput.readOnly = true;
                 secInput.disabled = true;
                 secInput.title = t("external.durationLocked");
@@ -3251,6 +3591,11 @@ function appendBatchCard(list, editor, seg, index, ctx) {
 
         if (isFl2v) {
             appendMixedFl2vSlots(card, editor, seg, index);
+        } else if (isVideoEdit && !isRv2v) {
+            const media = document.createElement("div");
+            media.className = "bd-batch-media";
+            mountSegSourceVideoTimeline(media, editor, seg, index);
+            card.appendChild(media);
         } else if (variant === "source") {
             const media = document.createElement("div");
             media.className = "bd-batch-media";
@@ -3282,7 +3627,10 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         }
         let r2vMain = null;
         if (variant === "refs" && isR2v) {
-            r2vMain = appendR2vMediaSections(card, seg, index, editor);
+            r2vMain = appendR2vMediaSections(card, seg, index, editor, {
+                sourceVideo: isRv2v,
+                referenceVideos: !isRv2v,
+            });
         } else if (variant === "refs") {
             const media = document.createElement("div");
             media.className = "bd-batch-media";
@@ -3338,7 +3686,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             const card = promptEl.closest(".bd-batch-card");
             fillExecPrompt(card?.querySelector("[data-r=exec-prompt]"), editor, live);
         };
-        if (isR2v) {
+        if (isR2v || isVideoEdit) {
             wirePromptImageMentions(editor, promptEl, () => {
                 const live = (editor.timeline.segments || []).find((s) => s?.id && s.id === segId)
                     || editor.timeline.segments?.[segIndex]
@@ -3346,7 +3694,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 return {
                     refs: live.refs || [],
                     audios: live.refAudios || [],
-                    videos: live.refVideos || [],
+                    videos: promptVideosFor(editor, live, live.refVideos || []),
                 };
             });
         }

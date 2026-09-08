@@ -516,7 +516,7 @@ def _align_cache_fingerprint(stored: Any, expected: dict[str, Any]) -> tuple[Any
     # Restoring a snapshot rewrites media paths to a fresh input-pack id.
     # Treat byte-identical references as the same input while retaining the
     # original path in newly written metadata.
-    for key in ("refs", "ref_audios", "ref_videos", "ref_video"):
+    for key in ("refs", "ref_audios", "ref_videos", "ref_video", "source_media"):
         if key in stored_cmp and key in expected_cmp and _media_values_equivalent(
             stored_cmp[key], expected_cmp[key]
         ):

@@ -494,6 +494,8 @@ async def minimax_detect_shots(request):
                     "type": str(item.get("type") or "input").strip() or "input",
                     "logicalStart": item.get("logicalStart", item.get("logical_start", 0)),
                     "logicalEnd": item.get("logicalEnd", item.get("logical_end", total_frames)),
+                    "sourceFrameStart": item.get("sourceFrameStart", item.get("source_frame_start", 0)),
+                    "sourceFrameEnd": item.get("sourceFrameEnd", item.get("source_frame_end")),
                     "nativeFps": item.get("nativeFps", item.get("native_fps")),
                 }
             )

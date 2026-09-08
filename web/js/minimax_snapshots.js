@@ -1,6 +1,7 @@
 /** Server-side Director snapshots, stored as Director-pack zips. */
 import { api } from "../../scripts/api.js";
 import { t, applyI18nDom, onLocaleChange } from "./minimax_i18n.js";
+import { resolveMixedGroupKey, resolveTaskKey } from "./minimax_gen_timeline.js";
 
 const MAX_NAME = 80;
 const SNAPSHOT_WIDGET_NAMES = ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed"];
@@ -26,6 +27,51 @@ function collectSnapshotWidgets(editor) {
     if (task) widgets.task_type = task;
     return widgets;
 }
+
+function pruneHiddenMedia(target, taskKey) {
+    if (!target || typeof target !== "object") return;
+    const keep = new Set(taskKey === "i2v"
+        ? ["genImage", "imageFile"]
+        : taskKey === "fl2v"
+            ? ["startImage", "endImage"]
+            : taskKey === "r2v" || taskKey === "rv2v"
+                ? ["refs", "refAudios", "refVideos"]
+                : []);
+    for (const key of ["genImage", "imageFile", "startImage", "endImage", "refs", "refAudios", "refVideos", "referenceVideo"]) {
+        if (!keep.has(key)) delete target[key];
+    }
+}
+
+export function buildSnapshotTimeline(editor) {
+    const timeline = JSON.parse(JSON.stringify(editor.buildTimelinePayload()));
+    delete timeline.batchWorkspace;
+    delete timeline.batchWorkspaces;
+    delete timeline.videoWorkspace;
+    delete timeline.videoWorkspaces;
+    delete timeline.fl2vWorkspace;
+
+    const taskKey = resolveTaskKey(editor.getTaskKey?.() || editor.taskTypeWidget?.value || timeline.global?.taskType);
+    if (taskKey === "v2v" || taskKey === "rv2v") {
+        delete timeline.shots;
+        delete timeline.keyframes;
+    } else {
+        delete timeline.video;
+        delete timeline.videoClips;
+        if (taskKey !== "fl2v") {
+            delete timeline.shots;
+            delete timeline.keyframes;
+        }
+    }
+    const groups = taskKey === "fl2v" && Array.isArray(timeline.shots)
+        ? timeline.shots
+        : (Array.isArray(timeline.segments) ? timeline.segments : []);
+    for (const group of groups) {
+        pruneHiddenMedia(group, taskKey === "mixed" ? resolveMixedGroupKey(group) : taskKey);
+    }
+    pruneHiddenMedia(timeline.global, taskKey);
+    return timeline;
+}
+
 function timestampName(prefix = "快照") {
     const now = new Date();
     const stamp = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("")
@@ -95,17 +141,35 @@ export function bindSnapshotActions(editor) {
     const importSnapshot = () => new Promise((resolve, reject) => {
         const input = document.createElement("input");
         input.type = "file"; input.accept = ".zip,application/zip"; input.style.display = "none";
+        let settled = false;
+        const cleanup = () => {
+            window.removeEventListener("focus", handleWindowFocus, true);
+            input.remove();
+        };
+        const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            callback(value);
+        };
+        const handleWindowFocus = () => setTimeout(() => {
+            if (!input.files?.length) finish(resolve, null);
+        }, 100);
         input.onchange = async () => {
-            const file = input.files?.[0]; input.remove();
-            if (!file) return resolve(null);
+            const file = input.files?.[0];
+            if (!file) return finish(resolve, null);
+            cleanup();
             try {
                 const body = new FormData(); body.append("snapshot", file, file.name);
                 const response = await api.fetchApi("/minimax/director/snapshots/import", { method: "POST", body });
                 if (!response.ok) throw new Error((await response.text()) || t("snapshot.importError"));
-                resolve(await response.json());
-            } catch (error) { reject(error); }
+                finish(resolve, await response.json());
+            } catch (error) { finish(reject, error); }
         };
-        document.body.appendChild(input); input.click();
+        input.oncancel = () => finish(resolve, null);
+        window.addEventListener("focus", handleWindowFocus, true);
+        document.body.appendChild(input);
+        input.click();
     });
 
     const load = async () => {
@@ -113,6 +177,13 @@ export function bindSnapshotActions(editor) {
         items = sort(Array.isArray(data.items) ? data.items : []);
         if (!items.some((item) => item.id === selected)) selected = items[0]?.id || null;
         render();
+    };
+    const renderSelection = () => {
+        for (const row of listEl.querySelectorAll("[data-snapshot-id]")) {
+            row.classList.toggle("active", row.dataset.snapshotId === selected);
+        }
+        const snapshot = selectedSnapshot();
+        detailEl.textContent = snapshot ? summary(snapshot) : t("snapshot.noSelection");
     };
     const render = () => {
         modal.querySelector('[data-snap="count"]').textContent = t("snapshot.count", { n: items.length });
@@ -123,13 +194,20 @@ export function bindSnapshotActions(editor) {
             button.dataset.snapshotId = snapshot.id;
             button.className = `bd-snapshot-item${snapshot.id === selected ? " active" : ""}`;
             button.setAttribute("role", "button"); button.tabIndex = 0;
-            button.textContent = `${snapshot.name}\n${new Date(timestampOf(snapshot)).toLocaleString()}`;
-            button.onclick = () => { selected = snapshot.id; render(); };
-            button.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected = snapshot.id; render(); } };
+            const name = document.createElement("div");
+            name.className = "bd-snapshot-name"; name.textContent = snapshot.name;
+            name.ondblclick = (event) => {
+                event.preventDefault(); event.stopPropagation();
+                selected = snapshot.id; renderSelection(); beginInlineRename(snapshot);
+            };
+            const time = document.createElement("div");
+            time.textContent = new Date(timestampOf(snapshot)).toLocaleString();
+            button.append(name, time);
+            button.onclick = () => { selected = snapshot.id; renderSelection(); };
+            button.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selected = snapshot.id; renderSelection(); } };
             listEl.appendChild(button);
         }
-        const snapshot = selectedSnapshot();
-        detailEl.textContent = snapshot ? summary(snapshot) : t("snapshot.noSelection");
+        renderSelection();
     };
     const operation = async (fn) => {
         if (busy) return;
@@ -172,7 +250,7 @@ export function bindSnapshotActions(editor) {
     modal.querySelector('[data-snap="save"]').onclick = () => operation(async () => {
         const name = timestampName();
         editor.flushTimelineSync?.();
-        const result = await request("/minimax/director/snapshots/save", { name, timeline: editor.buildTimelinePayload(), widgets: collectSnapshotWidgets(editor) });
+        const result = await request("/minimax/director/snapshots/save", { name, timeline: buildSnapshotTimeline(editor), widgets: collectSnapshotWidgets(editor) });
         selected = result.id;
     });
     modal.querySelector('[data-snap="export"]').onclick = () => operation(async () => {

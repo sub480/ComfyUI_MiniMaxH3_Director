@@ -346,6 +346,16 @@ function sanitizeSegmentForPayload(seg) {
                 subfolder: rest.referenceVideo.subfolder || "",
             }
             : undefined,
+        sourceVideo: rest.sourceVideo
+            ? {
+                totalFrames: Number(rest.sourceVideo.totalFrames) || 0,
+                video: sanitizeVideoMedia(rest.sourceVideo.video || {}),
+                videoClips: Array.isArray(rest.sourceVideo.videoClips)
+                    ? rest.sourceVideo.videoClips.map(sanitizeVideoMedia)
+                    : [],
+            }
+            : undefined,
+        videoResolution: rest.videoResolution === "source" ? "source" : "target",
     };
 }
 
@@ -944,7 +954,7 @@ const STYLES = `
  .bd-wrap{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e0e0e0;font-size:11px;display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box;position:relative;min-height:0;height:100%;flex:1 1 auto;overflow:hidden}
  .bd-snapshot-modal{position:fixed;inset:0;background:#0009;z-index:10000;display:flex;align-items:center;justify-content:center;padding:18px}
  .bd-snapshot-modal.hidden{display:none}.bd-snapshot-box{width:min(860px,96vw);height:min(620px,90vh);background:#20252b;border:1px solid #59616b;border-radius:8px;box-shadow:0 12px 50px #000b;display:flex;flex-direction:column;color:#e8edf2}
- .bd-snapshot-box header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #414951;font-size:14px}.bd-snapshot-body{display:grid;grid-template-columns:280px 1fr;min-height:0;flex:1}.bd-snapshot-body aside,.bd-snapshot-body section{padding:12px;min-width:0}.bd-snapshot-body aside{border-right:1px solid #414951;display:flex;flex-direction:column;gap:10px}.bd-snapshot-count{color:#aeb8c2}.bd-snapshot-list{overflow:auto;display:flex;flex-direction:column;gap:5px}.bd-snapshot-item{white-space:pre-line;text-align:left;background:#2b3239;color:#dfe7ed;border:1px solid #46515b;border-radius:4px;padding:8px;cursor:pointer}.bd-snapshot-item.active{border-color:#4fff8f;background:#35443c}.bd-snapshot-name-input{width:100%;box-sizing:border-box;background:#171b1f;color:#fff;border:1px solid #4fff8f;border-radius:3px;padding:3px}.bd-snapshot-body section{display:flex;flex-direction:column;gap:12px}.bd-snapshot-detail{white-space:pre-wrap;overflow:auto;line-height:1.65;background:#171b1f;border-radius:5px;padding:12px;flex:1}.bd-snapshot-actions{display:flex;flex-wrap:wrap;gap:6px}
+ .bd-snapshot-box header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #414951;font-size:14px}.bd-snapshot-body{display:grid;grid-template-columns:280px 1fr;min-height:0;flex:1}.bd-snapshot-body aside,.bd-snapshot-body section{padding:12px;min-width:0}.bd-snapshot-body aside{border-right:1px solid #414951;display:flex;flex-direction:column;gap:10px}.bd-snapshot-count{color:#aeb8c2}.bd-snapshot-list{overflow:auto;display:flex;flex-direction:column;gap:5px}.bd-snapshot-item{white-space:pre-line;text-align:left;background:#2b3239;color:#dfe7ed;border:1px solid #46515b;border-radius:4px;padding:8px;cursor:pointer}.bd-snapshot-item.active{border-color:#4fff8f;background:#35443c}.bd-snapshot-name{cursor:text}.bd-snapshot-name-input{width:100%;box-sizing:border-box;background:#171b1f;color:#fff;border:1px solid #4fff8f;border-radius:3px;padding:3px}.bd-snapshot-body section{display:flex;flex-direction:column;gap:12px}.bd-snapshot-detail{white-space:pre-wrap;overflow:auto;line-height:1.65;background:#171b1f;border-radius:5px;padding:12px;flex:1}.bd-snapshot-actions{display:flex;flex-wrap:wrap;gap:6px}
  .bd-snapshot-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;background:#302a20;border:1px solid #80652d;border-radius:4px}.bd-snapshot-confirm::first-line{flex:1}
  @media(max-width:600px){.bd-snapshot-body{grid-template-columns:1fr}.bd-snapshot-body aside{border-right:0;border-bottom:1px solid #414951;max-height:42%}}
 .bd-wrap.bd-batch-fill{height:100%!important;min-height:0!important;max-height:100%;flex:1 1 0;overflow:hidden}
@@ -1239,7 +1249,7 @@ const STYLES = `
 .bd-wrap.locale-en .bd-rv2v-layout .bd-prompt-col .bd-label,.bd-wrap.locale-en .bd-v2v-layout .bd-prompt-col .bd-label{text-transform:uppercase;letter-spacing:.08em}
 .bd-prompt{width:100%;min-height:96px;background:#181818;border:1px solid #333;border-radius:6px;color:#eee;padding:8px;resize:none;overflow-y:auto;font-size:12px;box-sizing:border-box;font-family:inherit;line-height:1.35;flex:1}
 .bd-prompt-col .bd-token-wrap{flex:1 1 auto;min-height:96px;width:100%}
-.bd-ref.bd-ref-flash,.bd-batch-ref.bd-ref-flash,.bd-ref-audio.bd-ref-flash,.bd-batch-audio.bd-ref-flash,.bd-batch-video.bd-ref-flash{outline:2px solid #4fff8f;outline-offset:1px;border-color:#4fff8f!important}
+.bd-ref.bd-ref-flash,.bd-batch-ref.bd-ref-flash,.bd-ref-audio.bd-ref-flash,.bd-batch-audio.bd-ref-flash,.bd-batch-video.bd-ref-flash,.bd-batch-src.bd-ref-flash{outline:2px solid #4fff8f;outline-offset:1px;border-color:#4fff8f!important}
 .bd-rv2v-layout .bd-prompt,.bd-v2v-layout .bd-prompt{min-height:220px;background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
 .bd-v2v-layout .bd-prompt{min-height:180px}
 .bd-prompt-negative{display:none!important}
@@ -2848,9 +2858,10 @@ class MiniMaxH3DirectorEditor {
                         refs: clean.refs || [],
                         refAudios: clean.refAudios || [],
                         refVideos: clean.refVideos || [],
-                         genImage: clean.genImage || { imageFile: "" },
+                        genImage: clean.genImage || { imageFile: "" },
                         startImage: clean.startImage || null,
                         endImage: clean.endImage || null,
+                        sourceVideo: clean.sourceVideo,
                         // Persist per-segment「引用上段」(default true when unset).
                         continuityFromPrev: isSegmentContinuityFromPrev(clean, i),
                         refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
@@ -4536,9 +4547,16 @@ class MiniMaxH3DirectorEditor {
         return (this.timeline?.segments || []).some((s) => resolveMixedGroupKey(s) === "r2v");
     }
 
+    hasMixedVideoEditGroup() {
+        return (this.timeline?.segments || []).some((s) => {
+            const key = resolveMixedGroupKey(s);
+            return key === "v2v" || key === "rv2v";
+        });
+    }
+
     showsOutputAudioMode() {
         if (taskShowsOutputAudioMode(this.getTaskKey())) return true;
-        return this.isMixedMode() && this.hasMixedR2vGroup();
+        return this.isMixedMode() && (this.hasMixedR2vGroup() || this.hasMixedVideoEditGroup());
     }
 
     syncOutputAudioModeUI() {
@@ -10141,6 +10159,41 @@ class MiniMaxH3DirectorEditor {
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 ctx.fillText(t("batch.uploadSource"), startX + pxWidth / 2, y0 + h / 2);
+            }
+            ctx.restore();
+            return;
+        }
+
+        if (thumbKey === "v2v" || thumbKey === "rv2v") {
+            ctx.fillStyle = "#000";
+            ctx.fillRect(startX, y0 + 1, pxWidth, h - 2);
+            const source = seg.sourceVideo || {};
+            const sourceVideo = source.video || source;
+            const sourceClips = Array.isArray(source.videoClips) ? source.videoClips : [];
+            const clip = sourceClips[0] || sourceVideo;
+            const videoFile = clip.videoFile || clip.fileName || "";
+            if (videoFile) {
+                const videoType = clip.type || "input";
+                const cacheKey = `mixed-${thumbKey}:${videoType}:${videoFile}`;
+                const img = this._thumbCache.get(cacheKey);
+                if (img?.naturalWidth) {
+                    const ratio = img.naturalWidth / img.naturalHeight;
+                    let dw = pxWidth - 4;
+                    let dh = dw / ratio;
+                    if (dh > h - 4) {
+                        dh = h - 4;
+                        dw = dh * ratio;
+                    }
+                    ctx.drawImage(img, startX + (pxWidth - dw) / 2, y0 + (h - dh) / 2, dw, dh);
+                } else {
+                    this._queueR2vVideoThumb(cacheKey, videoFile, videoType);
+                }
+            } else {
+                ctx.fillStyle = "#666";
+                ctx.font = "12px sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(t("canvas.clickUploadVideo"), startX + pxWidth / 2, y0 + h / 2);
             }
             ctx.restore();
             return;

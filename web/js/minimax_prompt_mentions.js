@@ -204,11 +204,21 @@ function sourceVideoMention(editor, seg = null) {
     );
     if (taskKey !== "v2v" && taskKey !== "rv2v") return [];
 
+    const groupSource = seg?.sourceVideo && typeof seg.sourceVideo === "object"
+        ? seg.sourceVideo
+        : null;
+    const groupClips = Array.isArray(groupSource?.videoClips)
+        ? groupSource.videoClips
+        : [];
     const clips = Array.isArray(editor?.timeline?.videoClips)
         ? editor.timeline.videoClips
         : [];
     const clipId = seg?.videoClipId || seg?.video_clip_id;
     const source = (
+        groupClips[0]
+        || groupSource?.video
+        || (groupSource?.videoFile || groupSource?.fileName ? groupSource : null)
+        ||
         (clipId ? clips.find((clip) => clip?.id === clipId) : null)
         || clips[0]
         || editor?.timeline?.video
@@ -227,7 +237,7 @@ function sourceVideoMention(editor, seg = null) {
     }];
 }
 
-function promptVideosFor(editor, seg, extraVideos) {
+export function promptVideosFor(editor, seg, extraVideos) {
     const source = sourceVideoMention(editor, seg);
     if (!source.length) return extraVideos || [];
     // v2v/rv2v reserves <Video 1> for the segment's timeline source.

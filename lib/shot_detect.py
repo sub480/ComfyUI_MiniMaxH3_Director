@@ -52,6 +52,7 @@ def _src_frame_to_logical(
     timeline_fps: float,
     logical_start: int,
     logical_end: int,
+    source_frame_start: int = 0,
 ) -> int:
     """Map a source-video frame index into the clip's logical timeline range."""
     span = max(0, int(logical_end) - int(logical_start))
@@ -61,9 +62,10 @@ def _src_frame_to_logical(
     tf = float(timeline_fps) if timeline_fps and timeline_fps > 0 else 0.0
     if nf <= 0 or tf <= 0:
         # Fallback: treat source index as already on the timeline scale.
-        logical = int(logical_start) + int(src_frame)
+        logical = int(logical_start) + int(src_frame) - int(source_frame_start)
     else:
-        logical = int(round((float(src_frame) / nf) * tf)) + int(logical_start)
+        source_timeline_frame = int(round((float(src_frame) / nf) * tf))
+        logical = int(logical_start) + source_timeline_frame - int(source_frame_start)
     return max(int(logical_start), min(int(logical_end), logical))
 
 
@@ -188,11 +190,17 @@ def detect_timeline_shot_cuts(
         if logical_end - logical_start < MIN_SEG_FRAMES * 2:
             continue
 
-        native_fps = float(
-            raw.get("nativeFps")
-            or raw.get("native_fps")
-            or timeline_fps
+        native_fps = float(next(
+            (value for value in (raw.get("nativeFps"), raw.get("native_fps"), timeline_fps) if value),
+            timeline_fps,
+        ))
+        source_frame_start = int(raw.get("sourceFrameStart") or raw.get("source_frame_start") or 0)
+        source_end_candidates = (
+            raw.get("sourceFrameEnd"),
+            raw.get("source_frame_end"),
+            source_frame_start + logical_end - logical_start,
         )
+        source_frame_end = int(next(value for value in source_end_candidates if value is not None))
         try:
             src_cuts, meta = detect_shots_in_file(
                 path,
@@ -209,12 +217,16 @@ def detect_timeline_shot_cuts(
         # Interior source cuts only (skip file start/end markers).
         interior = src_cuts[1:-1] if len(src_cuts) > 2 else []
         for src in interior:
+            source_timeline_frame = int(round((float(src) / native_fps) * timeline_fps))
+            if source_timeline_frame <= source_frame_start or source_timeline_frame >= source_frame_end:
+                continue
             logical = _src_frame_to_logical(
                 int(src),
                 native_fps=native_fps,
                 timeline_fps=timeline_fps,
                 logical_start=logical_start,
                 logical_end=logical_end,
+                source_frame_start=source_frame_start,
             )
             if logical_start < logical < logical_end:
                 logical_cuts.append(logical)

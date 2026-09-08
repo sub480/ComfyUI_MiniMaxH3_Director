@@ -23,7 +23,7 @@ GEN_BLANK_KEYS = frozenset({"t2v", "r2v"})
 GEN_IMAGE_KEYS = frozenset({"i2v"})
 FL2V_KEYS = frozenset({"fl2v"})
 MIXED_KEY = "mixed"
-MIXED_GROUP_KEYS = frozenset({"t2v", "i2v", "fl2v", "r2v"})
+MIXED_GROUP_KEYS = frozenset({"t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"})
 GEN_TASK_KEYS = GEN_BLANK_KEYS | GEN_IMAGE_KEYS | FL2V_KEYS | {MIXED_KEY}
 PROMPT_BATCH_KEYS = frozenset({"t2v", "i2v", "r2v", "fl2v", MIXED_KEY})
 VIDEO_BATCH_KEYS = frozenset({"t2v", "i2v", "r2v", "fl2v", MIXED_KEY})
@@ -168,7 +168,102 @@ def _segment_source_media_identity(
             f"last:{_image_ref_identity(seg_data.get('endImage'))}",
         )
         return tuple(identity for identity in identities if not identity.endswith(":"))
+    if task_key in {"v2v", "rv2v"}:
+        source = seg_data.get("sourceVideo") or {}
+        video = source.get("video") if isinstance(source.get("video"), dict) else source
+        clips = source.get("videoClips") if isinstance(source.get("videoClips"), list) else []
+        identities = [
+            str(clip.get("videoFile") or clip.get("fileName") or "").replace("\\", "/").strip()
+            for clip in clips
+            if isinstance(clip, dict)
+        ]
+        identity = "|".join(item for item in identities if item)
+        if not identity:
+            identity = str(video.get("videoFile") or video.get("fileName") or "").replace("\\", "/").strip()
+        frame_map = video.get("frameMap") or []
+        map_digest = hashlib.sha256(
+            repr(frame_map).encode("utf-8")
+        ).hexdigest() if frame_map else "full"
+        range_start = source.get("rangeStart")
+        range_end = source.get("rangeEnd")
+        return (f"source-video:{identity}:{map_digest}:{range_start}:{range_end}",) if identity else ()
     return ()
+
+
+def _mixed_source_video_timeline(
+    seg_data: dict,
+    timeline: dict,
+    *,
+    target_width: int,
+    target_height: int,
+) -> dict | None:
+    source = seg_data.get("sourceVideo") or {}
+    if not isinstance(source, dict):
+        return None
+    video = source.get("video") if isinstance(source.get("video"), dict) else source
+    clips = source.get("videoClips") if isinstance(source.get("videoClips"), list) else []
+    if not clips and (video.get("videoFile") or video.get("fileName")):
+        clips = [dict(video)]
+    if not clips:
+        return None
+    total_candidates = (
+        source.get("totalFrames"),
+        len(video.get("frameMap") or []),
+        video.get("sourceFrameCount"),
+        clips[0].get("sourceFrameCount"),
+    )
+    total = next((int(value) for value in total_candidates if value), 0)
+    if total <= 0:
+        return None
+    range_start = max(0, min(total, int(source.get("rangeStart") or 0)))
+    raw_range_end = source.get("rangeEnd")
+    range_end = total if raw_range_end is None else max(range_start, min(total, int(raw_range_end)))
+    selected_frame_map = None
+    if range_start > 0 or range_end < total:
+        full_frame_map = list(video.get("frameMap") or [])
+        if not full_frame_map:
+            full_frame_map = [
+                {"clip": clip_index, "frame": frame_index}
+                for clip_index, clip in enumerate(clips)
+                for frame_index in range(max(0, int(clip.get("sourceFrameCount") or 0)))
+            ]
+        selected_frame_map = full_frame_map[range_start:range_end]
+        total = len(selected_frame_map)
+        if total <= 0:
+            return None
+    use_source_resolution = str(seg_data.get("videoResolution") or "target") == "source"
+    resolved_clips = []
+    for clip in clips:
+        resolved = dict(clip)
+        clip_width = int(resolved.get("width") or target_width)
+        clip_height = int(resolved.get("height") or target_height)
+        if use_source_resolution:
+            clip_width, clip_height, _, _ = resolve_output_dimensions(
+                clip_width,
+                clip_height,
+                mode="long_edge",
+                long_edge=max(clip_width, clip_height),
+            )
+        else:
+            clip_width, clip_height = target_width, target_height
+        resolved["storageWidth"] = clip_width
+        resolved["storageHeight"] = clip_height
+        resolved_clips.append(resolved)
+    resolved_video = dict(video)
+    if selected_frame_map is not None:
+        resolved_video["frameMap"] = selected_frame_map
+        resolved_video["deletedSourceRanges"] = []
+    primary = resolved_clips[0]
+    resolved_video["storageWidth"] = primary["storageWidth"]
+    resolved_video["storageHeight"] = primary["storageHeight"]
+    return {
+        "frameRate": timeline.get("frameRate") or H3_FPS,
+        "refMaxSize": timeline.get("refMaxSize"),
+        "output": dict(timeline.get("output") or {}),
+        "totalFrames": total,
+        "video": resolved_video,
+        "videoClips": resolved_clips,
+    }
 
 
 def _load_gen_image_tensor(ref: dict) -> torch.Tensor:
@@ -330,6 +425,7 @@ def build_gen_director_plan(
         segment_ref_audios_for_context,
         segment_refs_for_context,
     )
+    from ..lib.video_io import load_timeline_segment
 
     global_block = timeline.get("global") or {}
     edit_mode = timeline.get("editMode") or "global"
@@ -482,6 +578,7 @@ def build_gen_director_plan(
         mixed_fl2v_refs = None
         mixed_fl2v_source = None
         mixed_i2v_source = None
+        mixed_video_source = None
         if load_media and is_selected and task_key == MIXED_KEY and seg_task_key == "fl2v":
             from .fl2v_timeline import load_fl2v_segment_media
 
@@ -512,6 +609,27 @@ def build_gen_director_plan(
                 output_mode=out_mode,
                 ref_max_size=ref_max,
             )
+        elif load_media and is_selected and task_key == MIXED_KEY and seg_task_key in {"v2v", "rv2v"}:
+            source_timeline = _mixed_source_video_timeline(
+                seg_data,
+                timeline,
+                target_width=out_w,
+                target_height=out_h,
+            )
+            if source_timeline is None:
+                raise ValueError(
+                    f"混合模式组 #{idx + 1} 是 {seg_task_key}，但没有源视频。"
+                    "请在该组上传源视频，或选择其他组类型。"
+                )
+            source_count = int(source_timeline["totalFrames"])
+            requested_count = max(1, int(end) - int(start))
+            mixed_video_source = load_timeline_segment(
+                source_timeline,
+                0,
+                min(source_count, requested_count),
+            )
+            if str(seg_data.get("videoResolution") or "target") != "source":
+                mixed_video_source = fit_canvas(mixed_video_source, out_w, out_h)
         if seg_task_key == "i2v" and seg_refs:
             log.info(
                 "i2v segment #%d: ignoring %d reference image(s); using source video context only",
@@ -558,6 +676,8 @@ def build_gen_director_plan(
                 seg_source = mixed_i2v_source
             elif seg_task_key == "fl2v":
                 seg_source = mixed_fl2v_source
+            elif seg_task_key in {"v2v", "rv2v"}:
+                seg_source = mixed_video_source
             else:
                 seg_source = None
         elif submode == "gen_blank" or seg_task_key in GEN_BLANK_KEYS:

@@ -129,7 +129,7 @@ class MiniMaxH3Director:
                             "MiniMax H3 UNET (UNETLoader). "
                             "t2v / i2v / fl2v 以及混合模式中的这三类组用 ImageToVideo（fl2va）。"
                             "r2v / v2v / rv2v 仍接此口（ref2va）。"
-                            "混合模式的 r2v 组请另接可选 model_r2v。"
+                            "混合模式的 r2v / v2v / rv2v 组请另接可选 model_r2v。"
                         ),
                     },
                 ),
@@ -153,7 +153,7 @@ class MiniMaxH3Director:
                     {
                         "tooltip": (
                             "可选 ReferenceToVideo UNET（ref2va）。"
-                            "混合模式中 r2v 组使用此模型；不接则回退到 model。"
+                            "混合模式中 r2v / v2v / rv2v 组使用此模型；不接则回退到 model。"
                             "纯 r2v / v2v / rv2v 仍只用上面的 model 口。"
                         ),
                     },
