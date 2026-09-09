@@ -307,6 +307,9 @@ def load_video_resampled(
     unique = sorted({int(i) for i in frame_indices})
     decoded: dict[int, np.ndarray] = {}
     fallback: np.ndarray | None = None
+    failed_count = 0
+    first_failed_frame = 0
+    last_failed_frame = 0
 
     for src_idx in unique:
         t_sec = max(0.0, src_idx / float(frame_rate or 24.0))
@@ -314,7 +317,10 @@ def load_video_resampled(
         cap.set(cv2.CAP_PROP_POS_FRAMES, native_frame)
         ok, bgr = cap.read()
         if not ok or bgr is None:
-            log.warning("Failed to read frame %d (t=%.3fs) from %s", native_frame, t_sec, path)
+            if failed_count == 0:
+                first_failed_frame = native_frame
+            failed_count += 1
+            last_failed_frame = native_frame
             if fallback is not None:
                 decoded[src_idx] = fallback
             continue
@@ -328,6 +334,15 @@ def load_video_resampled(
         fallback = rgb
 
     cap.release()
+
+    if failed_count:
+        log.warning(
+            "Failed to read %d frame(s) (%d-%d) from %s; using the last decoded frame",
+            failed_count,
+            first_failed_frame,
+            last_failed_frame,
+            path,
+        )
 
     if not decoded:
         raise ValueError(f"No frames decoded from video: {path}")

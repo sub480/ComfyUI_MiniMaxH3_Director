@@ -74,6 +74,7 @@ import {
     clearAllDirectorCache,
     formatLivePreviewSpeed,
     restartLivePreviewAnims,
+    refreshBatchVideoFrames,
     setR2vToolbar,
     setToolbarDisabledForBatch,
     bindDomWidgetContentComputeSize,
@@ -12026,6 +12027,7 @@ class MiniMaxH3DirectorEditor {
             this.updateRunSelectUI();
             if (this.isImageBatch()) {
                 this.renderImageBatchGroups();
+                setTimeout(() => refreshBatchVideoFrames(this), 500);
                 // Re-rendering recreates the status buttons. Schedule the
                 // post-run inspection afterwards so it updates the live DOM.
                 scheduleDirectorPassCacheRefresh(this, 500, "selected");

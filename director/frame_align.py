@@ -16,6 +16,14 @@ def minimax_align_frame_count(frame_count: int) -> int:
     return n
 
 
+def minimax_floor_frame_count(frame_count: int) -> int:
+    """Round down to the MiniMax H3 17k+5 frame grid without padding."""
+    n = int(frame_count)
+    if n < 5:
+        return 0
+    return 5 + ((n - 5) // 17) * 17
+
+
 def pad_or_trim_frames(frames: torch.Tensor, target_len: int) -> torch.Tensor:
     """Trim to at most target_len frames. Does not fabricate last-frame duplicates."""
     target_len = max(0, int(target_len))

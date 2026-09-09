@@ -88,7 +88,7 @@ def _parse_ffmpeg_audio_info(stderr: str) -> tuple[int, int]:
         ar = int(match.group(1))
         ac = {"mono": 1, "stereo": 2}.get(match.group(2), 2)
         return ar, ac
-    return 44100, 2
+    return 0, 0
 
 
 def _probe_audio_stream(path: str) -> tuple[int, int]:

@@ -9,6 +9,7 @@ import {
     defaultFrameCount,
     durationToClampedMiniMaxFrames,
     durationToMiniMaxFrames,
+    floorMiniMaxFrameCount,
     framesToDurationSec,
     imageBatchVariant,
     isContinuityMasterEnabled,
@@ -304,6 +305,25 @@ function stopAllPlayers(root) {
     root?.querySelectorAll("video.bd-r2v-media, audio.bd-r2v-media")?.forEach((m) => {
         try { m.pause(); } catch (_) { /* ignore */ }
     });
+}
+
+export function refreshBatchVideoFrames(editor) {
+    const videos = editor?.batchList?.querySelectorAll?.(
+        ".bd-group-video-player video, video.bd-r2v-media",
+    ) || [];
+    for (const video of videos) {
+        if (!video.src || !video.paused) continue;
+        const restoreTime = Number(video.currentTime) || 0;
+        const restoreFrame = () => {
+            const duration = Number(video.duration);
+            const target = restoreTime > 0
+                ? restoreTime
+                : (Number.isFinite(duration) ? Math.min(0.05, duration * 0.01) : 0.05);
+            try { video.currentTime = target; } catch (_) { /* metadata not ready */ }
+        };
+        video.addEventListener("loadedmetadata", restoreFrame, { once: true });
+        video.load();
+    }
 }
 
 export const IMAGE_BATCH_STYLES = `
@@ -1030,12 +1050,20 @@ async function assignSegSourceVideoFromFile(editor, index, file) {
             video: { ...clip, frameMap: [], deletedSourceRanges: [] },
             videoClips: [clip],
         };
-        const durationSec = preferredDurationSecFromFrames(prep.totalFrames, 24);
-        const normalized = durationToClampedMiniMaxFrames(durationSec, 24);
-        seg.durationSec = normalized.durationSec;
-        seg.frameCount = normalized.frames;
-        seg.length = normalized.frames;
-        seg._videoFrameCount = normalized.frames;
+        const frameCount = floorMiniMaxFrameCount(prep.totalFrames);
+        if (frameCount <= 0) throw new Error("MiniMax H3 source video requires at least 5 frames.");
+        if (frameCount !== prep.totalFrames) {
+            console.warn(
+                `[MiniMax H3 Director] Source video aligned down: frames=${prep.totalFrames} -> ${frameCount} `
+                + `(cropped ${prep.totalFrames - frameCount} tail frame(s)).`,
+            );
+        }
+        seg.sourceVideo.rangeStart = 0;
+        seg.sourceVideo.rangeEnd = frameCount;
+        seg.durationSec = preferredDurationSecFromFrames(frameCount, 24);
+        seg.frameCount = frameCount;
+        seg.length = frameCount;
+        seg._videoFrameCount = frameCount;
         endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit(false, { syncTimeline: true });
@@ -1080,7 +1108,8 @@ function sourceVideoFrameMap(sourceVideo) {
     const end = Number.isFinite(rawEnd)
         ? Math.max(start, Math.min(frameMap.length, Math.round(rawEnd)))
         : frameMap.length;
-    return frameMap.slice(start, end);
+    const alignedEnd = start + floorMiniMaxFrameCount(end - start);
+    return frameMap.slice(start, alignedEnd);
 }
 
 function sourceVideoSlice(sourceVideo, start, end) {
@@ -1107,14 +1136,20 @@ function restoreSegSourceVideo(editor, seg) {
     if (!totalFrames) return;
     source.totalFrames = totalFrames;
     source.video = { ...video, frameMap: [], deletedSourceRanges: [] };
-    delete source.rangeStart;
-    delete source.rangeEnd;
-    const durationSec = preferredDurationSecFromFrames(totalFrames, 24);
-    const normalized = durationToClampedMiniMaxFrames(durationSec, 24);
-    seg.durationSec = normalized.durationSec;
-    seg.frameCount = normalized.frames;
-    seg.length = normalized.frames;
-    seg._videoFrameCount = normalized.frames;
+    const frameCount = floorMiniMaxFrameCount(totalFrames);
+    if (frameCount <= 0) return;
+    source.rangeStart = 0;
+    source.rangeEnd = frameCount;
+    if (frameCount !== totalFrames) {
+        console.warn(
+            `[MiniMax H3 Director] Restored source video aligned down: frames=${totalFrames} -> ${frameCount} `
+            + `(cropped ${totalFrames - frameCount} tail frame(s)).`,
+        );
+    }
+    seg.durationSec = preferredDurationSecFromFrames(frameCount, 24);
+    seg.frameCount = frameCount;
+    seg.length = frameCount;
+    seg._videoFrameCount = frameCount;
     seg.previewB64 = "";
     seg.previewFrames = [];
     editor.renderImageBatchGroups();
@@ -1133,7 +1168,18 @@ function splitSegSourceVideo(editor, index, points) {
     if (boundaries[0] !== 0) boundaries.unshift(0);
     if (boundaries[boundaries.length - 1] !== total) boundaries.push(total);
     const ranges = boundaries.slice(0, -1)
-        .map((start, rangeIndex) => [start, boundaries[rangeIndex + 1]])
+        .map((start, rangeIndex) => {
+            const rawEnd = boundaries[rangeIndex + 1];
+            const frameCount = floorMiniMaxFrameCount(rawEnd - start);
+            if (frameCount > 0 && frameCount !== rawEnd - start) {
+                console.warn(
+                    `[MiniMax H3 Director] Split source range aligned down: start=${start}, `
+                    + `frames=${rawEnd - start} -> ${frameCount} `
+                    + `(cropped ${rawEnd - start - frameCount} tail frame(s)).`,
+                );
+            }
+            return [start, start + frameCount];
+        })
         .filter(([start, end]) => end - start >= 5);
     if (ranges.length < 2) return;
     const replacements = ranges.map(([start, end], rangeIndex) => {

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import uuid
 
 import folder_paths
@@ -415,6 +416,100 @@ async def minimax_probe_video(request):
     return web.json_response(info)
 
 
+def _export_video_range(clips: list[dict], frame_rate: float, output_path: str) -> None:
+    from ..lib.video_export import _ffmpeg_bin
+    from ..lib.video_io import resolve_video_path
+
+    ffmpeg = _ffmpeg_bin()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is unavailable; cannot export the selected video range.")
+
+    args = [ffmpeg, "-v", "error", "-nostdin"]
+    filters: list[str] = []
+    for index, clip in enumerate(clips):
+        args.extend(["-i", resolve_video_path(clip)])
+        start = max(0, int(clip.get("sourceFrameStart") or 0))
+        end = max(start + 1, int(clip.get("sourceFrameEnd") or start + 1))
+        filters.append(
+            f"[{index}:v:0]trim=start={start / frame_rate:.9f}:end={end / frame_rate:.9f},"
+            f"setpts=PTS-STARTPTS,fps={frame_rate}[v{index}]"
+        )
+
+    labels = "".join(f"[v{index}]" for index in range(len(clips)))
+    filters.append(f"{labels}concat=n={len(clips)}:v=1:a=0[outv]")
+    args.extend([
+        "-filter_complex", ";".join(filters),
+        "-map", "[outv]",
+        "-an",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-y",
+        output_path,
+    ])
+    result = subprocess.run(args, capture_output=True, check=False)
+    if result.returncode != 0 or not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+        error = (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(error or "ffmpeg failed to export the selected video range.")
+
+
+async def minimax_export_video_range(request):
+    output_path = ""
+    try:
+        body = await request.json()
+        clips_in = body.get("clips")
+        if not isinstance(clips_in, list) or not clips_in:
+            return web.Response(status=400, text="Missing clips[].")
+        clips = []
+        for item in clips_in:
+            if not isinstance(item, dict):
+                continue
+            video_file = str(item.get("videoFile") or item.get("video_file") or "").strip()
+            if not video_file:
+                continue
+            clips.append({
+                "videoFile": video_file,
+                "fileName": os.path.basename(video_file),
+                "subfolder": str(item.get("subfolder") or "").strip(),
+                "type": str(item.get("type") or "input").strip() or "input",
+                "sourceFrameStart": item.get("sourceFrameStart", item.get("source_frame_start", 0)),
+                "sourceFrameEnd": item.get("sourceFrameEnd", item.get("source_frame_end")),
+            })
+        if not clips:
+            return web.Response(status=400, text="Missing clips[].")
+        frame_rate = float(body.get("frameRate") or body.get("frame_rate") or H3_FPS)
+        if not 0 < frame_rate <= 240:
+            return web.Response(status=400, text="Invalid frameRate.")
+
+        fd, output_path = tempfile.mkstemp(prefix="minimax_range_", suffix=".mp4")
+        os.close(fd)
+        await asyncio.to_thread(_export_video_range, clips, frame_rate, output_path)
+        size = os.path.getsize(output_path)
+        response = web.StreamResponse(headers={
+            "Content-Type": "video/mp4",
+            "Content-Disposition": 'attachment; filename="minimax_selected_range.mp4"',
+            "Content-Length": str(size),
+            "Cache-Control": "no-store",
+        })
+        await response.prepare(request)
+        with open(output_path, "rb") as source:
+            while chunk := source.read(1024 * 1024):
+                await response.write(chunk)
+        await response.write_eof()
+        return response
+    except (TypeError, ValueError) as exc:
+        return web.Response(status=400, text=str(exc))
+    except Exception as exc:
+        log.warning("MiniMax H3 Director video range export failed: %s", exc)
+        return web.Response(status=500, text=str(exc))
+    finally:
+        if output_path:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+
+
 async def minimax_list_vae_approx(request):
     try:
         from .tae_preview import default_tae_name, list_vae_approx_names
@@ -660,6 +755,7 @@ def register_routes() -> bool:
     )
     _register_route(routes, "POST", "/minimax/director/probe_video", minimax_probe_video)
     _register_route(routes, "GET", "/minimax/director/probe_video", minimax_probe_video)
+    _register_route(routes, "POST", "/minimax/director/export_video_range", minimax_export_video_range)
     _register_route(routes, "GET", "/minimax/director/list_input_media", minimax_list_input_media)
     _register_route(routes, "GET", "/minimax/director/list_vae_approx", minimax_list_vae_approx)
     _register_route(routes, "POST", "/minimax/director/detect_shots", minimax_detect_shots)

@@ -477,7 +477,9 @@ def finalize_director_outputs(
     audio_mode = resolve_audio_mode(plan)
     use_generated = audio_mode == AUDIO_MODE_GENERATE
     # Prefer caller-provided export lengths (post continuity trim); else match IMAGE batches.
-    if segment_frame_counts is None and segment_audios and split_for_audio:
+    # Source audio needs the same lengths so rv2v clips follow the emitted picture,
+    # rather than the pre-trim plan duration.
+    if segment_frame_counts is None and split_for_audio:
         segment_frame_counts = [int(s.shape[0]) for s in images_out]
     audio_out, source_fallback = build_director_audio_outputs(
         plan,
@@ -485,7 +487,7 @@ def finalize_director_outputs(
         export_segments=split_for_audio,
         output_frame_end=audio_frame_end,
         segment_audios=segment_audios if use_generated else None,
-        segment_frame_counts=segment_frame_counts if use_generated else None,
+        segment_frame_counts=segment_frame_counts,
         audio_mode=audio_mode,
     )
     report = report + source_audio_report_note(

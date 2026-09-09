@@ -239,6 +239,7 @@ class SegmentPlan:
     reference_video_start_frame: int = 0
     negative_prompt: str = ""
     source_clip: torch.Tensor | None = None
+    source_audio_timeline: dict | None = None
     source_media_identity: tuple[str, ...] = ()
     # When external groups filter by「选择运行」, plan.index is the compact run
     # order (0..N-1) while ui_index keeps the Director timeline card index.

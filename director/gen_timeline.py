@@ -15,7 +15,7 @@ from ..lib.image_prep import (
     resolve_output_dimensions,
 )
 from ..lib.task_prompts import resolve_task_key
-from .frame_align import H3_FPS
+from .frame_align import H3_FPS, minimax_floor_frame_count
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.gen")
 
@@ -101,6 +101,27 @@ def _segment_frame_count(raw: dict, *, default: int, task_key: str) -> int:
     return max(_min_frames_for_task(task_key), fc)
 
 
+def _mixed_source_range(raw: dict) -> tuple[int, int, int] | None:
+    source = raw.get("sourceVideo") or {}
+    if not isinstance(source, dict):
+        return None
+    video = source.get("video") if isinstance(source.get("video"), dict) else source
+    clips = source.get("videoClips") if isinstance(source.get("videoClips"), list) else []
+    total_candidates = (
+        len(video.get("frameMap") or []),
+        source.get("totalFrames"),
+        video.get("sourceFrameCount"),
+        sum(max(0, int(clip.get("sourceFrameCount") or 0)) for clip in clips),
+    )
+    total = next((int(value) for value in total_candidates if value), 0)
+    if total <= 0:
+        return None
+    start = max(0, min(total, int(source.get("rangeStart") or 0)))
+    raw_end = source.get("rangeEnd")
+    end = total if raw_end is None else max(start, min(total, int(raw_end)))
+    return start, end, minimax_floor_frame_count(end - start)
+
+
 def _gen_segment_ranges(
     segments: list[dict],
     *,
@@ -109,8 +130,30 @@ def _gen_segment_ranges(
 ) -> list[tuple[int, int, dict]]:
     ranges: list[tuple[int, int, dict]] = []
     start = 0
-    for raw in segments:
+    for index, raw in enumerate(segments):
         fc = _segment_frame_count(raw, default=default_frame_count, task_key=task_key)
+        seg_task_key = resolve_mixed_segment_task_key(raw, task_key)
+        source_range = _mixed_source_range(raw) if seg_task_key in {"v2v", "rv2v"} else None
+        if source_range is not None:
+            range_start, range_end, aligned_count = source_range
+            selected_count = range_end - range_start
+            if aligned_count <= 0:
+                raise ValueError(
+                    f"Mixed {seg_task_key} group #{index + 1} source range has {selected_count} frame(s); "
+                    "MiniMax H3 requires at least 5 source frames."
+                )
+            if aligned_count != selected_count:
+                log.warning(
+                    "Mixed %s group #%d source range aligned down: start=%d, frames=%d -> %d "
+                    "(cropped %d tail frame(s))",
+                    seg_task_key,
+                    index + 1,
+                    range_start,
+                    selected_count,
+                    aligned_count,
+                    selected_count - aligned_count,
+                )
+            fc = aligned_count
         ranges.append((start, start + fc, raw))
         start += fc
     if not ranges:
@@ -207,10 +250,10 @@ def _mixed_source_video_timeline(
     if not clips:
         return None
     total_candidates = (
-        source.get("totalFrames"),
         len(video.get("frameMap") or []),
+        source.get("totalFrames"),
         video.get("sourceFrameCount"),
-        clips[0].get("sourceFrameCount"),
+        sum(max(0, int(clip.get("sourceFrameCount") or 0)) for clip in clips),
     )
     total = next((int(value) for value in total_candidates if value), 0)
     if total <= 0:
@@ -218,6 +261,10 @@ def _mixed_source_video_timeline(
     range_start = max(0, min(total, int(source.get("rangeStart") or 0)))
     raw_range_end = source.get("rangeEnd")
     range_end = total if raw_range_end is None else max(range_start, min(total, int(raw_range_end)))
+    aligned_count = minimax_floor_frame_count(range_end - range_start)
+    if aligned_count <= 0:
+        return None
+    range_end = range_start + aligned_count
     selected_frame_map = None
     if range_start > 0 or range_end < total:
         full_frame_map = list(video.get("frameMap") or [])
@@ -579,6 +626,7 @@ def build_gen_director_plan(
         mixed_fl2v_source = None
         mixed_i2v_source = None
         mixed_video_source = None
+        source_audio_timeline = None
         if load_media and is_selected and task_key == MIXED_KEY and seg_task_key == "fl2v":
             from .fl2v_timeline import load_fl2v_segment_media
 
@@ -621,6 +669,7 @@ def build_gen_director_plan(
                     f"混合模式组 #{idx + 1} 是 {seg_task_key}，但没有源视频。"
                     "请在该组上传源视频，或选择其他组类型。"
                 )
+            source_audio_timeline = source_timeline
             source_count = int(source_timeline["totalFrames"])
             requested_count = max(1, int(end) - int(start))
             mixed_video_source = load_timeline_segment(
@@ -699,6 +748,7 @@ def build_gen_director_plan(
                 ref_videos=seg_ref_videos,
                 negative_prompt=seg_negative,
                 source_clip=seg_source,
+                source_audio_timeline=source_audio_timeline,
                 source_media_identity=source_media_identity,
                 continuity_from_prev=resolve_segment_continuity_from_prev(
                     seg_data if isinstance(seg_data, dict) else {},

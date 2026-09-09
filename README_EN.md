@@ -13,9 +13,16 @@ Incremental changes versus [`main`](https://github.com/AIMixer/ComfyUI_MiniMaxH3
 
 ### Mixed mode
 
-New `task_type=mixed`. After adding a group, each group can switch type (`t2v` / `i2v` / `fl2v` / `r2v`); behavior matches the original mode. `t2v` / `i2v` / `fl2v` groups use Director `model` (fl2va). `r2v` groups should wire optional `model_r2v` (ref2va); unwired falls back to `model`.
+New `task_type=mixed`. After adding a group, each group can switch type (`t2v` / `i2v` / `fl2v` / `r2v` / `v2v` / `rv2v`); behavior matches the original mode. `t2v` / `i2v` / `fl2v` groups use Director `model` (fl2va). `r2v` / `v2v` / `rv2v` groups should wire optional `model_r2v` (ref2va); unwired falls back to `model`. Set `v2v` and `rv2v` source video and dedicated media inside that group.
 
 `fl2v` groups accept start-only, end-only, both, or neither (text-to-video). Filling one end does **not** copy that picture onto the other.
+
+### Source-video edit (v2v / rv2v)
+
+- Each group’s source timeline can select a range; after upload, restore, split, or dragging the range, the frame count is **floored** to the MiniMax `17k+5` grid (extra tail frames are cropped, never padded). Ranges shorter than 5 frames are invalid
+- Sampling and export use that aligned source range, so output clips no longer keep extra tail frames
+- **Alt + mouse wheel** zooms the preview track; zoom and scroll position are kept
+- The player can seek by frame, mute, and export the current selected range as MP4
 
 ### Defaults
 
@@ -83,6 +90,8 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 ### Audio and frame rate
 
 - Audio output (generate / source / mute) is shown by task type: `v2v` / `rv2v` and matching mixed-mode groups can keep source audio
+- Mixed-mode `v2v` / `rv2v` groups take source audio from that group’s local source video, not the global timeline
+- Source-audio length follows the emitted picture (including after continuity trim)
 - Audio export is forced onto the 24 fps grid
 - Prompt text-box fill is more stable
 

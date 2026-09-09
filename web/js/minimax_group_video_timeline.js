@@ -1,4 +1,5 @@
 import { api } from "../../scripts/api.js";
+import { floorMiniMaxFrameCount } from "./minimax_gen_timeline.js";
 import { t } from "./minimax_i18n.js";
 
 const MIN_SEGMENT_FRAMES = 5;
@@ -12,6 +13,8 @@ const STYLES = `
 .bd-group-video-toolbar input{width:42px;background:#111518;border:1px solid #3b4448;border-radius:4px;color:#ddd;padding:3px 5px;font-size:10px}
 .bd-group-video-player{position:relative;width:100%;height:clamp(120px,22vw,260px);display:flex;align-items:center;justify-content:center;background:#050606;border-radius:6px;overflow:hidden;cursor:pointer}
 .bd-group-video-player video{width:100%;height:100%;object-fit:contain;background:#050606}
+.bd-group-video-seek{width:100%;height:14px;margin:0;accent-color:#69d99a;cursor:pointer}
+.bd-group-video-seek:disabled{opacity:.4;cursor:not-allowed}
 .bd-group-video-controls{display:flex;align-items:center;gap:5px}
 .bd-group-video-controls button{width:25px;height:23px;padding:0;border:1px solid #364044;border-radius:4px;background:#15191b;color:#d6dcdf;cursor:pointer}
 .bd-group-video-time{font-size:10px;color:#899397;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -55,6 +58,19 @@ function injectStyles() {
 
 function clamp(value, low, high) {
     return Math.max(low, Math.min(high, value));
+}
+
+function alignedRangeEnd(start, end) {
+    const alignedFrames = floorMiniMaxFrameCount(end - start);
+    return alignedFrames > 0 ? start + alignedFrames : end;
+}
+
+function warnRangeAlignment(start, originalEnd, alignedEnd) {
+    if (alignedEnd === originalEnd) return;
+    console.warn(
+        `[MiniMax H3 Director] Source range aligned down: start=${start}, frames=${originalEnd - start} -> ${alignedEnd - start} `
+        + `(cropped ${originalEnd - alignedEnd} tail frame(s)).`,
+    );
 }
 
 function sourceModel(seg) {
@@ -208,7 +224,7 @@ export function mountGroupVideoTimeline(container, options) {
     playerWrap.className = "bd-group-video-player";
     playerWrap.title = sourceTitle;
     const player = document.createElement("video");
-    player.muted = true;
+    player.muted = false;
     player.playsInline = true;
     player.preload = "metadata";
     playerWrap.appendChild(player);
@@ -235,15 +251,26 @@ export function mountGroupVideoTimeline(container, options) {
     };
     root.appendChild(playerWrap);
 
+    const seek = document.createElement("input");
+    seek.className = "bd-group-video-seek";
+    seek.type = "range";
+    seek.min = "1";
+    seek.max = String(Math.max(1, model.totalFrames));
+    seek.step = "1";
+    seek.value = "1";
+    seek.disabled = !model.totalFrames;
+    seek.title = t("player.frameJump");
+    seek.setAttribute("aria-label", t("player.frameJump"));
+    root.appendChild(seek);
+
     const controls = document.createElement("div");
     controls.className = "bd-group-video-controls";
     const play = button("▶", t("player.playPause"));
-    const loop = button("⟳", t("player.loopOn"));
-    const previous = button("‹", t("player.framePrev"));
-    const next = button("›", t("player.frameNext"));
+    const mute = button("🔊", t("player.mute"));
+    const exportRange = button("⇩", t("player.exportRange"));
     const time = document.createElement("span");
     time.className = "bd-group-video-time";
-    controls.append(play, loop, previous, next, time);
+    controls.append(play, mute, exportRange, time);
     root.appendChild(controls);
 
     const trackViewport = document.createElement("div");
@@ -291,11 +318,12 @@ export function mountGroupVideoTimeline(container, options) {
         rangeStart = 0;
         rangeEnd = model.totalFrames;
     }
+    const initialRangeEnd = rangeEnd;
+    rangeEnd = alignedRangeEnd(rangeStart, rangeEnd);
     let currentFrame = rangeStart;
     let activeClip = -1;
     let activeRange = -1;
     let raf = 0;
-    let looping = false;
     let trackDragging = false;
     let resumeAfterTrackDrag = false;
     let rangeDragging = "";
@@ -342,6 +370,8 @@ export function mountGroupVideoTimeline(container, options) {
 
     const syncSelection = () => {
         const total = Math.max(1, model.totalFrames);
+        seek.min = String(rangeStart + 1);
+        seek.max = String(Math.max(rangeStart + 1, rangeEnd));
         selection.style.left = `${(rangeStart / total) * 100}%`;
         selection.style.width = `${((rangeEnd - rangeStart) / total) * 100}%`;
         rangeStartHandle.style.left = `${(rangeStart / total) * 100}%`;
@@ -354,6 +384,7 @@ export function mountGroupVideoTimeline(container, options) {
     };
 
     const syncTimeText = () => {
+        seek.value = String(currentFrame + 1);
         time.textContent = t("player.rangeStatus", {
             current: currentFrame + 1,
             total: model.totalFrames,
@@ -410,13 +441,6 @@ export function mountGroupVideoTimeline(container, options) {
             const nextRange = ranges[activeRange + 1];
             if (nextRange) {
                 currentFrame = nextRange.start;
-                syncPlayer(true);
-                void player.play();
-                raf = requestAnimationFrame(animate);
-                return;
-            }
-            if (looping) {
-                currentFrame = rangeStart;
                 syncPlayer(true);
                 void player.play();
                 raf = requestAnimationFrame(animate);
@@ -512,13 +536,51 @@ export function mountGroupVideoTimeline(container, options) {
             stopAnimation();
         }
     };
-    loop.onclick = () => {
-        looping = !looping;
-        loop.classList.toggle("active", looping);
-        loop.style.color = looping ? "#69d99a" : "";
+    mute.onclick = () => {
+        player.muted = !player.muted;
+        mute.textContent = player.muted ? "🔇" : "🔊";
+        mute.title = t(player.muted ? "player.unmute" : "player.mute");
     };
-    previous.onclick = () => { currentFrame -= 1; syncPlayer(); };
-    next.onclick = () => { currentFrame += 1; syncPlayer(); };
+    exportRange.onclick = async () => {
+        exportRange.disabled = true;
+        setMessage(t("player.exportingRange"));
+        try {
+            const clips = selectedRanges().map((range) => ({
+                videoFile: range.clip.videoFile || range.clip.fileName,
+                subfolder: range.clip.subfolder || "",
+                type: range.clip.type || "input",
+                sourceFrameStart: logicalEntry(model, range.start).frame,
+                sourceFrameEnd: logicalEntry(model, range.end - 1).frame + 1,
+            }));
+            const response = await api.fetchApi("/minimax/director/export_video_range", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    clips,
+                    frameRate: Number(editor?.timeline?.frameRate) || 24,
+                }),
+            });
+            if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = "minimax_selected_range.mp4";
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+            setMessage("");
+        } catch (error) {
+            setMessage(t("player.exportRangeFailed", { err: error?.message || error }), true);
+        } finally {
+            exportRange.disabled = !model.totalFrames;
+        }
+    };
+    seek.oninput = () => {
+        currentFrame = clamp(Number(seek.value) - 1, rangeStart, rangeEnd - 1);
+        syncPlayer();
+    };
     const seekTrack = (event) => {
         const rect = track.getBoundingClientRect();
         currentFrame = clamp(
@@ -609,6 +671,12 @@ export function mountGroupVideoTimeline(container, options) {
     const finishRangeDrag = (event) => {
         if (!rangeDragging) return;
         moveRangeHandle(event);
+        const originalRangeEnd = rangeEnd;
+        rangeEnd = alignedRangeEnd(rangeStart, rangeEnd);
+        warnRangeAlignment(rangeStart, originalRangeEnd, rangeEnd);
+        currentFrame = clamp(currentFrame, rangeStart, rangeEnd - 1);
+        syncSelection();
+        syncPlayer();
         rangeDragging = "";
         selection.classList.remove("dragging");
         try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
@@ -637,8 +705,6 @@ export function mountGroupVideoTimeline(container, options) {
         const nextRange = ranges[activeRange + 1];
         if (nextRange) {
             currentFrame = nextRange.start;
-        } else if (looping) {
-            currentFrame = rangeStart;
         } else {
             stopAnimation();
             return;
@@ -651,12 +717,16 @@ export function mountGroupVideoTimeline(container, options) {
     player.onloadedmetadata = () => syncPlayer();
 
     const hasVideo = model.totalFrames > 0 && model.clips.length > 0;
-    for (const control of [split, equal, smart, play, loop, previous, next]) {
+    for (const control of [split, equal, smart, play, mute, exportRange]) {
         control.disabled = !hasVideo;
     }
     if (hasVideo) {
         syncSelection();
         syncPlayer(true);
+        if (rangeEnd !== initialRangeEnd) {
+            warnRangeAlignment(rangeStart, initialRangeEnd, rangeEnd);
+            queueMicrotask(() => onRangeChange?.(rangeStart, rangeEnd));
+        }
     }
     else setMessage(t("toolbar.noVideo"));
 

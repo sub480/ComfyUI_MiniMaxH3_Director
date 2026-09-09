@@ -89,6 +89,12 @@ export function alignMiniMaxFrameCount(n) {
     return n;
 }
 
+/** MiniMax H3 source range grid: snap down to 17k+5 without padding. */
+export function floorMiniMaxFrameCount(n) {
+    n = Math.floor(Number(n) || 0);
+    return n < 5 ? 0 : 5 + Math.floor((n - 5) / 17) * 17;
+}
+
 /** Round user-facing duration to 1 decimal place (official workflow step). */
 export function roundDurationSec(seconds) {
     const n = Number(seconds);

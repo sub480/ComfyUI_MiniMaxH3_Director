@@ -55,7 +55,14 @@ def resolve_audio_mode(plan) -> str:
     raw = str(out.get("audioMode") or AUDIO_MODE_GENERATE).strip().lower()
     mode = raw if raw in {AUDIO_MODE_GENERATE, AUDIO_MODE_SOURCE, AUDIO_MODE_MUTE} else AUDIO_MODE_GENERATE
     task_key = str(getattr(plan, "global_task_key", "") or "")
-    if mode == AUDIO_MODE_SOURCE and task_key not in VIDEO_EDIT_AUDIO_TASKS:
+    source_capable = task_key in VIDEO_EDIT_AUDIO_TASKS or (
+        task_key == "mixed"
+        and any(
+            str(getattr(seg, "task_key", "") or "") in VIDEO_EDIT_AUDIO_TASKS
+            for seg in (getattr(plan, "segments", None) or [])
+        )
+    )
+    if mode == AUDIO_MODE_SOURCE and not source_capable:
         return AUDIO_MODE_GENERATE
     return mode
 
@@ -112,6 +119,30 @@ def _ref_audio_for_segment(seg, plan=None) -> dict[str, Any] | None:
     return None
 
 
+def _extract_segment_source_audio(plan, seg) -> dict[str, Any] | None:
+    """Extract from a mixed group's local source video or the main timeline."""
+    fps = float(getattr(plan, "frame_rate", 24) or 24)
+    local_timeline = getattr(seg, "source_audio_timeline", None)
+    if isinstance(local_timeline, dict):
+        start = 0
+        end = min(
+            int(local_timeline.get("totalFrames") or getattr(seg, "frame_count", 0) or 0),
+            int(getattr(seg, "frame_count", 0) or 0),
+        )
+        timeline = local_timeline
+    else:
+        start = int(getattr(seg, "start_frame", 0) or 0)
+        end = int(getattr(seg, "end_frame", start) or start)
+        timeline = getattr(plan, "raw", None) or {}
+    return extract_timeline_audio(
+        timeline,
+        start,
+        end,
+        fps,
+        audio_cache=_execution_audio_cache(plan),
+    )
+
+
 def empty_audio_dict(sample_rate: int = SILENT_SAMPLE_RATE) -> dict[str, Any]:
     return {"waveform": torch.zeros(1, 1, 0), "sample_rate": int(sample_rate)}
 
@@ -147,12 +178,7 @@ def prepare_segment_audio_for_file_export(
     if mode == AUDIO_MODE_SOURCE or (
         mode == AUDIO_MODE_GENERATE and task_passes_source_audio(str(getattr(plan, "global_task_key", "") or ""))
     ):
-        timeline = getattr(plan, "raw", None) or {}
-        start = int(getattr(seg, "start_frame", 0) or 0)
-        end = int(getattr(seg, "end_frame", start + n_frames) or (start + n_frames))
-        extracted = extract_timeline_audio(
-            timeline, start, end, fps, audio_cache=_execution_audio_cache(plan),
-        )
+        extracted = _extract_segment_source_audio(plan, seg)
         if _audio_has_samples(extracted):
             sr = int(extracted.get("sample_rate") or SILENT_SAMPLE_RATE)
             return _pad_or_trim_audio_to_frames(
@@ -448,13 +474,7 @@ def build_director_audio_outputs(
                 outputs.append(empty_audio_dict(silent_sample_rate))
                 continue
             seg = plan.segments[seg_indices[i]]
-            extracted = extract_timeline_audio(
-                timeline,
-                seg.start_frame,
-                seg.end_frame,
-                fps,
-                audio_cache=_execution_audio_cache(plan),
-            )
+            extracted = _extract_segment_source_audio(plan, seg)
             if mode == AUDIO_MODE_SOURCE and not _audio_has_samples(extracted):
                 extracted = _ref_audio_for_segment(seg, plan) or extracted
             if mode == AUDIO_MODE_SOURCE and not _audio_has_samples(extracted):
@@ -490,13 +510,7 @@ def build_director_audio_outputs(
         selected_segments = [plan.segments[index] for index in sorted(plan.run_indices)]
         parts: list[dict[str, Any] | None] = []
         for seg in selected_segments:
-            part = extract_timeline_audio(
-                timeline,
-                seg.start_frame,
-                seg.end_frame,
-                fps,
-                audio_cache=_execution_audio_cache(plan),
-            )
+            part = _extract_segment_source_audio(plan, seg)
             if mode == AUDIO_MODE_SOURCE and not _audio_has_samples(part):
                 part = _ref_audio_for_segment(seg, plan)
             parts.append(part)
@@ -511,13 +525,34 @@ def build_director_audio_outputs(
             return [merged], None
         if mode == AUDIO_MODE_SOURCE:
             return [empty_audio_dict(silent_sample_rate)], "silent"
-    extracted = (
-        extract_timeline_audio(
-            timeline, 0, end, fps, audio_cache=_execution_audio_cache(plan),
-        )
-        if end > 0
-        else None
+    has_local_source_audio = any(
+        isinstance(getattr(seg, "source_audio_timeline", None), dict)
+        for seg in (getattr(plan, "segments", None) or [])
     )
+    if mode == AUDIO_MODE_SOURCE and has_local_source_audio:
+        parts = [
+            _extract_segment_source_audio(plan, seg) or _ref_audio_for_segment(seg, plan)
+            for seg in plan.segments
+        ]
+        extracted = (
+            _merge_generated_segment_audios(
+                plan,
+                parts,
+                total_frames=end,
+                fps=fps,
+                frame_counts=segment_frame_counts,
+            )
+            if any(_audio_has_samples(part) for part in parts)
+            else None
+        )
+    else:
+        extracted = (
+            extract_timeline_audio(
+                timeline, 0, end, fps, audio_cache=_execution_audio_cache(plan),
+            )
+            if end > 0
+            else None
+        )
     if mode == AUDIO_MODE_SOURCE and not _audio_has_samples(extracted):
         # Multi-segment source: use each segment's own reference audio, joined
         # along the timeline (segments without a ref audio become silence).
