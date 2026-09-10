@@ -16,6 +16,7 @@ from ..lib.audio_io import (
     extract_timeline_audio,
     frames_to_audio_samples,
     load_reference_audio,
+    source_frame_span_for_log,
 )
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.audio_export")
@@ -134,6 +135,18 @@ def _extract_segment_source_audio(plan, seg) -> dict[str, Any] | None:
         start = int(getattr(seg, "start_frame", 0) or 0)
         end = int(getattr(seg, "end_frame", start) or start)
         timeline = getattr(plan, "raw", None) or {}
+    src0, src_end, n_frames = source_frame_span_for_log(timeline, start, end)
+    log.info(
+        "Source audio segment #%s: %s 截取源帧 %d–%d（共 %d 帧）logical [%d, %d) fps=%.3f",
+        int(getattr(seg, "index", 0) or 0) + 1,
+        "local-source" if isinstance(local_timeline, dict) else "timeline",
+        src0 + 1,
+        src_end,
+        n_frames,
+        start,
+        end,
+        fps,
+    )
     return extract_timeline_audio(
         timeline,
         start,

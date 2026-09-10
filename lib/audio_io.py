@@ -1,21 +1,23 @@
 """Extract source audio aligned with MiniMax H3 Director timeline (v2v / rv2v).
 
-Independent of video tensors (does not touch decode / 娈甸棿寮曞). Same frame
-selection as ``load_video_resampled``, with PCM-safe clocks:
+Independent of video tensors (does not touch decode / 段间引导). Same frame
+selection as ``load_video_resampled`` and the timeline player:
 
-  1. logical 鈫?frameMap 鈫?source index
+  1. logical → frameMap → source index
   2. native = round((src / timeline_fps) * opencv_fps)  # same as video decode
-  3. seek PCM at container time of that native, converted to the audio stream:
-       pcm_start = video_pts0 + native0 * frame_dur 鈭?audio_start
-     (full-file decode starts at sample 0 鈮?audio_start, not video_pts0)
+  3. seek PCM on the player/OpenCV wall clock:
+       pcm_start = src / timeline_fps
+     (HTML5 preview uses currentTime = source_frame / 24. Container PTS
+     start_time — video_pts0 − audio_start — often shifts phone/camera files
+     by 0.5–2s, so a mid-clip range would mux the wrong dialogue.)
   4. take exactly ``count / timeline_fps`` of audio (IMAGE / Combine clock).
-     Pad/trim only 鈥?never stretch PTS media into a shorter timeline window
-     (that reads as 鈥滃姞閫熸斁瀹屸€?.
+     Pad/trim only — never stretch PTS media into a shorter timeline window
+     (that reads as “加速放完”).
   5. Join spans on consecutive *source* frames (not native decode indices) so
      timeline fps remapping does not shatter PCM into per-frame clicks; apply a
      short edge fade only at real multi-clip / gap boundaries.
 
-If a PTS-based seek lands past the decoded PCM (common after deleting leading
+If that seek lands past the decoded PCM (common after deleting leading
 timeline segments when fps/PTS disagree), fall back to ``native / file_fps``
 so trim-leading does not become all silence.
 """
@@ -333,10 +335,39 @@ def _pcm_time_for_native(
     audio_start: float,
     frame_dur: float,
 ) -> float:
-    """Seconds into decoded PCM for video frame ``native``."""
+    """Seconds into decoded PCM for video frame ``native`` (container PTS)."""
     dur = float(frame_dur) if frame_dur > 0 else 1.0 / 24.0
     video_t = float(video_pts0) + float(max(0, int(native))) * dur
     return max(0.0, video_t - float(audio_start))
+
+
+def _pcm_time_for_timeline_source(src_frame: int, timeline_fps: float) -> float:
+    """Same clock as the Director player: currentTime = source_frame / fps."""
+    fps = float(timeline_fps or 24.0)
+    if fps <= 0:
+        fps = 24.0
+    return max(0.0, float(max(0, int(src_frame))) / fps)
+
+
+def source_frame_span_for_log(
+    timeline: dict, logical_start: int, logical_end: int
+) -> tuple[int, int, int]:
+    """Return ``(src_start_0, src_end_exclusive, count)`` for extract logs.
+
+    Display as 1-based inclusive ``src_start_0+1`` … ``src_end_exclusive`` to
+    match the timeline range readout (范围 start-end).
+    """
+    start = int(logical_start)
+    end = int(logical_end)
+    if end <= start:
+        return 0, 0, 0
+    _, src0 = resolve_logical_frame_entry(timeline, start)
+    _, src_last = resolve_logical_frame_entry(timeline, end - 1)
+    src0 = int(src0)
+    src_last = int(src_last)
+    if src_last < src0:
+        src0, src_last = src_last, src0
+    return src0, src_last + 1, end - start
 
 
 def load_reference_audio(
@@ -501,12 +532,24 @@ def _timeline_audio_spans(
         nonlocal run_last_src_frame, run_count
         nonlocal run_video_pts0, run_audio_start, run_frame_dur
         if run_path and run_count > 0:
-            pcm_start = _pcm_time_for_native(
+            src0 = int(run_last_src_frame) - int(run_count) + 1
+            pcm_start = _pcm_time_for_timeline_source(src0, fps)
+            pts_t = _pcm_time_for_native(
                 run_n0,
                 video_pts0=run_video_pts0,
                 audio_start=run_audio_start,
                 frame_dur=run_frame_dur,
             )
+            if abs(pts_t - pcm_start) > 0.08:
+                log.info(
+                    "Source audio: player clock %.3fs (src=%d / %.3ffps); "
+                    "container PTS would be %.3fs (delta=%+.3fs).",
+                    pcm_start,
+                    src0,
+                    fps,
+                    pts_t,
+                    pts_t - pcm_start,
+                )
             out_dur = float(run_count) / fps
             if out_dur > 0:
                 spans.append(
@@ -603,6 +646,22 @@ def extract_timeline_audio(
     spans = _timeline_audio_spans(timeline, logical_start, logical_end, frame_rate)
     if not spans:
         return None
+    src0, src_end, n_frames = source_frame_span_for_log(
+        timeline, logical_start, logical_end
+    )
+    log.info(
+        "Source audio extract: 源帧 %d–%d（共 %d 帧）logical [%d, %d) "
+        "fps=%.3f → %d span(s) pcm_start=%.3fs dur=%.3fs",
+        src0 + 1,
+        src_end,
+        n_frames,
+        int(logical_start),
+        int(logical_end),
+        float(frame_rate or 24.0),
+        len(spans),
+        float(spans[0][1]),
+        sum(float(span[2]) for span in spans),
+    )
     if not _ffmpeg_bin():
         log.warning(
             "Source audio skipped: ffmpeg unavailable "
