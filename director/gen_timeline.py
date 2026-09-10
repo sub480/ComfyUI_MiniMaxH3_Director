@@ -776,6 +776,7 @@ def build_gen_director_plan(
     src_w, src_h = _resolve_gen_image_source_dims(segment_ranges, global_block, output_block)
 
     from .segment_continuity import (
+        resolve_continuity_keep_tail,
         resolve_continuity_mode,
         resolve_continuity_redraw,
         resolve_continuity_settings,
@@ -808,5 +809,6 @@ def build_gen_director_plan(
         continuity_overlap_frames=continuity_overlap,
         continuity_mode=resolve_continuity_mode(timeline),
         continuity_redraw=resolve_continuity_redraw(timeline),
+        continuity_keep_tail=resolve_continuity_keep_tail(timeline),
         global_ref_audios=shared_ref_audios,
     )

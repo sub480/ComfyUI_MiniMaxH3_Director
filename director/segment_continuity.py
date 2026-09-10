@@ -142,6 +142,17 @@ def resolve_continuity_redraw(timeline: dict | None) -> float:
     return clamp_seam_min_mask(raw)
 
 
+def resolve_continuity_keep_tail(timeline: dict | None) -> bool:
+    """Preserve aligned remainder for generated continuity segments. Default off."""
+    output = (timeline or {}).get("output") if isinstance(timeline, dict) else None
+    if not isinstance(output, dict):
+        return False
+    raw = output.get("continuityKeepTail")
+    if raw is None:
+        raw = output.get("continuity_keep_tail")
+    return _truthy_continuity_flag(raw)
+
+
 def is_continue_mode(plan) -> bool:
     return bool(getattr(plan, "continuity_enabled", False)) and str(
         getattr(plan, "continuity_mode", CONTINUITY_MODE_GUIDE) or CONTINUITY_MODE_GUIDE

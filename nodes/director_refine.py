@@ -362,6 +362,15 @@ class MiniMaxH3DirectorRefine:
                         ),
                     },
                 ),
+                "refine_model_r2v": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "r2v / v2v / rv2v 专用二采模型。"
+                            "连接时优先于 refine_model；未连接时使用共享二采模型。"
+                        ),
+                    },
+                ),
                 "sigmas": (
                     "SIGMAS",
                     {
@@ -558,6 +567,7 @@ class MiniMaxH3DirectorRefine:
         h3_latent_model="",
         sigmas=None,
         refine_model=None,
+        refine_model_r2v=None,
         model=None,
         **kwargs,
     ):
@@ -603,6 +613,7 @@ class MiniMaxH3DirectorRefine:
             refine_steps=refine_steps,
             upscale_method=upscale_method,
             sample_model=refine_model if refine_model is not None else model,
+            sample_model_r2v=refine_model_r2v,
             latent_upscale_model=latent_upscale_model if latent_upscale_model is not None else h3_latent_model,
             upscale_model=upscale_model,
             sampler=sampler,

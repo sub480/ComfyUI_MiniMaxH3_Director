@@ -47,11 +47,13 @@ from .plan import (
     reinforce_r2v_prompt,
     reinforce_rv2v_prompt,
     reinforce_v2v_prompt,
+    resolve_lora_trigger_words,
 )
 from .progress import report_director_finish, report_director_progress, report_director_segment_preview
 from .h3_motion_context import (
     DEFAULT_AUDIO_CONTEXT_FRAMES,
     apply_motion_context,
+    continuity_export_len,
     generation_frame_budget,
     handoff_end_frame,
     snap_context_frames,
@@ -732,7 +734,7 @@ def execute_director_plan_core(
 
         positive_prompt = apply_lora_trigger_to_prompt(
             positive_prompt,
-            getattr(plan, "lora_trigger_words", ""),
+            resolve_lora_trigger_words(plan, seg.task_key),
             task_key=seg.task_key,
         )
 
@@ -1147,10 +1149,13 @@ def execute_director_plan_core(
         if first_pass_gpu is not None and upscale_frames is None:
             del first_pass_gpu
             first_pass_gpu = None
-        export_len = (
-            int(target_len)
-            if seg.task_key in {"v2v", "rv2v"} and seg.source_clip is not None
-            else int(num_frames)
+        export_len = continuity_export_len(
+            task_key=seg.task_key,
+            trim_frames=trim_frames,
+            sample_len=sample_len,
+            visible_frames=num_frames,
+            target_len=target_len,
+            keep_tail=bool(getattr(plan, "continuity_keep_tail", False)),
         )
         if not skip_first_sample:
             save_first_pass_cache(
@@ -1258,10 +1263,13 @@ def execute_director_plan_core(
         # Generated tasks keep the official 17k+5 sample length. Video-edit
         # tasks still sample on that grid, but export the exact selected source
         # range so no aligned tail leaks past the user's trim handles.
-        export_len = (
-            int(target_len)
-            if seg.task_key in {"v2v", "rv2v"} and seg.source_clip is not None
-            else int(num_frames)
+        export_len = continuity_export_len(
+            task_key=seg.task_key,
+            trim_frames=trim_frames,
+            sample_len=sample_len,
+            visible_frames=num_frames,
+            target_len=target_len,
+            keep_tail=bool(getattr(plan, "continuity_keep_tail", False)),
         )
         decoded, audio_dict = _trim_decoded_to_export(
             decoded,

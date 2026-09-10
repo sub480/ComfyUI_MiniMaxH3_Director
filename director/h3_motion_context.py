@@ -606,6 +606,23 @@ def generation_frame_budget(visible_frames: int, context_frames: int) -> tuple[i
     return sample, ctx
 
 
+def continuity_export_len(
+    *,
+    task_key: str,
+    trim_frames: int,
+    sample_len: int,
+    visible_frames: int,
+    target_len: int,
+    keep_tail: bool,
+) -> int:
+    """Return the post-trim export length without extending source-video edits."""
+    if int(trim_frames) <= 0:
+        return int(target_len)
+    if keep_tail and str(task_key) not in {"v2v", "rv2v"}:
+        return max(1, int(sample_len) - int(trim_frames))
+    return int(target_len) if str(task_key) in {"v2v", "rv2v"} else int(visible_frames)
+
+
 def handoff_end_frame(*, trim_frames: int, export_frames: int) -> int:
     """Sample-timeline pixel index where the exported segment ends (exclusive)."""
     return max(0, int(trim_frames)) + max(0, int(export_frames))

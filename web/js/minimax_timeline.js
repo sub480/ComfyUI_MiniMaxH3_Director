@@ -140,7 +140,7 @@ import {
     taskDisplayLabel,
     toggleLocale,
 } from "./minimax_i18n.js";
-import { bindSnapshotActions } from "./minimax_snapshots.js";
+import { bindSnapshotActions, bindSnapshotSelector } from "./minimax_snapshots.js";
 
 const RULER_H = 24;
 const SEG_LABEL_H = 20;
@@ -228,6 +228,12 @@ function snapContinuityRedraw(raw) {
     return Math.round(Math.min(0.95, Math.max(0.4, value)) * 100) / 100;
 }
 
+function isContinuityKeepTail(output) {
+    const raw = output?.continuityKeepTail ?? output?.continuity_keep_tail;
+    if (raw === true || raw === 1) return true;
+    return typeof raw === "string" && ["true", "1", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
 function isVideoEditTaskKey(taskKey) {
     return taskKey === "v2v" || taskKey === "rv2v";
 }
@@ -255,6 +261,7 @@ function normalizeOutputContinuity(output = {}) {
         continuityOverlapFrames: snapContinuityFrames(rawOverlap),
         continuityMode: normalizeContinuityMode(output.continuityMode),
         continuityRedraw: snapContinuityRedraw(output.continuityRedraw),
+        continuityKeepTail: isContinuityKeepTail(output),
         audioMode: normalizeAudioMode(output.audioMode),
         refImageSize: normalizeRefImageSize(output.refImageSize),
     };
@@ -488,6 +495,7 @@ const HIDDEN_WIDGETS = [
     "task_type", "global_prompt", "frame_rate", "cfg",
     "export_source_images",
     "lora_trigger_words",
+    "lora_trigger_words_r2v",
     "bd_grp_sample",
     "seed",
     "control_after_generate",
@@ -961,7 +969,7 @@ const STYLES = `
  .bd-wrap{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e0e0e0;font-size:11px;display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box;position:relative;min-height:0;height:100%;flex:1 1 auto;overflow:hidden}
  .bd-snapshot-modal{position:fixed;inset:0;background:#0009;z-index:10000;display:flex;align-items:center;justify-content:center;padding:18px}
  .bd-snapshot-modal.hidden{display:none}.bd-snapshot-box{width:min(860px,96vw);height:min(620px,90vh);background:#20252b;border:1px solid #59616b;border-radius:8px;box-shadow:0 12px 50px #000b;display:flex;flex-direction:column;color:#e8edf2}
- .bd-snapshot-box header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #414951;font-size:14px}.bd-snapshot-body{display:grid;grid-template-columns:280px 1fr;min-height:0;flex:1}.bd-snapshot-body aside,.bd-snapshot-body section{padding:12px;min-width:0}.bd-snapshot-body aside{border-right:1px solid #414951;display:flex;flex-direction:column;gap:10px}.bd-snapshot-count{color:#aeb8c2}.bd-snapshot-list{overflow:auto;display:flex;flex-direction:column;gap:5px}.bd-snapshot-item{white-space:pre-line;text-align:left;background:#2b3239;color:#dfe7ed;border:1px solid #46515b;border-radius:4px;padding:8px;cursor:pointer}.bd-snapshot-item.active{border-color:#4fff8f;background:#35443c}.bd-snapshot-name{cursor:text}.bd-snapshot-name-input{width:100%;box-sizing:border-box;background:#171b1f;color:#fff;border:1px solid #4fff8f;border-radius:3px;padding:3px}.bd-snapshot-body section{display:flex;flex-direction:column;gap:12px}.bd-snapshot-detail{white-space:pre-wrap;overflow:auto;line-height:1.65;background:#171b1f;border-radius:5px;padding:12px;flex:1}.bd-snapshot-actions{display:flex;flex-wrap:wrap;gap:6px}
+ .bd-snapshot-box header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #414951;font-size:14px}.bd-snapshot-body{display:grid;grid-template-columns:280px 1fr;min-height:0;overflow:hidden;flex:1}.bd-snapshot-body aside,.bd-snapshot-body section{padding:12px;min-width:0;min-height:0}.bd-snapshot-body aside{border-right:1px solid #414951;display:flex;flex-direction:column;gap:10px;overflow:hidden}.bd-snapshot-count{color:#aeb8c2;flex:0 0 auto}.bd-snapshot-list{overflow-y:auto;overflow-x:hidden;display:flex;flex:1 1 0;min-height:0;flex-direction:column;gap:5px;scrollbar-gutter:stable}.bd-snapshot-item{flex:0 0 auto;white-space:pre-line;text-align:left;background:#2b3239;color:#dfe7ed;border:1px solid #46515b;border-radius:4px;padding:8px;cursor:pointer}.bd-snapshot-item.active{border-color:#4fff8f;background:#35443c}.bd-snapshot-name{cursor:text}.bd-snapshot-name-input{width:100%;box-sizing:border-box;background:#171b1f;color:#fff;border:1px solid #4fff8f;border-radius:3px;padding:3px}.bd-snapshot-body section{display:flex;flex-direction:column;gap:12px}.bd-snapshot-detail{white-space:pre-wrap;overflow:auto;line-height:1.65;background:#171b1f;border-radius:5px;padding:12px;flex:1}.bd-snapshot-actions{display:flex;flex-wrap:wrap;gap:6px}
  .bd-snapshot-confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;background:#302a20;border:1px solid #80652d;border-radius:4px}.bd-snapshot-confirm::first-line{flex:1}
  @media(max-width:600px){.bd-snapshot-body{grid-template-columns:1fr}.bd-snapshot-body aside{border-right:0;border-bottom:1px solid #414951;max-height:42%}}
 .bd-wrap.bd-batch-fill{height:100%!important;min-height:0!important;max-height:100%;flex:1 1 0;overflow:hidden}
@@ -1714,7 +1722,8 @@ function hookTaskTypeWidget(node) {
     tw.callback = function (...args) {
         const r = orig?.apply(this, args);
         const ed = node._minimaxEditor;
-        if (ed?.globalTask) ed.globalTask.value = tw.value;
+        if (ed?._snapshotSelector) ed._snapshotSelector.render();
+        else if (ed?.globalTask) ed.globalTask.value = tw.value;
         ed?.onTaskTypeChanged?.(tw.value);
         return r;
     };
@@ -2390,6 +2399,7 @@ class MiniMaxH3DirectorEditor {
         this._observeViewportResize();
         this.syncExternalGroupsTimeline();
         this.scheduleSettleRender();
+        this.refreshDirectorPromptSyncButton();
         for (const w of node.widgets || []) {
             if (HIDDEN_WIDGETS.includes(w.name)) hideWidget(w);
         }
@@ -2398,6 +2408,81 @@ class MiniMaxH3DirectorEditor {
     _inputLinkConnected(name) {
         const inp = this.node?.inputs?.find((i) => i?.name === name);
         return inp != null && inp.link != null;
+    }
+
+    _linkedStringValue(inputName) {
+        const input = this.node?.inputs?.find((item) => item?.name === inputName);
+        let linkId = input?.link;
+        const seen = new Set();
+        while (linkId != null && !seen.has(linkId)) {
+            seen.add(linkId);
+            const link = this.node?.graph?.links?.[linkId];
+            const originId = link?.origin_id ?? link?.[1];
+            const origin = this.node?.graph?.getNodeById?.(originId);
+            if (!origin) return "";
+            const preferred = ["value", "text", "string", "prompt", "director_prompt"];
+            for (const name of preferred) {
+                const widget = origin.widgets?.find((item) => String(item?.name || "").toLowerCase() === name);
+                if (typeof widget?.value === "string" && widget.value.trim()) return widget.value;
+            }
+            for (const widget of origin.widgets || []) {
+                if (typeof widget?.value === "string" && widget.value.trim()) return widget.value;
+            }
+            const linkedInputs = (origin.inputs || []).filter((item) => item?.link != null);
+            if (linkedInputs.length !== 1) return "";
+            linkId = linkedInputs[0].link;
+        }
+        return "";
+    }
+
+    refreshDirectorPromptSyncButton() {
+        const button = this.root?.querySelector?.('[data-a="prompt-sync"]');
+        if (!button || button.dataset.busy === "true") return;
+        button.disabled = !this._inputLinkConnected("director_prompt");
+    }
+
+    async syncDirectorPrompt() {
+        const button = this.root?.querySelector?.('[data-a="prompt-sync"]');
+        if (!this._inputLinkConnected("director_prompt")) {
+            await this.showBdMessage(t("promptSync.title"), t("promptSync.needConnection"));
+            return;
+        }
+        const directorPrompt = this._linkedStringValue("director_prompt");
+        if (!directorPrompt.trim()) {
+            await this.showBdMessage(t("promptSync.title"), t("promptSync.empty"));
+            return;
+        }
+        this.flushTimelineSync();
+        if (button) {
+            button.dataset.busy = "true";
+            button.disabled = true;
+        }
+        try {
+            const response = await api.fetchApi("/minimax/director/prompt_to_timeline", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    director_prompt: directorPrompt,
+                    timeline_data: this.timelineWidget?.value || "",
+                    width: this.widthWidget?.value || 864,
+                    height: this.heightWidget?.value || 480,
+                    ref_max_size: this.refMaxWidget?.value || 864,
+                }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data?.timeline) {
+                throw new Error(data?.error || `${response.status} ${response.statusText}`);
+            }
+            this.applyImportedTimeline(data.timeline);
+        } catch (error) {
+            await this.showBdMessage(
+                t("promptSync.title"),
+                t("promptSync.failed", { err: error?.message || error }),
+            );
+        } finally {
+            if (button) button.dataset.busy = "false";
+            this.refreshDirectorPromptSyncButton();
+        }
     }
 
     hasExternalI2vGroups() {
@@ -3040,7 +3125,7 @@ class MiniMaxH3DirectorEditor {
                         <button type="button" data-a="mode-global" class="active" data-i18n="toolbar.modeGlobal">全局模式</button>
                         <button type="button" data-a="mode-segment" data-i18n="toolbar.modeSegment">分段模式</button>
                     </div>
-                    <select class="bd-select" data-r="global-task" title="task_type"></select>
+                    <select class="bd-select" data-r="global-task" data-i18n-title="tooltip.snapshotSelector"></select>
                     <span class="bd-video-tag" data-r="video-name" data-i18n="toolbar.noVideo">未上传视频</span>
                 </div>
                 <div class="bd-right">
@@ -3049,6 +3134,7 @@ class MiniMaxH3DirectorEditor {
                         <input type="range" class="bd-tl-zoom-slider hidden" data-r="zoom" min="1" max="10" step="any" value="1" data-i18n-title="tooltip.timelineZoom">
                     </div>
                      <button type="button" class="bd-btn" data-a="snapshots" data-i18n="toolbar.snapshots" data-i18n-title="tooltip.snapshots">快照</button>
+                    <button type="button" class="bd-btn" data-a="prompt-sync" data-i18n="toolbar.promptSync" data-i18n-title="tooltip.promptSync" disabled>同步</button>
                     <button type="button" class="bd-btn" data-a="lang-toggle" data-i18n="toolbar.langToggle" data-i18n-title="toolbar.langToggleTitle">EN</button>
                     <div class="bd-bounds" data-r="bounds">起点: 0.00 | 终点: -</div>
                     <div class="bd-timecode" data-r="timecode">0.00s</div>
@@ -3206,6 +3292,10 @@ class MiniMaxH3DirectorEditor {
             <label class="bd-refine-field hidden" data-r="segment-continuity-redraw-wrap" hidden>
                 <span data-i18n="output.continuityRedraw">重绘幅度</span>
                 <input type="number" class="bd-num" data-r="segment-continuity-redraw" min="0.40" max="0.95" step="0.05" value="0.65">
+            </label>
+            <label class="bd-refine-field row" data-i18n-title="tooltip.continuityKeepTail">
+                <input type="checkbox" data-r="segment-continuity-keep-tail">
+                <span data-i18n="output.continuityKeepTail">保完整</span>
             </label>`;
         outputBar.after(continuityPanel);
         continuityPanel.addEventListener("keydown", (e) => e.stopPropagation());
@@ -3529,6 +3619,7 @@ class MiniMaxH3DirectorEditor {
         this.segmentContinuityMode = this.root.querySelector('[data-r="segment-continuity-mode"]');
         this.segmentContinuityRedrawWrap = this.root.querySelector('[data-r="segment-continuity-redraw-wrap"]');
         this.segmentContinuityRedraw = this.root.querySelector('[data-r="segment-continuity-redraw"]');
+        this.segmentContinuityKeepTail = this.root.querySelector('[data-r="segment-continuity-keep-tail"]');
         this.outPreview = this.root.querySelector('[data-r="out-preview"]');
         this.runIoEl = this.root.querySelector('[data-r="run-io"]');
         this.livePreviewSpeedWrap = this.root.querySelector('[data-r="live-preview-speed-wrap"]');
@@ -3589,6 +3680,7 @@ class MiniMaxH3DirectorEditor {
             if (!this.openSnapshots) this.openSnapshots = bindSnapshotActions(this);
             void this.openSnapshots();
         });
+        bind('[data-a="prompt-sync"]', () => { void this.syncDirectorPrompt(); });
         bind('[data-a="play"]', () => this.togglePlay());
         bind('[data-a="loop"]', () => this.toggleLoop());
         bind('[data-a="segment-continuity-panel"]', () => this.toggleSegmentContinuityPanel());
@@ -3731,7 +3823,7 @@ class MiniMaxH3DirectorEditor {
             };
         }
         if (this.globalTask) {
-            this.globalTask.onchange = () => this.onGlobalField("taskType", this.globalTask.value);
+            this._snapshotSelector = bindSnapshotSelector(this);
         }
         if (this.globalPrompt) {
             this.globalPrompt.oninput = () => this.onGlobalField("prompt", this.globalPrompt.value);
@@ -3838,6 +3930,11 @@ class MiniMaxH3DirectorEditor {
                 "continuityRedraw", snapContinuityRedraw(this.segmentContinuityRedraw.value),
             );
             this.segmentContinuityRedraw.addEventListener("keydown", (event) => event.stopPropagation());
+        }
+        if (this.segmentContinuityKeepTail) {
+            this.segmentContinuityKeepTail.onchange = () => this.onOutputField(
+                "continuityKeepTail", this.segmentContinuityKeepTail.checked,
+            );
         }
         if (this.segContinuityFromPrevCb) {
             this.segContinuityFromPrevCb.onchange = () => {
@@ -4061,6 +4158,8 @@ class MiniMaxH3DirectorEditor {
         this._closeBdModal();
         this._snapshotCleanup?.();
         this._snapshotCleanup = null;
+        this._snapshotSelector?.destroy?.();
+        this._snapshotSelector = null;
         teardownPromptImageMentions(this.root);
         this._clearPreviewVideos(true);
         this._previewVideos?.clear();
@@ -4104,7 +4203,8 @@ class MiniMaxH3DirectorEditor {
         if (this.fl2vUi?.shotsEl) this.fl2vUi.shotsEl.innerHTML = "";
         const taskType = widgets.task_type || widgets.taskType || data.global?.taskType || "";
         if (this.taskTypeWidget && taskType) this.taskTypeWidget.value = taskType;
-        if (this.globalTask && taskType) this.globalTask.value = taskType;
+        if (this._snapshotSelector) this._snapshotSelector.render();
+        else if (this.globalTask && taskType) this.globalTask.value = taskType;
         for (const name of ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed"]) {
             if (widgets[name] == null || widgets[name] === "") continue;
             const w = this.widget(name);
@@ -4156,6 +4256,7 @@ class MiniMaxH3DirectorEditor {
         snapshotDirectorSampleWidgets(this.node, { force: true, includeHidden: true });
         this._externalGroupsSyncSig = null;
         this.syncExternalGroupsTimeline?.();
+        if (!this._snapshotApplying) this._snapshotSelector?.resetCurrent?.();
         this.scheduleSettleRender?.();
         this.updateDomWidgetHeight?.();
     }
@@ -6236,6 +6337,10 @@ class MiniMaxH3DirectorEditor {
 
     populateTaskSelect(el, selected) {
         if (!el) return;
+        if (this._snapshotSelector) {
+            this._snapshotSelector.render();
+            return;
+        }
         const opts = this.taskTypeWidget?.options?.values || [];
         const prev = selected || el.value;
         el.innerHTML = "";
@@ -6409,6 +6514,9 @@ class MiniMaxH3DirectorEditor {
         if (this.segmentContinuityRedraw) {
             this.segmentContinuityRedraw.value = String(snapContinuityRedraw(out.continuityRedraw));
         }
+        if (this.segmentContinuityKeepTail) {
+            this.segmentContinuityKeepTail.checked = isContinuityKeepTail(out);
+        }
         this.syncFrameRateUI(this.timeline.frameRate);
         this.updateOutputModeUI();
         this.updateSegmentContinuityUI();
@@ -6472,6 +6580,11 @@ class MiniMaxH3DirectorEditor {
             this.segmentContinuityRedraw.value = String(redraw);
             this.timeline.output.continuityRedraw = redraw;
         }
+        if (this.segmentContinuityKeepTail && this.timeline?.output) {
+            const keepTail = isContinuityKeepTail(this.timeline.output);
+            this.segmentContinuityKeepTail.checked = keepTail;
+            this.timeline.output.continuityKeepTail = keepTail;
+        }
         this.syncSegmentContinuityFromPrevUI();
         this.syncSegmentRefImageSizeUI();
     }
@@ -6482,7 +6595,7 @@ class MiniMaxH3DirectorEditor {
         closePassPanels(this, next ? "continuity" : "");
         this._mmxContinuityPanelOpen = next;
         this.updateSegmentContinuityUI();
-        this.updateDomWidgetHeight?.();
+        this.resizeNodeForContentMinChange();
     }
 
     /** Per-segment「引用上段」on v2v/rv2v segment panel (index>0 + master on). */
@@ -6890,6 +7003,8 @@ class MiniMaxH3DirectorEditor {
             this.timeline.output.continuityMode = normalizeContinuityMode(value);
         } else if (key === "continuityRedraw") {
             this.timeline.output.continuityRedraw = snapContinuityRedraw(value);
+        } else if (key === "continuityKeepTail") {
+            this.timeline.output.continuityKeepTail = !!value;
         }
         this.syncOutputUIFromTimeline();
         if (this.isFl2vMode()) updateFl2vDetailUI(this);
@@ -10897,7 +11012,8 @@ class MiniMaxH3DirectorEditor {
 
     updateSelectionUI() {
         this.timeline.global = this.timeline.global || { taskType: "", prompt: "", refs: [] };
-        if (this.globalTask) this.globalTask.value = this.timeline.global.taskType || "";
+        if (this._snapshotSelector) this._snapshotSelector.render();
+        else if (this.globalTask) this.globalTask.value = this.timeline.global.taskType || "";
         if (this.globalPrompt) this.globalPrompt.value = this.timeline.global.prompt || "";
         this.syncNegativeFromWidget();
         updateFl2vToolbarBtns(this);
@@ -11484,7 +11600,8 @@ class MiniMaxH3DirectorEditor {
             const prevTaskKey = this._taskKey || resolveTaskKey(this.timeline.global?.taskType || "");
             this.timeline.global[field] = value;
             const prevMode = this._directorMode || "video";
-            if (this.globalTask && this.globalTask.value !== value) this.globalTask.value = value;
+            if (this._snapshotSelector) this._snapshotSelector.render();
+            else if (this.globalTask && this.globalTask.value !== value) this.globalTask.value = value;
             if (this.taskTypeWidget) this.taskTypeWidget.value = value;
             if (prevTaskKey === "ads2v" && resolveTaskKey(value) !== "ads2v") {
                 this._stopRefVideoPreviews();
@@ -11611,7 +11728,7 @@ class MiniMaxH3DirectorEditor {
         closePassPanels(this, next ? "preview" : "");
         this._mmxPreviewPanelOpen = next;
         this.previewPanelEl?.classList.toggle("hidden", !next);
-        this.updateDomWidgetHeight?.();
+        this.resizeNodeForContentMinChange();
     }
 
     setLiveTaePreview(on) {
@@ -13165,6 +13282,7 @@ app.registerExtension({
             lockDirectorSigmasInput(this);
             const out = onConnectionsChange?.apply(this, args);
             this._minimaxEditor?.syncExternalGroupsTimeline?.();
+            this._minimaxEditor?.refreshDirectorPromptSyncButton?.();
             if (this._mmxPendingConfigureRestore) {
                 syncDirectorSchedulerWidgets(this, { restore: false });
             } else {

@@ -645,7 +645,11 @@ async def minimax_first_pass_cache_status(request):
     if isinstance(timeline_data, dict):
         timeline_data = json.dumps(timeline_data, ensure_ascii=False)
     try:
-        from .plan import apply_lora_trigger_words, build_director_plan
+        from .plan import (
+            apply_lora_trigger_words,
+            apply_lora_trigger_words_r2v,
+            build_director_plan,
+        )
         from .segment_cache import inspect_first_pass_cache
 
         plan = build_director_plan(
@@ -660,6 +664,7 @@ async def minimax_first_pass_cache_status(request):
             load_media=False,
         )
         plan = apply_lora_trigger_words(plan, body.get("lora_trigger_words"))
+        plan = apply_lora_trigger_words_r2v(plan, body.get("lora_trigger_words_r2v"))
         plan.sample_seed = int(body.get("seed") or 0)
         plan.sample_cfg = float(body.get("cfg") or 1.0)
         plan.sample_steps = int(body.get("steps") or 25)
@@ -677,6 +682,33 @@ async def minimax_first_pass_cache_status(request):
             {"exists": False, "matches": False, "error": str(exc)},
             status=400,
         )
+
+
+async def minimax_prompt_to_timeline(request):
+    """Convert prompt-agent JSON to timeline data without starting execution."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        return web.Response(status=400, text=f"Invalid JSON: {exc}")
+
+    try:
+        from .prompt_contract import director_prompt_to_timeline
+
+        timeline_json = director_prompt_to_timeline(
+            str(body.get("director_prompt") or ""),
+            base_timeline_data=json.dumps(
+                body.get("timeline_data") or {}, ensure_ascii=False
+            )
+            if isinstance(body.get("timeline_data"), dict)
+            else str(body.get("timeline_data") or ""),
+            default_width=int(body.get("width") or 864),
+            default_height=int(body.get("height") or 480),
+            default_ref_max_size=int(body.get("ref_max_size") or 864),
+        )
+        return web.json_response({"timeline": json.loads(timeline_json)})
+    except Exception as exc:
+        log.warning("MiniMax H3 Director prompt sync failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=400)
 
 
 async def minimax_clear_segment_cache(request):
@@ -764,6 +796,12 @@ def register_routes() -> bool:
         "POST",
         "/minimax/director/first_pass_cache_status",
         minimax_first_pass_cache_status,
+    )
+    _register_route(
+        routes,
+        "POST",
+        "/minimax/director/prompt_to_timeline",
+        minimax_prompt_to_timeline,
     )
     _register_route(
         routes,

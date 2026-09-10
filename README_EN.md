@@ -17,6 +17,10 @@ New `task_type=mixed`. After adding a group, each group can switch type (`t2v` /
 
 `fl2v` groups accept start-only, end-only, both, or neither (text-to-video). Filling one end does **not** copy that picture onto the other.
 
+### Director Prompt sync
+
+Optional `director_prompt` accepts `minimax-h3-director-prompt/v1` JSON (for example from h3-director-export) and lays out per-group task type, duration, prompt, pass mode, and continuity. Toolbar **Sync** reads the upstream STRING and refreshes Director groups. Unwired, the existing timeline is used as-is; when wired, media slots on same-index groups are kept. Each group duration must be an integer from 4 to 15 seconds and is aligned to the MiniMax `17k+5` grid.
+
 ### Source-video edit (v2v / rv2v)
 
 - Each group’s source timeline can select a range; after upload, restore, split, or dragging the range, the frame count is **floored** to the MiniMax `17k+5` grid (extra tail frames are cropped, never padded). Ranges shorter than 5 frames are invalid
@@ -28,7 +32,8 @@ New `task_type=mixed`. After adding a group, each group can switch type (`t2v` /
 
 - Video groups / `fl2v` / mixed mode default to 5 seconds per group, normalized at locked 24 fps to the MiniMax `17k+5` grid (usually 124 frames); duration can be changed per card
 - First pass defaults to `seed=42` and 8 steps; the default canvas is 0.4MP, 16:9 (864×480)
-- In the Director UI, new or missing timeline fields default to segment continuity on (22 frames, **Guide + redraw**, redraw strength 0.65), preview on (speed 0.25), and all-card mode; frame rate is fixed at 24 fps
+- In the Director UI, new or missing timeline fields default to segment continuity on (22 frames, **Guide + redraw**, redraw strength 0.65, **Protect ending** off), preview on (speed 0.25), and all-card mode; frame rate is fixed at 24 fps
+- Continuity can enable **Protect ending**: applies only to `t2v` / `i2v` / `fl2v` / `r2v`, keeping the aligned tail remainder so actions or dialogue are less likely to be cut off; output may be slightly longer than the timeline. `v2v` / `rv2v` always export the exact source range
 - Built-in second pass is enabled by default; `fl2v` is not skipped by default. Enable **Skip fl2v** when keyframes must be protected
 
 ### r2v groups and asset slots
@@ -47,12 +52,12 @@ Director has in-node second pass; an external Refine node is no longer required.
 - Run status shows first- and second-pass canvas plus tiling (e.g. `1st 864×480 · 24fps` / `2nd 1280×720 · upscale · h3_latent`)
 - Modes are still `refine` (same-resolution), `upscale` (enlarge then sample), `latent_upscale` (H3 latent enlarge only)
 - Built-in defaults: `euler` + `simple`, 3 steps, denoise **0.35**; optional low-sigma extra steps (default +1, cosine, start sigma 0.70)
-- Optional ports: `refine_model` (second-pass UNET), `upscale_model` (`upscale` + `lanczos` only), `refine_sigmas` (overrides steps / scheduler / denoise / extra steps when wired)
-- **MiniMax H3 Director Refine** still works: a wired pack overrides the in-node widgets (old workflows unchanged)
+- Optional ports: `refine_model` (second-pass UNET), `refine_model_r2v` (`r2v` / `v2v` / `rv2v` only; preferred over `refine_model` when wired, otherwise falls back to `refine_model` then that segment’s first-pass model), `upscale_model` (`upscale` + `lanczos` only), `refine_sigmas` (overrides steps / scheduler / denoise / extra steps when wired)
+- **MiniMax H3 Director Refine** still works: a wired pack overrides the in-node widgets (old workflows unchanged). The Refine node also accepts `refine_model_r2v`
 
 ### LoRA trigger words
 
-Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (including that group’s prompt and trigger words). First-pass cache fingerprints include the trigger; older caches that baked it into `prompt` still match.
+Optional `lora_trigger_words` input can be fed by common LoRA nodes. For `r2v` it is appended as a trailing `style_tags:` block so the model does not speak the token at the start of the clip; other tasks still prepend it (e.g. `mh3turbo, <user prompt>`). Optional `lora_trigger_words_r2v` is for `r2v` / `v2v` / `rv2v` only: when wired it overrides `lora_trigger_words`, otherwise it falls back. The group preview column can switch **Sample preview** / **Prompt preview**; the latter shows the full text sent to sampling (including that group’s prompt and trigger words). First-pass cache fingerprints include the task-resolved trigger; older caches that baked it into `prompt` still match.
 
 ### Per-group first / second pass
 
@@ -91,7 +96,7 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 
 - Audio output (generate / source / mute) is shown by task type: `v2v` / `rv2v` and matching mixed-mode groups can keep source audio
 - Mixed-mode `v2v` / `rv2v` groups take source audio from that group’s local source video, not the global timeline
-- Source-audio length follows the emitted picture (including after continuity trim)
+- Source-audio length follows the emitted picture (including after continuity trim); with **Protect ending** on, generated segments may be slightly longer than the timeline, and source audio still follows the picture
 - Audio export is forced onto the 24 fps grid
 - Prompt text-box fill is more stable
 
@@ -102,10 +107,12 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 - Tail-frame continuity handoff fix; end-only fl2v no longer locks the same picture as the first frame
 - New widgets are saved by name so old graphs keep widget values after the Second pass group is inserted
 - Between-segment VRAM clear is always on (the old toggle is gone)
+- ffmpeg encode writes stdin once via `communicate(input=)`, avoiding a Linux flush-after-close failure that aborted export
 
 ### Cache and status checks
 
 - First-pass cache fingerprints include only image / video / audio slots actually referenced by `<Picture N>`, `<Video K>`, or `<Audio J>`; changing an unused slot does not invalidate the group
+- With segment continuity on, the fingerprint includes `continuity_keep_tail`; `r2v` / `v2v` / `rv2v` use wired `lora_trigger_words_r2v` (falling back to `lora_trigger_words`)
 - Source videos are identified by path, file size, and modification time; replacing a source file prevents the old cache from being reused as output
 - Cache-status queries read asset identities without decoding reference images or source video again, so refreshing card status does not compete for VRAM
 - Reference images reuse decoded tensors by file identity; cache read/write failures only disable caching and never abort normal sampling
@@ -117,6 +124,7 @@ Audio is not split; matching I2V/FL2V keyframes are cropped per tile. Every samp
 ### Director snapshots
 
 - Toolbar **Snapshots** opens the manager on demand; save the current timeline, media, and primary first-pass sampling settings, with filename, timestamp, and size shown in the list
+- The mixed-mode task dropdown can switch between the current mixed workspace and saved snapshots; switching to a snapshot caches the workspace first, switching back restores it. The snapshot list scrolls independently
 - Snapshots are stored under `output/H3_D/snapshots/`; downloads use the fixed `*.mmxsnapshot.zip` suffix
 - Restore, rename, duplicate, and delete are supported; restore replaces the current configuration after confirmation, while delete moves the file to the OS recycle bin
 - Import accepts any filename ending in `.zip`; `.mmxsnapshot.zip` is not required, but the contents must be a valid current Director pack

@@ -605,7 +605,7 @@ def apply_segment_refine(
 
     mode = pack.get("mode") or "refine"
     n_passes = refine_passes_for(pack)
-    refine_model = refine_model_for(pack, model)
+    refine_model = refine_model_for(pack, model, getattr(seg, "task_key", ""))
     note_parts = [mode]
     if mode != "latent_upscale":
         if n_passes > 1:

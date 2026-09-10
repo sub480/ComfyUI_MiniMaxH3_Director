@@ -23,7 +23,7 @@ from .h3_motion_context import (
     trim_context_prefix,
     trim_export_tail,
 )
-from .plan import DirectorPlan, SegmentPlan, resolve_ref_image_size
+from .plan import DirectorPlan, SegmentPlan, resolve_lora_trigger_words, resolve_ref_image_size
 from .output_layout import SEGMENT_CACHE_DIR_NAME, h3_output_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.cache")
@@ -176,12 +176,12 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
     else:
         continuity_pipeline = CONTINUITY_PIPELINE_ID
         continuity_redraw = 0
-    return {
+    payload = {
         "index": seg.index,
         "start": seg.start_frame,
         "end": seg.end_frame,
         "prompt": seg.prompt,
-        "lora_trigger_words": str(getattr(plan, "lora_trigger_words", "") or "").strip(),
+        "lora_trigger_words": resolve_lora_trigger_words(plan, seg.task_key),
         "negative": seg.negative_prompt,
         "task_key": seg.task_key,
         "width": plan.width,
@@ -209,6 +209,11 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         "continuity_redraw": continuity_redraw,
         "continuity_pipeline": continuity_pipeline,
     }
+    if uses_mc:
+        payload["continuity_keep_tail"] = bool(
+            getattr(plan, "continuity_keep_tail", False)
+        )
+    return payload
 
 
 def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:

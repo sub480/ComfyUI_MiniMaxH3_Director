@@ -434,6 +434,7 @@ def pack_refine(
     skip_fl2v: bool = False,
     upscale_method: str = "h3_latent",
     sample_model=None,
+    sample_model_r2v=None,
     latent_upscale_model=None,
     upscale_model=None,
     sampler: str = "",
@@ -492,6 +493,8 @@ def pack_refine(
         "has_upscale_model": upscale_model is not None,
         "sample_model": sample_model,
         "has_sample_model": sample_model is not None,
+        "sample_model_r2v": sample_model_r2v,
+        "has_sample_model_r2v": sample_model_r2v is not None,
         "latent_upscale_ref": latent_upscale_model,
         "latent_upscale_module": latent_mod,
         "latent_upscale_model": latent_name,
@@ -531,6 +534,7 @@ def pack_director_builtin_refine(
     *,
     enabled=False,
     refine_model=None,
+    refine_model_r2v=None,
     upscale_model=None,
     refine_sigmas=None,
     **widgets,
@@ -566,6 +570,7 @@ def pack_director_builtin_refine(
         tile_enabled=tile_on,
         upscale_method=widgets.get("refine_upscale_method") or "h3_latent",
         sample_model=refine_model,
+        sample_model_r2v=refine_model_r2v,
         latent_upscale_model=widgets.get("refine_latent_upscale_model"),
         upscale_model=upscale_model,
         sampler=widgets.get("refine_sampler") or DEFAULT_REFINE_SIGMA_SAMPLER,
@@ -633,6 +638,7 @@ def normalize_refine_pack(
     sample_model = raw.get("sample_model")
     if sample_model is None:
         sample_model = raw.get("model")
+    sample_model_r2v = raw.get("sample_model_r2v")
     latent_raw = raw.get("latent_upscale_ref")
     if latent_raw is None:
         latent_raw = raw.get("latent_upscale_model")
@@ -655,6 +661,8 @@ def normalize_refine_pack(
         "has_upscale_model": upscale is not None,
         "sample_model": sample_model,
         "has_sample_model": sample_model is not None,
+        "sample_model_r2v": sample_model_r2v,
+        "has_sample_model_r2v": sample_model_r2v is not None,
         "latent_upscale_ref": latent_raw,
         "latent_upscale_module": latent_mod,
         "latent_upscale_model": latent_name,
@@ -706,8 +714,12 @@ def refine_passes_for(pack: dict[str, Any] | None) -> int:
     return max(1, min(MAX_REFINE_PASSES, n))
 
 
-def refine_model_for(pack: dict[str, Any] | None, fallback):
-    """Second-pass UNET. Unconnected Refine.refine_model → Director main model."""
+def refine_model_for(pack: dict[str, Any] | None, fallback, task_key: str | None = None):
+    """Resolve the second-pass UNET, including the optional r2v-family override."""
+    if str(task_key or "").lower() in {"r2v", "v2v", "rv2v"}:
+        custom_r2v = (pack or {}).get("sample_model_r2v")
+        if custom_r2v is not None:
+            return custom_r2v
     custom = (pack or {}).get("sample_model")
     if custom is None:
         custom = (pack or {}).get("model")
@@ -741,6 +753,9 @@ def refine_fingerprint(plan) -> dict[str, Any]:
         else (pack.get("sigmas") or ""),
         "refine_sigmas_wired": bool(pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None),
         "refine_sample_model": bool(pack.get("has_sample_model") or pack.get("sample_model") is not None),
+        "refine_sample_model_r2v": bool(
+            pack.get("has_sample_model_r2v") or pack.get("sample_model_r2v") is not None
+        ),
         "refine_skip_fl2v": bool(pack.get("skip_fl2v", False)),
         "refine_n_tiles": int(pack.get("n_tiles") or DEFAULT_N_TILES),
         "refine_tile_axis": pack.get("tile_axis") or "auto",
@@ -789,6 +804,8 @@ def refine_report_line(plan) -> str | None:
     model_note = (
         ", 二采模型" if (pack.get("has_sample_model") or pack.get("sample_model") is not None) else ""
     )
+    if pack.get("has_sample_model_r2v") or pack.get("sample_model_r2v") is not None:
+        model_note += ", R2V 二采模型"
     wired = bool(pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None)
     parsed = pack.get("sigmas_parsed") or ()
     sampler = pack.get("sampler") or DEFAULT_REFINE_SIGMA_SAMPLER

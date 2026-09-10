@@ -588,6 +588,7 @@ def build_fl2v_director_plan(
     raw["totalFrames"] = timeline_total
 
     from .segment_continuity import (
+        resolve_continuity_keep_tail,
         resolve_continuity_mode,
         resolve_continuity_redraw,
         resolve_continuity_settings,
@@ -623,4 +624,5 @@ def build_fl2v_director_plan(
         continuity_overlap_frames=continuity_overlap,
         continuity_mode=resolve_continuity_mode(timeline),
         continuity_redraw=resolve_continuity_redraw(timeline),
+        continuity_keep_tail=resolve_continuity_keep_tail(timeline),
     )

@@ -222,6 +222,21 @@ def apply_lora_trigger_words(plan, trigger: str | None):
     return plan
 
 
+def apply_lora_trigger_words_r2v(plan, trigger: str | None):
+    """Remember the optional r2v-family trigger override on the plan."""
+    plan.lora_trigger_words_r2v = None if trigger is None else str(trigger).strip()
+    return plan
+
+
+def resolve_lora_trigger_words(plan, task_key: str | None) -> str:
+    """Return the trigger effective for one segment, including r2v fallback."""
+    key = resolve_task_key(task_key or "")
+    r2v_trigger = getattr(plan, "lora_trigger_words_r2v", None)
+    if key in {"r2v", "v2v", "rv2v"} and r2v_trigger is not None:
+        return str(r2v_trigger).strip()
+    return str(getattr(plan, "lora_trigger_words", "") or "").strip()
+
+
 @dataclass
 class SegmentPlan:
     index: int
@@ -287,6 +302,7 @@ class DirectorPlan:
     continuity_overlap_frames: int = 0
     continuity_mode: str = "guide"
     continuity_redraw: float = 0.65
+    continuity_keep_tail: bool = False
     global_ref_audios: list[SegmentRefAudio] = field(default_factory=list)
     # Full source-video PCM reused only during this Director execution.
     audio_decode_cache: dict = field(default_factory=dict, repr=False)
@@ -302,6 +318,7 @@ class DirectorPlan:
     sample_shift_video: float = 12.0
     sample_shift_audio: float = 3.0
     lora_trigger_words: str = ""
+    lora_trigger_words_r2v: str | None = None
 
     @property
     def segment_count(self) -> int:
@@ -917,6 +934,7 @@ def build_director_plan(
         )
 
     from .segment_continuity import (
+        resolve_continuity_keep_tail,
         resolve_continuity_mode,
         resolve_continuity_redraw,
         resolve_continuity_settings,
@@ -964,6 +982,7 @@ def build_director_plan(
         continuity_overlap_frames=continuity_overlap,
         continuity_mode=resolve_continuity_mode(timeline),
         continuity_redraw=resolve_continuity_redraw(timeline),
+        continuity_keep_tail=resolve_continuity_keep_tail(timeline),
         global_ref_audios=global_ref_audios,
     )
 

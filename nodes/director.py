@@ -29,6 +29,7 @@ _DIRECTOR_LINKED_INPUTS = frozenset({
     "audio_vae",
     "clip",
     "refine_model",
+    "refine_model_r2v",
     "upscale_model",
     "sigmas",
     "refine_sigmas",
@@ -180,6 +181,16 @@ class MiniMaxH3Director:
                         ),
                     },
                 ),
+                "lora_trigger_words_r2v": (
+                    "STRING",
+                    {
+                        "forceInput": True,
+                        "tooltip": (
+                            "可选。仅供 r2v / v2v / rv2v 使用的 LoRA 触发词。"
+                            "连接时覆盖 lora_trigger_words；未连接时回退到 lora_trigger_words。"
+                        ),
+                    },
+                ),
                 "r2v_groups": (
                     "MMX_DIR_GROUP",
                     {
@@ -187,6 +198,17 @@ class MiniMaxH3Director:
                             "External Reference to Video group(s). "
                             "When connected, overrides UI cards for execution (external priority). "
                             "Connect Group (Reference to Video).group, or Groups Combine."
+                        ),
+                    },
+                ),
+                "director_prompt": (
+                    "STRING",
+                    {
+                        "forceInput": True,
+                        "tooltip": (
+                            "可选。接收 h3-director-export 输出的 "
+                            "minimax-h3-director-prompt/v1 JSON，自动编排分组。"
+                            "未连接时完全使用导演台现有时间线；连接后保留同序号组的已有素材槽位。"
                         ),
                     },
                 ),
@@ -206,6 +228,16 @@ class MiniMaxH3Director:
                         "tooltip": (
                             "可选二采 UNET。不接则用导演台主模型。"
                             "适合一采挂 Turbo LoRA、二采卸掉或换另一套。"
+                        ),
+                    },
+                ),
+                "refine_model_r2v": (
+                    "MODEL",
+                    {
+                        "tooltip": (
+                            "可选 r2v / v2v / rv2v 二采 UNET。"
+                            "连接时优先于 refine_model；未连接时回退 refine_model，"
+                            "再回退当前段的一采模型。"
                         ),
                     },
                 ),
@@ -315,6 +347,9 @@ class MiniMaxH3Director:
             got_refine_model = input_types.get("refine_model")
             if got_refine_model is not None and got_refine_model != "MODEL":
                 return f"refine_model: expected MODEL, linked node returns {got_refine_model}."
+            got_refine_model_r2v = input_types.get("refine_model_r2v")
+            if got_refine_model_r2v is not None and got_refine_model_r2v != "MODEL":
+                return f"refine_model_r2v: expected MODEL, linked node returns {got_refine_model_r2v}."
             got_refine_sigmas = input_types.get("refine_sigmas")
             if got_refine_sigmas is not None and got_refine_sigmas != "SIGMAS":
                 return f"refine_sigmas: expected SIGMAS, linked node returns {got_refine_sigmas}."
@@ -366,9 +401,12 @@ class MiniMaxH3Director:
         model_r2v=None,
         i2v_groups=None,
         r2v_groups=None,
+        director_prompt=None,
         lora_trigger_words="",
+        lora_trigger_words_r2v=None,
         refine=None,
         refine_model=None,
+        refine_model_r2v=None,
         upscale_model=None,
         refine_sigmas=None,
         sigmas=None,
@@ -387,6 +425,7 @@ class MiniMaxH3Director:
             refine = pack_director_builtin_refine(
                 enabled=kwargs.get("refine_enable", False),
                 refine_model=refine_model,
+                refine_model_r2v=refine_model_r2v,
                 upscale_model=upscale_model,
                 refine_sigmas=refine_sigmas,
                 **kwargs,
@@ -405,8 +444,10 @@ class MiniMaxH3Director:
             unique_id=unique_id,
             i2v_groups=i2v_groups,
             r2v_groups=r2v_groups,
+            director_prompt=director_prompt,
             refine=refine,
             lora_trigger_words=lora_trigger_words,
+            lora_trigger_words_r2v=lora_trigger_words_r2v,
         )
         raw = getattr(plan, "raw", None)
         if isinstance(raw, dict):

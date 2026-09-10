@@ -72,6 +72,120 @@ export function buildSnapshotTimeline(editor) {
     return timeline;
 }
 
+export function bindSnapshotSelector(editor) {
+    const select = editor.globalTask;
+    if (!select) return null;
+
+    let items = [];
+    let activeSnapshotId = null;
+    let currentWorkspace = null;
+    let busy = false;
+
+    const mixedValue = () => {
+        const options = editor.taskTypeWidget?.options?.values || [];
+        return options.find((value) => resolveTaskKey(value) === "mixed")
+            || editor.taskTypeWidget?.value
+            || "mixed";
+    };
+    const render = () => {
+        const value = mixedValue();
+        select.textContent = "";
+        const current = document.createElement("option");
+        current.value = value;
+        current.dataset.snapshotId = "";
+        current.textContent = t("task.option", { key: "mixed", label: t("task.mixed") });
+        select.appendChild(current);
+        for (const snapshot of items) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.dataset.snapshotId = snapshot.id;
+            option.textContent = `${t("toolbar.snapshots")} · ${snapshot.name}`;
+            select.appendChild(option);
+        }
+        const index = items.findIndex((snapshot) => snapshot.id === activeSnapshotId);
+        select.selectedIndex = index >= 0 ? index + 1 : 0;
+        if (editor.taskTypeWidget) editor.taskTypeWidget.value = value;
+    };
+    const setItems = (nextItems) => {
+        items = sort(Array.isArray(nextItems) ? nextItems : []);
+        if (activeSnapshotId && !items.some((item) => item.id === activeSnapshotId)) {
+            activeSnapshotId = null;
+        }
+        render();
+    };
+    const refresh = async () => {
+        const data = await request("/minimax/director/snapshots", undefined, "GET");
+        setItems(data.items);
+    };
+    const applyWorkspace = (timeline, widgets) => {
+        editor._snapshotApplying = true;
+        try {
+            editor.applyImportedTimeline(timeline, widgets || {});
+        } finally {
+            editor._snapshotApplying = false;
+        }
+    };
+    const switchSelection = async () => {
+        if (busy) return;
+        const snapshotId = select.selectedOptions?.[0]?.dataset?.snapshotId || null;
+        if (snapshotId === activeSnapshotId) return;
+        busy = true;
+        select.disabled = true;
+        try {
+            if (!snapshotId) {
+                if (currentWorkspace) {
+                    applyWorkspace(currentWorkspace.timeline, currentWorkspace.widgets);
+                }
+                activeSnapshotId = null;
+                currentWorkspace = null;
+                render();
+                return;
+            }
+            if (!activeSnapshotId) {
+                editor.flushTimelineSync?.();
+                currentWorkspace = {
+                    timeline: buildSnapshotTimeline(editor),
+                    widgets: collectSnapshotWidgets(editor),
+                };
+            }
+            const data = await request("/minimax/director/snapshots/restore", { id: snapshotId });
+            if (!data?.timeline) throw new Error(t("snapshot.restoreError"));
+            applyWorkspace(data.timeline, data.widgets || {});
+            activeSnapshotId = snapshotId;
+            render();
+        } catch (error) {
+            console.error("[MiniMax H3 Director] snapshot selector:", error);
+            render();
+            await editor.showBdMessage?.(t("snapshot.errorTitle"), String(error?.message || error));
+        } finally {
+            busy = false;
+            select.disabled = false;
+        }
+    };
+    const resetCurrent = () => {
+        activeSnapshotId = null;
+        currentWorkspace = null;
+        render();
+    };
+    const unsubscribeLocale = onLocaleChange(render);
+    select.onchange = () => { void switchSelection(); };
+    render();
+    void refresh().catch((error) => {
+        console.error("[MiniMax H3 Director] snapshot list:", error);
+    });
+
+    return {
+        render,
+        refresh,
+        resetCurrent,
+        setItems,
+        destroy() {
+            unsubscribeLocale?.();
+            if (select.onchange) select.onchange = null;
+        },
+    };
+}
+
 function timestampName(prefix = "快照") {
     const now = new Date();
     const stamp = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("")
@@ -177,6 +291,7 @@ export function bindSnapshotActions(editor) {
         items = sort(Array.isArray(data.items) ? data.items : []);
         if (!items.some((item) => item.id === selected)) selected = items[0]?.id || null;
         render();
+        editor._snapshotSelector?.setItems(items);
     };
     const renderSelection = () => {
         for (const row of listEl.querySelectorAll("[data-snapshot-id]")) {

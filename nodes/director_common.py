@@ -18,6 +18,7 @@ from ..director.frame_align import H3_FPS, pad_or_trim_frames
 from ..director.gen_timeline import is_prompt_batch_timeline, is_video_batch_task_key
 from ..director.plan import (
     apply_lora_trigger_words,
+    apply_lora_trigger_words_r2v,
     build_director_plan,
     count_all_timeline_segments,
     count_timeline_segments,
@@ -174,8 +175,10 @@ def prepare_director_plan(
     unique_id: str | None,
     i2v_groups=None,
     r2v_groups=None,
+    director_prompt=None,
     refine=None,
     lora_trigger_words=None,
+    lora_trigger_words_r2v=None,
 ):
     from ..director.external_groups import (
         build_plan_from_external_groups,
@@ -220,6 +223,7 @@ def prepare_director_plan(
         )
         plan = _attach_refine(plan, refine)
         plan = apply_lora_trigger_words(plan, lora_trigger_words)
+        plan = apply_lora_trigger_words_r2v(plan, lora_trigger_words_r2v)
         log.info(
             "MiniMax H3 Director: external %s groups × %d (task=%s) | %s",
             family,
@@ -247,6 +251,7 @@ def prepare_director_plan(
     )
     plan = _attach_refine(plan, refine)
     plan = apply_lora_trigger_words(plan, lora_trigger_words)
+    plan = apply_lora_trigger_words_r2v(plan, lora_trigger_words_r2v)
     log.info(plan_summary(plan).replace("\n", " | "))
     return plan
 
@@ -363,7 +368,12 @@ def _layout_image_batches(
         images_out = segment_outputs
         frame_count = sum(int(s.shape[0]) for s in segment_outputs)
         return images_out, frame_count
-    combined = pad_or_trim_frames(combined, plan.total_frames).cpu().float()
+    if getattr(plan, "continuity_enabled", False) and getattr(
+        plan, "continuity_keep_tail", False
+    ):
+        combined = combined.cpu().float()
+    else:
+        combined = pad_or_trim_frames(combined, plan.total_frames).cpu().float()
     return [combined], int(combined.shape[0])
 
 

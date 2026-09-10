@@ -566,6 +566,7 @@ def build_plan_from_external_groups(
     raw["editMode"] = "segment"
 
     from .segment_continuity import (
+        resolve_continuity_keep_tail,
         resolve_continuity_mode,
         resolve_continuity_redraw,
         resolve_continuity_settings,
@@ -598,5 +599,6 @@ def build_plan_from_external_groups(
         continuity_overlap_frames=continuity_overlap,
         continuity_mode=resolve_continuity_mode(timeline),
         continuity_redraw=resolve_continuity_redraw(timeline),
+        continuity_keep_tail=resolve_continuity_keep_tail(timeline),
         global_ref_audios=[],
     )

@@ -2606,12 +2606,12 @@ function readLinkedLoraTrigger(origin) {
     return "";
 }
 
-function readLoraTriggerWords(editor) {
+function readLoraTriggerWords(editor, inputName = "lora_trigger_words") {
     const node = editor?.node;
-    const w = node?.widgets?.find((item) => item?.name === "lora_trigger_words");
+    const w = node?.widgets?.find((item) => item?.name === inputName);
     const local = textFromLoraTriggerValue(w?.value);
     if (local) return local;
-    const inp = (node?.inputs || []).find((item) => item?.name === "lora_trigger_words");
+    const inp = (node?.inputs || []).find((item) => item?.name === inputName);
     const linkId = inp?.link;
     if (linkId == null) return "";
     const link = node.graph?.links?.[linkId];
@@ -2629,13 +2629,26 @@ function executedPromptTaskKey(editor, seg) {
     return globalKey;
 }
 
+function r2vLoraTriggerIsLinked(editor) {
+    const inp = (editor?.node?.inputs || []).find((item) => item?.name === "lora_trigger_words_r2v");
+    return inp?.link != null || (Array.isArray(inp?.links) && inp.links.length > 0);
+}
+
+function effectiveLoraTriggerWords(editor, seg) {
+    const taskKey = executedPromptTaskKey(editor, seg);
+    if (["r2v", "v2v", "rv2v"].includes(taskKey) && r2vLoraTriggerIsLinked(editor)) {
+        return readLoraTriggerWords(editor, "lora_trigger_words_r2v");
+    }
+    return readLoraTriggerWords(editor);
+}
+
 function loraStyleTagsBlock(trigger) {
     return `style_tags:\n${trigger}`;
 }
 
 function executedPromptText(editor, seg) {
     let body = String(seg?.prompt || "").trim();
-    const lora = readLoraTriggerWords(editor);
+    const lora = effectiveLoraTriggerWords(editor, seg);
     if (!lora) return body;
     if (executedPromptTaskKey(editor, seg) === "r2v") {
         const block = loraStyleTagsBlock(lora);
@@ -2933,6 +2946,9 @@ function passCachePayload(editor, index) {
         sigmas_linked: directorHasSigmasLink(node),
         lora_trigger_words: readLoraTriggerWords(editor),
     };
+    if (r2vLoraTriggerIsLinked(editor)) {
+        payload.lora_trigger_words_r2v = readLoraTriggerWords(editor, "lora_trigger_words_r2v");
+    }
     if (Number.isInteger(index) && index >= 0) payload.cache_index = index;
     return payload;
 }

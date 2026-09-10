@@ -388,6 +388,7 @@ const DIRECTOR_REFINE_COMFY_WIDGETS = [
     "refine_seams",
     "refine_seam_steps",
     "refine_model",
+    "refine_model_r2v",
     "upscale_model",
     "refine_sigmas",
 ];
@@ -507,7 +508,7 @@ export function mountDirectorSamplePanel(editor) {
         panel.classList.toggle("hidden", !next);
         editor.sampleCfgBtn.classList.toggle("active", next);
         if (next) syncSamplePanelFromWidgets(editor);
-        editor.updateDomWidgetHeight?.();
+        editor.resizeNodeForContentMinChange?.();
     });
     panel.addEventListener("change", (e) => {
         const el = e.target?.closest?.("[data-w]");
@@ -691,7 +692,7 @@ export function mountDirectorRefinePanel(editor) {
         closePassPanels(editor, next ? "refine" : "");
         editor._mmxRefinePanelOpen = next;
         updateRefinePanelVisibility(editor);
-        editor.updateDomWidgetHeight?.();
+        editor.resizeNodeForContentMinChange?.();
     });
     panel.addEventListener("change", (e) => {
         const el = e.target?.closest?.("[data-w]");
