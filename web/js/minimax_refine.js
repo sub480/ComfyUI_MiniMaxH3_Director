@@ -1,4 +1,4 @@
-/** MiniMax H3 Director Refine — show canvas widgets like Director output bar. */
+/** MiniMax H3 Director built-in refine controls. */
 
 import { app } from "../../scripts/app.js";
 import {
@@ -13,14 +13,8 @@ import {
     directorRefineActive,
 } from "./minimax_image_batch.js";
 
-const REFINE_CLASS = "MiniMaxH3DirectorRefine";
-const DIRECTOR_CLASSES = new Set(["MiniMaxH3Director"]);
+const DIRECTOR_CLASSES = new Set(["H3_D_NEO"]);
 const FOLLOW_DIRECTOR_ASPECT = "跟随导演台";
-
-function isRefineNode(node) {
-    const cls = node?.comfyClass || node?.type || "";
-    return cls === REFINE_CLASS;
-}
 
 function widgetByName(node, name) {
     return node.widgets?.find((w) => w.name === name);
@@ -390,7 +384,6 @@ const DIRECTOR_REFINE_COMFY_WIDGETS = [
     "refine_model",
     "refine_model_r2v",
     "upscale_model",
-    "refine_sigmas",
 ];
 
 function directorHasNamedLink(node, name) {
@@ -820,31 +813,8 @@ function maybeApplyDirectorPassDefaults(node) {
     applyDirectorRefinePassDefaults(node._minimaxEditor, now);
 }
 
-function refreshRefineNode(node) {
-    if (!isRefineNode(node)) return;
-    installRefineResolutionUI(node);
-    migrateRefineWidgets(node);
-    syncFollowDirectorAspect(node);
-    syncRefineWidgetVisibility(node);
-}
-
-function refreshAllRefineNodes() {
-    const graph = app.graph ?? app.canvas?.graph;
-    for (const node of graph?._nodes ?? graph?.nodes ?? []) {
-        refreshRefineNode(node);
-    }
-}
-
-function scheduleRefineRefresh(node) {
-    refreshRefineNode(node);
-    queueMicrotask(() => refreshRefineNode(node));
-    setTimeout(() => refreshRefineNode(node), 0);
-    setTimeout(() => refreshRefineNode(node), 80);
-    setTimeout(() => refreshRefineNode(node), 250);
-}
-
 app.registerExtension({
-    name: "ComfyUI.MiniMaxH3DirectorRefine",
+    name: "ComfyUI.H3_D_NEOBuiltinRefine",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (DIRECTOR_CLASSES.has(nodeData?.name)) {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
@@ -868,57 +838,31 @@ app.registerExtension({
             };
             const onWidgetChanged = nodeType.prototype.onWidgetChanged;
             nodeType.prototype.onWidgetChanged = function (...args) {
-                const result = onWidgetChanged?.apply(this, args);
-                refreshAllRefineNodes();
-                return result;
+                return onWidgetChanged?.apply(this, args);
             };
             const onConnectionsChange = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (...args) {
                 const result = onConnectionsChange?.apply(this, args);
-                refreshAllRefineNodes();
                 syncDirectorBuiltinRefineWidgets(this);
                 maybeApplyDirectorPassDefaults(this);
                 return result;
             };
             return;
         }
-        if (nodeData?.name !== REFINE_CLASS) return;
-        const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function (...args) {
-            const r = onNodeCreated?.apply(this, args);
-            scheduleRefineRefresh(this);
-            return r;
-        };
-        const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function (...args) {
-            const r = onConfigure?.apply(this, args);
-            scheduleRefineRefresh(this);
-            return r;
-        };
-        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
-        nodeType.prototype.onConnectionsChange = function (...args) {
-            const r = onConnectionsChange?.apply(this, args);
-            syncRefineWidgetVisibility(this);
-            return r;
-        };
     },
     nodeCreated(node) {
-        scheduleRefineRefresh(node);
         if (DIRECTOR_CLASSES.has(node?.comfyClass || node?.type || "")) {
             hideDirectorRefineComfyWidgets(node);
             rememberDirectorRefineActive(node);
         }
     },
     loadedGraphNode(node) {
-        scheduleRefineRefresh(node);
         if (DIRECTOR_CLASSES.has(node?.comfyClass || node?.type || "")) {
             hideDirectorRefineComfyWidgets(node);
             rememberDirectorRefineActive(node);
         }
     },
     afterConfigureGraph() {
-        refreshAllRefineNodes();
-        setTimeout(refreshAllRefineNodes, 100);
         const graph = app.graph ?? app.canvas?.graph;
         for (const node of graph?._nodes ?? graph?.nodes ?? []) {
             if (DIRECTOR_CLASSES.has(node?.comfyClass || node?.type || "")) {

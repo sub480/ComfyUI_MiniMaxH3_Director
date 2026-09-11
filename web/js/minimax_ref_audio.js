@@ -48,7 +48,7 @@ export async function prepareLocalReferenceAudio(file, onProgress) {
         const body = new FormData();
         body.append("image", uploadFile, uploadFile.name);
         body.append("type", "input");
-        body.append("subfolder", "H3_D/references");
+        body.append("subfolder", "H3_D_NEO/references");
         body.append("overwrite", "false");
         const response = await api.fetchApi("/upload/image", { method: "POST", body });
         if (!response.ok) {

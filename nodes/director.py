@@ -17,7 +17,7 @@ from .director_common import (
 )
 from .director_refine import director_refine_widget_inputs
 
-_CATEGORY = "MiniMaxH3"
+_CATEGORY = "H3_D_NEO"
 
 _DEFAULT_GLOBAL_PROMPT = "A cinematic scene with natural motion and synchronized ambience"
 
@@ -31,8 +31,6 @@ _DIRECTOR_LINKED_INPUTS = frozenset({
     "refine_model",
     "refine_model_r2v",
     "upscale_model",
-    "sigmas",
-    "refine_sigmas",
 })
 
 
@@ -116,7 +114,7 @@ def director_timeline_required_inputs() -> dict:
     }
 
 
-class MiniMaxH3Director:
+class H3_D_NEO:
     """In-node timeline Director using ComfyUI official MiniMax H3 pipeline."""
 
     @classmethod
@@ -159,16 +157,6 @@ class MiniMaxH3Director:
                         ),
                     },
                 ),
-                "i2v_groups": (
-                    "MMX_DIR_GROUP",
-                    {
-                        "tooltip": (
-                            "External Image to Video group(s) (t2v / i2v / fl2v). "
-                            "When connected, overrides UI cards for execution (external priority). "
-                            "Connect Group (Image to Video).group, or Groups Combine."
-                        ),
-                    },
-                ),
                 "lora_trigger_words": (
                     "STRING",
                     {
@@ -191,16 +179,6 @@ class MiniMaxH3Director:
                         ),
                     },
                 ),
-                "r2v_groups": (
-                    "MMX_DIR_GROUP",
-                    {
-                        "tooltip": (
-                            "External Reference to Video group(s). "
-                            "When connected, overrides UI cards for execution (external priority). "
-                            "Connect Group (Reference to Video).group, or Groups Combine."
-                        ),
-                    },
-                ),
                 "director_prompt": (
                     "STRING",
                     {
@@ -209,16 +187,6 @@ class MiniMaxH3Director:
                             "可选。接收 h3-director-export 输出的 "
                             "minimax-h3-director-prompt/v1 JSON，自动编排分组。"
                             "未连接时完全使用导演台现有时间线；连接后保留同序号组的已有素材槽位。"
-                        ),
-                    },
-                ),
-                "refine": (
-                    "MMX_DIR_REFINE",
-                    {
-                        "tooltip": (
-                            "可选。外接 MiniMax H3 Director Refine pack。"
-                            "接线后覆盖导演台内置「二采」控件。"
-                            "不接则用上方「二采」分组；分组关闭=单次采样。"
                         ),
                     },
                 ),
@@ -257,10 +225,7 @@ class MiniMaxH3Director:
                         "default": 8,
                         "min": 1,
                         "max": 200,
-                        "tooltip": (
-                            "一采步数（官方模板 25）。"
-                            "接了 sigmas 口后忽略此项，改用外接噪声表。"
-                        ),
+                        "tooltip": "一采步数（官方模板 25）。",
                     },
                 ),
                 "sampler": (
@@ -274,10 +239,7 @@ class MiniMaxH3Director:
                     comfy.samplers.KSampler.SCHEDULERS,
                     {
                         "default": "simple",
-                        "tooltip": (
-                            "一采调度器（官方模板 simple）。"
-                            "接了 sigmas 口后忽略此项，改用外接噪声表。"
-                        ),
+                        "tooltip": "一采调度器（官方模板 simple）。",
                     },
                 ),
                 "shift_video": (
@@ -300,29 +262,6 @@ class MiniMaxH3Director:
                 ),
                 **director_perf_inputs(),
                 **director_refine_widget_inputs(),
-                "sigmas": (
-                    "SIGMAS",
-                    {
-                        "forceInput": True,
-                        "tooltip": (
-                            "可选。一采噪声表，接 BasicScheduler 或 ManualSigmas。"
-                            "接线后覆盖导演台「步数」和「调度器」（采样器下拉仍有效）。"
-                            "BasicScheduler 请接 SigmaShift 之后的同一套 H3 MODEL。"
-                            "不接则仍用步数 + 调度器、denoise=1 自动算表。"
-                        ),
-                    },
-                ),
-                "refine_sigmas": (
-                    "SIGMAS",
-                    {
-                        "forceInput": True,
-                        "tooltip": (
-                            "可选。二采噪声表，接 BasicScheduler 或 ManualSigmas。"
-                            "接线后覆盖二采步数 / 调度器 / denoise / 低噪加步。"
-                            "不接则用「二采」分组内部算表。"
-                        ),
-                    },
-                ),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -341,18 +280,12 @@ class MiniMaxH3Director:
                 got = input_types.get(name)
                 if got is not None and got != want:
                     return f"{name}: expected {want}, linked node returns {got}."
-            got_sigmas = input_types.get("sigmas")
-            if got_sigmas is not None and got_sigmas != "SIGMAS":
-                return f"sigmas: expected SIGMAS, linked node returns {got_sigmas}."
             got_refine_model = input_types.get("refine_model")
             if got_refine_model is not None and got_refine_model != "MODEL":
                 return f"refine_model: expected MODEL, linked node returns {got_refine_model}."
             got_refine_model_r2v = input_types.get("refine_model_r2v")
             if got_refine_model_r2v is not None and got_refine_model_r2v != "MODEL":
                 return f"refine_model_r2v: expected MODEL, linked node returns {got_refine_model_r2v}."
-            got_refine_sigmas = input_types.get("refine_sigmas")
-            if got_refine_sigmas is not None and got_refine_sigmas != "SIGMAS":
-                return f"refine_sigmas: expected SIGMAS, linked node returns {got_refine_sigmas}."
         return True
 
     @classmethod
@@ -367,18 +300,16 @@ class MiniMaxH3Director:
         pre_cache_signature = first_pass_cache_disk_signature(unique_id)
         return _director_input_signature(kwargs, pre_cache_signature)
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "IMAGE", "STRING", "IMAGE")
-    RETURN_NAMES = ("images", "audio", "fps", "frame_count", "source_images", "report", "images_pre_refine")
-    OUTPUT_IS_LIST = (True, True, False, False, True, False, True)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("images", "audio", "frame_count", "source_images", "images_pre_refine")
+    OUTPUT_IS_LIST = (True, True, False, True, True)
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
-        "MiniMax H3 Director: MiniMaxH3ImageToVideo / ReferenceToVideo conditioning, "
+        "H3_D_NEO: MiniMaxH3ImageToVideo / ReferenceToVideo conditioning, "
         "single-stage KSampler + MiniMaxH3SigmaShift, LTXVSeparateAVLatent decode. "
         "Supports t2v / i2v / fl2v / mixed / r2v / v2v / rv2v. "
-        "Optional i2v_groups / r2v_groups accept multi-group packs from Director Group nodes "
-        "(external priority over UI cards). Built-in 二采 group runs a second sample / upscale; "
-        "optional refine pack still overrides the in-node widgets. "
+        "Built-in 二采 group runs a second sample / upscale. "
         "images_pre_refine is the first-pass video before refine. "
         "Defaults: 0.4MP 16:9 (864×480), 5s / 124 frames @ 24 fps."
     )
@@ -399,17 +330,12 @@ class MiniMaxH3Director:
         timeline_data,
         unique_id=None,
         model_r2v=None,
-        i2v_groups=None,
-        r2v_groups=None,
         director_prompt=None,
         lora_trigger_words="",
         lora_trigger_words_r2v=None,
-        refine=None,
         refine_model=None,
         refine_model_r2v=None,
         upscale_model=None,
-        refine_sigmas=None,
-        sigmas=None,
         steps=25,
         sampler="res_multistep",
         scheduler="simple",
@@ -421,15 +347,13 @@ class MiniMaxH3Director:
         live_tae_vae="auto",
         **kwargs,
     ):
-        if refine is None:
-            refine = pack_director_builtin_refine(
-                enabled=kwargs.get("refine_enable", False),
-                refine_model=refine_model,
-                refine_model_r2v=refine_model_r2v,
-                upscale_model=upscale_model,
-                refine_sigmas=refine_sigmas,
-                **kwargs,
-            )
+        refine = pack_director_builtin_refine(
+            enabled=kwargs.get("refine_enable", False),
+            refine_model=refine_model,
+            refine_model_r2v=refine_model_r2v,
+            upscale_model=upscale_model,
+            **kwargs,
+        )
         del kwargs
 
         plan = prepare_director_plan(
@@ -442,8 +366,6 @@ class MiniMaxH3Director:
             height=height,
             ref_max_size=ref_max_size,
             unique_id=unique_id,
-            i2v_groups=i2v_groups,
-            r2v_groups=r2v_groups,
             director_prompt=director_prompt,
             refine=refine,
             lora_trigger_words=lora_trigger_words,
@@ -455,7 +377,7 @@ class MiniMaxH3Director:
             raw["liveTaeVae"] = vae_name
 
         try:
-            combined, segment_outputs, segment_audios, report, export_frame_counts, pre_combined, pre_segments = (
+            combined, segment_outputs, segment_audios, export_frame_counts, pre_combined, pre_segments = (
                 execute_director_plan_core(
                     plan,
                     node_id=unique_id,
@@ -469,7 +391,6 @@ class MiniMaxH3Director:
                     steps=steps,
                     sampler=sampler,
                     scheduler=scheduler,
-                    sigmas=sigmas,
                     shift_video=shift_video,
                     shift_audio=shift_audio,
                     clear_vram_between_segments=True,
@@ -480,7 +401,6 @@ class MiniMaxH3Director:
                 plan,
                 combined,
                 segment_outputs,
-                report,
                 export_source_images=export_source_images,
                 segment_audios=segment_audios,
                 segment_frame_counts=export_frame_counts,

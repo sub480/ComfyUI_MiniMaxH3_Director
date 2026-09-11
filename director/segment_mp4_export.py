@@ -1,7 +1,7 @@
 """Incremental per-segment MP4 export for「分段导出」runs.
 
 Best-effort: encode failures must never abort generation. Each run uses a
-timestamp folder: ``output/H3_D/segment_export/<YYYYMMDD_HHMMSS>/``.
+timestamp folder: ``output/H3_D_NEO/segment_export/<YYYYMMDD_HHMMSS>/``.
 
 Files:
   ``seg_XXXX.mp4`` — final clip (last refine pass / no Refine)
@@ -30,7 +30,7 @@ VIDEO_EXPORT_TASKS = frozenset({"t2v", "i2v", "r2v", "fl2v", "v2v", "rv2v"})
 
 
 def new_segment_mp4_run_dir(plan: DirectorPlan) -> Path | None:
-    """Create ``H3_D/segment_export/<YYYYMMDD_HHMMSS>/`` for one Director execute.
+    """Create ``H3_D_NEO/segment_export/<YYYYMMDD_HHMMSS>/`` for one Director execute.
 
     Returns None when not in segments mode or the output dir is unavailable.
     """

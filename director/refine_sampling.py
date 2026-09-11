@@ -24,7 +24,6 @@ from .refine_pack import (
     refine_needs_canvas,
     refine_passes_for,
     refine_seed_for,
-    refine_sigmas_override,
     refine_tile_cfg,
     refine_uses_h3_latent,
 )
@@ -525,15 +524,8 @@ def resolve_refine_sigmas(
     model,
     shift_video: float,
     shift_audio: float,
-) -> tuple[tuple[float, ...], bool]:
-    """Return (sigma tuple, wired). Built-in packs generate BasicScheduler + densify."""
-    wired = refine_sigmas_override(pack)
-    if wired is not None:
-        return wired, True
-    if not pack.get("builtin"):
-        raise ValueError(
-            "Refine 二采需要把 BasicScheduler 或 ManualSigmas 接到 sigmas 口。"
-        )
+) -> tuple[float, ...]:
+    """Generate the second-pass schedule from the built-in settings."""
     from comfy_extras.nodes_custom_sampler import BasicScheduler
     from comfy_extras.nodes_minimax_h3 import MiniMaxH3SigmaShift
 
@@ -559,7 +551,7 @@ def resolve_refine_sigmas(
         end_at_sigma=pack.get("end_at_sigma", DEFAULT_REFINE_END_AT_SIGMA),
         spacing=pack.get("spacing") or DEFAULT_SIGMA_SPACING,
     )
-    return parse_refine_sigmas(sigma_t, fallback=False), False
+    return parse_refine_sigmas(sigma_t, fallback=False)
 
 
 def apply_segment_refine(
@@ -726,7 +718,7 @@ def apply_segment_refine(
                 on_phase("refine", 1)
             return work, "refine " + ", ".join(note_parts)
 
-        sigma_list, wired_sigmas = resolve_refine_sigmas(
+        sigma_list = resolve_refine_sigmas(
             pack,
             model=refine_model,
             shift_video=shift_video,
@@ -734,8 +726,7 @@ def apply_segment_refine(
         )
         sigma_sampler = str(pack.get("sampler") or "euler")
         sigma_steps = max(1, len(sigma_list) - 1)
-        how = "sigmas wired" if wired_sigmas else f"sigma {sigma_sampler}"
-        note_parts.append(f"{how} {sigma_steps}-step")
+        note_parts.append(f"sigma {sigma_sampler} {sigma_steps}-step")
         if refine_model is not model and sigma_steps <= 4:
             log.warning(
                 "Refine sigma pass is short. "
@@ -754,7 +745,7 @@ def apply_segment_refine(
                 "Director refine pass %d/%d (%s %s %d-step%s%s)",
                 i + 1,
                 n_passes,
-                "sigmas wired" if wired_sigmas else "sigma",
+                "sigma",
                 sigma_sampler,
                 sigma_steps,
                 ", custom model" if refine_model is not model else "",

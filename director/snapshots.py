@@ -166,6 +166,33 @@ async def minimax_save_snapshot(request):
         return web.Response(status=400, text=str(exc))
 
 
+async def minimax_update_snapshot(request):
+    temp_path: Path | None = None
+    try:
+        body = await request.json()
+        path = _path_for(body.get("id") or body.get("filename"))
+        timeline = body.get("timeline")
+        widgets = body.get("widgets") if isinstance(body.get("widgets"), dict) else {}
+        if not isinstance(timeline, dict):
+            raise ValueError("Missing timeline object.")
+        with _LOCK:
+            if not path.is_file():
+                return web.Response(status=404, text="Snapshot not found.")
+            fd, temp_name = tempfile.mkstemp(prefix=".mmx_snapshot_update_", dir=path.parent)
+            os.close(fd)
+            temp_path = Path(temp_name)
+            temp_path.unlink(missing_ok=True)
+            _save_zip(temp_path, timeline, widgets)
+            os.replace(temp_path, path)
+            temp_path = None
+        return web.json_response(_metadata(path))
+    except Exception as exc:
+        return web.Response(status=400, text=str(exc))
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 async def minimax_restore_snapshot(request):
     extracted = None
     try:

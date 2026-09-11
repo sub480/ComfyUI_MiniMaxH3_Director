@@ -23,7 +23,14 @@ from .h3_motion_context import (
     trim_context_prefix,
     trim_export_tail,
 )
-from .plan import DirectorPlan, SegmentPlan, resolve_lora_trigger_words, resolve_ref_image_size
+from .plan import (
+    DirectorPlan,
+    SegmentPlan,
+    normalize_segment_seed_mode,
+    resolve_lora_trigger_words,
+    resolve_ref_image_size,
+    resolve_segment_seed,
+)
 from .output_layout import SEGMENT_CACHE_DIR_NAME, h3_output_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.cache")
@@ -219,25 +226,16 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
 def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Exact-match key for first-pass AV latent. Refine knobs are excluded."""
     fp = _segment_identity_fingerprint(seg, plan)
-    sigmas = getattr(plan, "sample_sigmas", None)
-    linked = bool(sigmas) or bool(getattr(plan, "sample_sigmas_linked", False))
     fp.update({
         "kind": "first_pass",
-        "seed": int(getattr(plan, "sample_seed", 0) or 0),
+        "seed": resolve_segment_seed(seg, getattr(plan, "sample_seed", 0)),
         "cfg": round(float(getattr(plan, "sample_cfg", 1.0) or 1.0), 6),
         "sampler": str(getattr(plan, "sample_sampler", "") or ""),
         "shift_video": round(float(getattr(plan, "sample_shift_video", 12.0) or 12.0), 6),
         "shift_audio": round(float(getattr(plan, "sample_shift_audio", 3.0) or 3.0), 6),
+        "steps": int(getattr(plan, "sample_steps", 25) or 25),
+        "scheduler": str(getattr(plan, "sample_scheduler", "") or ""),
     })
-    if linked:
-        fp["steps"] = 0
-        fp["scheduler"] = "external_sigmas"
-        fp["sigmas_source"] = "linked"
-        if sigmas:
-            fp["sigmas"] = [round(float(x), 6) for x in sigmas]
-    else:
-        fp["steps"] = int(getattr(plan, "sample_steps", 25) or 25)
-        fp["scheduler"] = str(getattr(plan, "sample_scheduler", "") or "")
     if fp.get("continuity"):
         previous = _previous_run_segment(seg, plan)
         if previous is not None:
@@ -1139,15 +1137,16 @@ def inspect_first_pass_cache(
 
         expected = first_pass_cache_fingerprint(seg, plan)
         stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
-        if getattr(plan, "sample_sigmas_linked", False) and isinstance(stored_cmp, dict):
-            stored_cmp = {k: v for k, v in stored_cmp.items() if k != "sigmas"}
-            expected_cmp = {k: v for k, v in expected_cmp.items() if k != "sigmas"}
         matches = bool(cache_exists and isinstance(stored, dict) and stored_cmp == expected_cmp)
         diff = (
             _fingerprint_diff_keys(stored_cmp, expected_cmp)
             if isinstance(stored_cmp, dict)
             else (["<invalid-meta>"] if meta_exists else ["<missing-cache>"])
         )
+        if normalize_segment_seed_mode(getattr(seg, "seed_mode", "inherit")) == "random":
+            matches = False
+            if "seed" not in diff:
+                diff.append("seed")
         if not cache_exists:
             status = "missing"
         elif matches:

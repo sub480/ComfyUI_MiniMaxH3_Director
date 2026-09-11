@@ -1,6 +1,6 @@
 /** Server-side Director snapshots, stored as Director-pack zips. */
 import { api } from "../../scripts/api.js";
-import { t, applyI18nDom, onLocaleChange } from "./minimax_i18n.js";
+import { t, applyI18nDom } from "./minimax_i18n.js";
 import { resolveMixedGroupKey, resolveTaskKey } from "./minimax_gen_timeline.js";
 
 const MAX_NAME = 80;
@@ -17,6 +17,12 @@ async function request(path, body, method = "POST") {
 function timestampOf(snapshot) { return snapshot.updatedAt || snapshot.createdAt || 0; }
 function sort(items) { return [...items].sort((a, b) => timestampOf(b) - timestampOf(a) || a.name.localeCompare(b.name)); }
 function nameOf(value) { return String(value ?? "").trim().slice(0, MAX_NAME); }
+function stableValue(value) {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+}
+function stateSignature(state) { return JSON.stringify(stableValue(state)); }
 function collectSnapshotWidgets(editor) {
     const widgets = {};
     for (const name of SNAPSHOT_WIDGET_NAMES) {
@@ -49,37 +55,31 @@ export function buildSnapshotTimeline(editor) {
     delete timeline.videoWorkspace;
     delete timeline.videoWorkspaces;
     delete timeline.fl2vWorkspace;
-
-    const taskKey = resolveTaskKey(editor.getTaskKey?.() || editor.taskTypeWidget?.value || timeline.global?.taskType);
-    if (taskKey === "v2v" || taskKey === "rv2v") {
-        delete timeline.shots;
-        delete timeline.keyframes;
-    } else {
-        delete timeline.video;
-        delete timeline.videoClips;
-        if (taskKey !== "fl2v") {
-            delete timeline.shots;
-            delete timeline.keyframes;
-        }
-    }
-    const groups = taskKey === "fl2v" && Array.isArray(timeline.shots)
-        ? timeline.shots
-        : (Array.isArray(timeline.segments) ? timeline.segments : []);
+    delete timeline.video;
+    delete timeline.videoClips;
+    delete timeline.shots;
+    delete timeline.keyframes;
+    const groups = Array.isArray(timeline.segments) ? timeline.segments : [];
     for (const group of groups) {
-        pruneHiddenMedia(group, taskKey === "mixed" ? resolveMixedGroupKey(group) : taskKey);
+        pruneHiddenMedia(group, resolveMixedGroupKey(group));
     }
-    pruneHiddenMedia(timeline.global, taskKey);
+    pruneHiddenMedia(timeline.global, "mixed");
     return timeline;
 }
 
 export function bindSnapshotSelector(editor) {
     const select = editor.globalTask;
     if (!select) return null;
+    const updateButton = editor.snapshotUpdateBtn;
+    const resetButton = editor.snapshotResetBtn;
 
     let items = [];
     let activeSnapshotId = null;
     let currentWorkspace = null;
     let busy = false;
+    let baselineSignature = null;
+    let dirty = false;
+    let dirtyTimer = null;
 
     const mixedValue = () => {
         const options = editor.taskTypeWidget?.options?.values || [];
@@ -87,17 +87,28 @@ export function bindSnapshotSelector(editor) {
             || editor.taskTypeWidget?.value
             || "mixed";
     };
+    const renderControls = () => {
+        const mixed = !activeSnapshotId;
+        if (updateButton) {
+            updateButton.disabled = !mixed && !dirty;
+            updateButton.classList.toggle("active", mixed || dirty);
+        }
+        if (resetButton) {
+            resetButton.disabled = busy || (!mixed && !dirty);
+            resetButton.classList.toggle("active", mixed || dirty);
+        }
+    };
     const render = () => {
         const value = mixedValue();
         select.textContent = "";
         const current = document.createElement("option");
-        current.value = value;
+        current.value = "current";
         current.dataset.snapshotId = "";
         current.textContent = t("task.option", { key: "mixed", label: t("task.mixed") });
         select.appendChild(current);
         for (const snapshot of items) {
             const option = document.createElement("option");
-            option.value = value;
+            option.value = `snapshot:${snapshot.id}`;
             option.dataset.snapshotId = snapshot.id;
             option.textContent = `${t("toolbar.snapshots")} · ${snapshot.name}`;
             select.appendChild(option);
@@ -105,6 +116,7 @@ export function bindSnapshotSelector(editor) {
         const index = items.findIndex((snapshot) => snapshot.id === activeSnapshotId);
         select.selectedIndex = index >= 0 ? index + 1 : 0;
         if (editor.taskTypeWidget) editor.taskTypeWidget.value = value;
+        renderControls();
     };
     const setItems = (nextItems) => {
         items = sort(Array.isArray(nextItems) ? nextItems : []);
@@ -125,12 +137,37 @@ export function bindSnapshotSelector(editor) {
             editor._snapshotApplying = false;
         }
     };
+    const captureState = (flush = false) => {
+        if (flush) editor.flushTimelineSync?.();
+        return {
+            timeline: buildSnapshotTimeline(editor),
+            widgets: collectSnapshotWidgets(editor),
+        };
+    };
+    const setBaseline = () => {
+        baselineSignature = stateSignature(captureState(true));
+        dirty = false;
+        renderControls();
+    };
+    const checkDirty = () => {
+        clearTimeout(dirtyTimer);
+        dirtyTimer = null;
+        if (busy || !activeSnapshotId || baselineSignature == null) return;
+        dirty = stateSignature(captureState()) !== baselineSignature;
+        renderControls();
+    };
+    const notifyChanged = () => {
+        if (busy || !activeSnapshotId || baselineSignature == null) return;
+        clearTimeout(dirtyTimer);
+        dirtyTimer = setTimeout(checkDirty, 0);
+    };
     const switchSelection = async () => {
         if (busy) return;
         const snapshotId = select.selectedOptions?.[0]?.dataset?.snapshotId || null;
         if (snapshotId === activeSnapshotId) return;
         busy = true;
         select.disabled = true;
+        renderControls();
         try {
             if (!snapshotId) {
                 if (currentWorkspace) {
@@ -138,6 +175,8 @@ export function bindSnapshotSelector(editor) {
                 }
                 activeSnapshotId = null;
                 currentWorkspace = null;
+                baselineSignature = null;
+                dirty = false;
                 render();
                 return;
             }
@@ -152,6 +191,7 @@ export function bindSnapshotSelector(editor) {
             if (!data?.timeline) throw new Error(t("snapshot.restoreError"));
             applyWorkspace(data.timeline, data.widgets || {});
             activeSnapshotId = snapshotId;
+            setBaseline();
             render();
         } catch (error) {
             console.error("[MiniMax H3 Director] snapshot selector:", error);
@@ -160,15 +200,87 @@ export function bindSnapshotSelector(editor) {
         } finally {
             busy = false;
             select.disabled = false;
+            renderControls();
+        }
+    };
+    const updateCurrent = async () => {
+        if (busy) return;
+        busy = true;
+        select.disabled = true;
+        renderControls();
+        try {
+            const state = captureState(true);
+            if (!activeSnapshotId) {
+                currentWorkspace = state;
+                const result = await request("/minimax/director/snapshots/save", {
+                    name: timestampName(),
+                    ...state,
+                });
+                activeSnapshotId = result.id;
+                setItems([result, ...items.filter((item) => item.id !== result.id)]);
+            } else {
+                const result = await request("/minimax/director/snapshots/update", {
+                    id: activeSnapshotId,
+                    ...state,
+                });
+                setItems(items.map((item) => item.id === result.id ? result : item));
+            }
+            baselineSignature = stateSignature(state);
+            dirty = false;
+            render();
+        } catch (error) {
+            console.error("[MiniMax H3 Director] snapshot update:", error);
+            await editor.showBdMessage?.(t("snapshot.errorTitle"), String(error?.message || error));
+        } finally {
+            busy = false;
+            select.disabled = false;
+            renderControls();
+        }
+    };
+    const resetSnapshot = async () => {
+        if (busy) return;
+        if (!activeSnapshotId) {
+            editor._resetBatchWorkspaceLive?.("mixed");
+            editor.timeline.global.taskType = "mixed";
+            editor._batchWsMem = editor._batchWsMem || {};
+            editor._batchWsMem.mixed = editor._captureBatchWorkspace?.();
+            editor._persistCurrentBatchWorkspace?.();
+            editor.renderImageBatchGroups?.();
+            editor.syncMixedCommonLayout?.();
+            editor.updateSelectionUI?.();
+            editor.updateVideoNameLabel?.();
+            editor.commit?.(false, { syncTimeline: true });
+            renderControls();
+            return;
+        }
+        busy = true;
+        select.disabled = true;
+        renderControls();
+        try {
+            const data = await request("/minimax/director/snapshots/restore", { id: activeSnapshotId });
+            if (!data?.timeline) throw new Error(t("snapshot.restoreError"));
+            applyWorkspace(data.timeline, data.widgets || {});
+            setBaseline();
+            render();
+        } catch (error) {
+            console.error("[MiniMax H3 Director] snapshot reset:", error);
+            await editor.showBdMessage?.(t("snapshot.errorTitle"), String(error?.message || error));
+        } finally {
+            busy = false;
+            select.disabled = false;
+            renderControls();
         }
     };
     const resetCurrent = () => {
         activeSnapshotId = null;
         currentWorkspace = null;
+        baselineSignature = null;
+        dirty = false;
         render();
     };
-    const unsubscribeLocale = onLocaleChange(render);
     select.onchange = () => { void switchSelection(); };
+    if (updateButton) updateButton.onclick = () => { void updateCurrent(); };
+    if (resetButton) resetButton.onclick = () => { void resetSnapshot(); };
     render();
     void refresh().catch((error) => {
         console.error("[MiniMax H3 Director] snapshot list:", error);
@@ -179,18 +291,22 @@ export function bindSnapshotSelector(editor) {
         refresh,
         resetCurrent,
         setItems,
+        notifyChanged,
         destroy() {
-            unsubscribeLocale?.();
+            clearTimeout(dirtyTimer);
             if (select.onchange) select.onchange = null;
+            if (updateButton) updateButton.onclick = null;
+            if (resetButton) resetButton.onclick = null;
         },
     };
 }
 
-function timestampName(prefix = "快照") {
+function timestampName(prefix = "") {
     const now = new Date();
     const stamp = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("")
         + `-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}${String(now.getMilliseconds()).padStart(3, "0")}`;
-    return nameOf(`${String(prefix).slice(0, 30)}-${stamp}`);
+    const prefixText = String(prefix).slice(0, 30);
+    return nameOf(prefixText ? `${prefixText}-${stamp}` : stamp);
 }
 function summary(snapshot) {
     const size = Number(snapshot.size || 0);
@@ -409,8 +525,7 @@ export function bindSnapshotActions(editor) {
     modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
     const keydown = (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } };
     modal.addEventListener("keydown", keydown);
-    const unsub = onLocaleChange(() => { applyI18nDom(modal); render(); });
-    editor._snapshotCleanup = () => { unsub?.(); modal.remove(); };
+    editor._snapshotCleanup = () => { modal.remove(); };
     const open = async () => {
         if (busy) return;
         if (!modal.isConnected) document.body.appendChild(modal);

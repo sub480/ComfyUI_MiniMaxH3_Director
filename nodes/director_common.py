@@ -12,7 +12,6 @@ from ..director.audio_export import (
     AUDIO_MODE_GENERATE,
     build_director_audio_outputs,
     resolve_audio_mode,
-    source_audio_report_note,
 )
 from ..director.frame_align import H3_FPS, pad_or_trim_frames
 from ..director.gen_timeline import is_prompt_batch_timeline, is_video_batch_task_key
@@ -119,8 +118,9 @@ def default_timeline_json(
 ) -> str:
     return json.dumps(
         {
-            "version": 4,
-            "editMode": "global",
+            "version": 5,
+            "timelineMode": "prompt_batch",
+            "editMode": "segment",
             "totalFrames": total_frames,
             "frameRate": frame_rate,
             "width": width,
@@ -145,7 +145,7 @@ def default_timeline_json(
                 "frames": [],
                 "frameMap": [],
             },
-            "global": {"taskType": task_type, "prompt": global_prompt, "refs": [], "referenceVideo": {}, "continuousReference": False},
+            "global": {"taskType": "mixed", "prompt": global_prompt, "refs": [], "referenceVideo": {}, "continuousReference": False},
             "segments": [
                 {
                     "id": "s0",
@@ -173,18 +173,11 @@ def prepare_director_plan(
     height: int,
     ref_max_size: int,
     unique_id: str | None,
-    i2v_groups=None,
-    r2v_groups=None,
     director_prompt=None,
     refine=None,
     lora_trigger_words=None,
     lora_trigger_words_r2v=None,
 ):
-    from ..director.external_groups import (
-        build_plan_from_external_groups,
-        validate_external_group_inputs,
-    )
-
     frame_rate = H3_FPS
     if not timeline_data or not timeline_data.strip():
         timeline_data = default_timeline_json(
@@ -196,42 +189,6 @@ def prepare_director_plan(
             height=height,
             ref_max_size=ref_max_size,
         )
-
-    task_key, ext_groups, family = validate_external_group_inputs(
-        task_type=task_type,
-        i2v_groups=i2v_groups,
-        r2v_groups=r2v_groups,
-    )
-
-    if ext_groups is not None and family is not None:
-        report_director_planning(
-            unique_id,
-            len(ext_groups),
-            timeline_segment_total=len(ext_groups),
-        )
-        plan = build_plan_from_external_groups(
-            ext_groups,
-            family=family,
-            timeline_data=timeline_data,
-            task_type=task_type,
-            global_prompt=global_prompt,
-            total_frames=total_frames,
-            frame_rate=frame_rate,
-            width=width,
-            height=height,
-            ref_max_size=ref_max_size,
-        )
-        plan = _attach_refine(plan, refine)
-        plan = apply_lora_trigger_words(plan, lora_trigger_words)
-        plan = apply_lora_trigger_words_r2v(plan, lora_trigger_words_r2v)
-        log.info(
-            "MiniMax H3 Director: external %s groups × %d (task=%s) | %s",
-            family,
-            len(ext_groups),
-            task_key,
-            plan_summary(plan).replace("\n", " | "),
-        )
-        return plan
 
     report_director_planning(
         unique_id,
@@ -381,7 +338,6 @@ def finalize_director_outputs(
     plan,
     combined,
     segment_outputs,
-    report,
     *,
     export_source_images: bool = False,
     segment_audios: list | None = None,
@@ -408,24 +364,6 @@ def finalize_director_outputs(
     released_slots: list[int] = []
     if export_segments and len(segment_outputs) > 1:
         released_slots = released_output_slots(segment_outputs, segment_frame_counts)
-        if released_slots:
-            report = (
-                report + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s); "
-                f"{len(released_slots)} released clip(s) omitted from images so "
-                "CreateVideo → SaveVideo do not write stills."
-            )
-        else:
-            report = report + f"\n\nExport mode: segments — {len(segment_outputs)} clip(s) on images output."
-    if plan.run_indices is not None and split_layout:
-        report = (
-            report
-            + f"\n\nPartial run: output contains {len(segment_outputs)} re-generated clip(s) only."
-        )
-    if not split_layout:
-        if video_batch and is_batch and len(segment_outputs) > 1:
-            report = report + f"\n\nExport mode: all — merged {frame_count} frame(s) on images output."
-        if plan.run_indices is not None and video_batch:
-            report = report + f"\n\nPartial run: re-generated {len(segment_outputs)} video group(s)."
 
     pre_segs = pre_refine_segments if pre_refine_segments else segment_outputs
     pre_comb = pre_refine_combined if pre_refine_combined is not None else combined
@@ -451,7 +389,6 @@ def finalize_director_outputs(
         except Exception as exc:
             log.warning("images_pre_refine layout failed: %s", exc)
             pre_refine_out = images_out
-            report = report + f"\n\nimages_pre_refine: fallback to images ({exc})."
 
     if export_segments:
         released_slots = sorted(
@@ -491,7 +428,7 @@ def finalize_director_outputs(
     # rather than the pre-trim plan duration.
     if segment_frame_counts is None and split_for_audio:
         segment_frame_counts = [int(s.shape[0]) for s in images_out]
-    audio_out, source_fallback = build_director_audio_outputs(
+    audio_out, _ = build_director_audio_outputs(
         plan,
         images_out,
         export_segments=split_for_audio,
@@ -499,15 +436,6 @@ def finalize_director_outputs(
         segment_audios=segment_audios if use_generated else None,
         segment_frame_counts=segment_frame_counts,
         audio_mode=audio_mode,
-    )
-    report = report + source_audio_report_note(
-        plan,
-        audio_out,
-        export_segments=split_for_audio,
-        output_frame_end=audio_frame_end,
-        used_generated_audio=bool(use_generated and segment_audios),
-        audio_mode=audio_mode,
-        source_fallback=source_fallback,
     )
 
     split_source_outputs = export_segments or (is_batch and not video_batch)
@@ -519,20 +447,11 @@ def finalize_director_outputs(
                 split_outputs=split_source_outputs,
                 segment_frame_counts=segment_frame_counts,
             )
-            source_frames = sum(int(batch.shape[0]) for batch in source_images_out)
-            report = report + (
-                f"\n\nSource images: decoded {source_frames} timeline frame(s) "
-                f"on {len(source_images_out)} source_images batch(es)."
-            )
         except Exception as exc:
             log.warning("Source images output failed: %s", exc)
             # Never disguise generated frames as the source comparison. A neutral
             # placeholder makes the failure visible while preserving the expensive run.
             source_images_out = _empty_source_images_for(images_out)
-            report = report + (
-                "\n\nSource images: FAILED — emitted neutral placeholder(s), not generated "
-                f"frames. Check the timeline source path/decode ({type(exc).__name__}: {exc})."
-            )
     else:
         source_images_out = _empty_source_images_for(images_out)
 
@@ -540,24 +459,6 @@ def finalize_director_outputs(
     source_images_out = _ensure_nonempty_image_batches(source_images_out, label="source_images")
     pre_refine_out = _ensure_nonempty_image_batches(pre_refine_out, label="images_pre_refine")
 
-    refine_pack = getattr(plan, "refine", None)
-    if isinstance(refine_pack, dict) and refine_pack.get("enabled"):
-        report = report + (
-            "\n\nimages_pre_refine: first-pass video (before second sample / upscale). "
-            "Cached or passthrough slots reuse the stored final frames."
-        )
-    else:
-        report = report + (
-            "\n\nimages_pre_refine: same as images (二采未启用)."
-        )
-
-    report = report + "\n\n有问题联系作者：AI搅拌手  QQ交流群：551482703"
-
-    fps_out = float(H3_FPS)
     if block_final_images:
-        report = report + (
-            "\n\n本轮仅确认一采：images（最终/二采输出）已阻断，"
-            "请从 images_pre_refine 查看或保存一采；再次 Queue 完成二采后 images 才会输出。"
-        )
         images_out = ExecutionBlocker(None)
-    return images_out, audio_out, fps_out, frame_count, source_images_out, report, pre_refine_out
+    return images_out, audio_out, frame_count, source_images_out, pre_refine_out

@@ -86,7 +86,7 @@ def task_type_combo_options() -> tuple[list[str], dict]:
     return options, {
         "default": task_type_option_label(default_spec),
         "tooltip": (
-            "MiniMax H3 顶层模式：mixed。旧版 v2v / rv2v 工作流仍可兼容执行。"
+            "MiniMax H3 顶层模式固定为 mixed。"
             "提示词直接送入 MiniMaxH3ImageToVideo 或 MiniMaxH3ReferenceToVideo（内部 tokenize）。"
             "mixed 每组可选 t2v / i2v / fl2v / r2v / v2v / rv2v；"
             "r2v/v2v/rv2v 组请另接 model_r2v。"

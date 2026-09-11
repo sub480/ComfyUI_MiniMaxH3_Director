@@ -1,8 +1,4 @@
-"""Refine pack for MiniMax H3 Director.
-
-Built-in Director「二采」widgets pack the same dict as the optional
-``MiniMaxH3DirectorRefine`` node. A wired Refine pack still wins.
-"""
+"""Built-in refine configuration for MiniMax H3 Director."""
 
 from __future__ import annotations
 
@@ -76,16 +72,6 @@ def is_refine_sigmas_tensor(raw: Any) -> bool:
     return raw is not None and not isinstance(raw, (str, bytes, list, tuple)) and hasattr(raw, "reshape")
 
 
-def first_pass_sigmas_override(raw: Any):
-    """Optional Director first-pass SIGMAS. None = use steps + scheduler."""
-    if raw is None:
-        return None
-    try:
-        return parse_refine_sigmas(raw, fallback=False)
-    except (TypeError, ValueError):
-        return None
-
-
 def densify_refine_sigmas(
     sigmas,
     *,
@@ -146,17 +132,6 @@ def densify_refine_sigmas(
         tail = torch.cat([tail, torch.tensor([0.0])])
     out = torch.cat([head, tail]) if head.numel() else tail
     return out.to(device=device, dtype=dtype)
-
-
-def refine_sigmas_override(pack: dict[str, Any] | None):
-    """Wired BasicScheduler / ManualSigmas tensor. No text fallback."""
-    pack = pack or {}
-    tensor = pack.get("sigmas_tensor")
-    if tensor is None and is_refine_sigmas_tensor(pack.get("sigmas")):
-        tensor = pack.get("sigmas")
-    if tensor is None:
-        return None
-    return parse_refine_sigmas(tensor, fallback=False)
 
 
 def resolve_latent_upscale_ref(raw: Any) -> tuple[Any, str]:
@@ -438,7 +413,6 @@ def pack_refine(
     latent_upscale_model=None,
     upscale_model=None,
     sampler: str = "",
-    sigmas=None,
     confirm_first_pass: bool = False,
     n_tiles: int = DEFAULT_N_TILES,
     tile_axis: str = "auto",
@@ -466,10 +440,6 @@ def pack_refine(
     if method not in UPSCALE_METHODS:
         method = "h3_latent"
     sampler = str(sampler or DEFAULT_REFINE_SIGMA_SAMPLER).strip() or DEFAULT_REFINE_SIGMA_SAMPLER
-    sigma_tensor = sigmas if is_refine_sigmas_tensor(sigmas) else None
-    parsed = (
-        parse_refine_sigmas(sigma_tensor, fallback=False) if sigma_tensor is not None else ()
-    )
     ar = normalize_aspect_ratio(aspect_ratio)
     tw, th = resolve_refine_target(
         aspect_ratio=ar,
@@ -501,10 +471,6 @@ def pack_refine(
         "h3_latent_model": latent_name,
         "has_latent_upscale_model": latent_upscale_model is not None,
         "sampler": sampler,
-        "sigmas": ",".join(f"{x:g}" for x in parsed),
-        "sigmas_parsed": parsed,
-        "sigmas_tensor": sigma_tensor,
-        "has_sigmas_tensor": sigma_tensor is not None,
         "confirm_first_pass": bool(confirm_first_pass),
         "builtin": bool(builtin),
         "sample_steps": _clamp_int(sample_steps, 0, 0, 200),
@@ -536,7 +502,6 @@ def pack_director_builtin_refine(
     refine_model=None,
     refine_model_r2v=None,
     upscale_model=None,
-    refine_sigmas=None,
     **widgets,
 ) -> dict[str, Any] | None:
     """Director in-node 二采 widgets → refine pack. None when disabled."""
@@ -574,7 +539,6 @@ def pack_director_builtin_refine(
         latent_upscale_model=widgets.get("refine_latent_upscale_model"),
         upscale_model=upscale_model,
         sampler=widgets.get("refine_sampler") or DEFAULT_REFINE_SIGMA_SAMPLER,
-        sigmas=refine_sigmas,
         sample_steps=widgets.get("refine_sample_steps") or DEFAULT_REFINE_SAMPLE_STEPS,
         scheduler=widgets.get("refine_scheduler") or DEFAULT_REFINE_SCHEDULER,
         denoise=denoise,
@@ -624,17 +588,6 @@ def normalize_refine_pack(
     if method not in UPSCALE_METHODS:
         method = "h3_latent"
     sampler = str(raw.get("sampler") or DEFAULT_REFINE_SIGMA_SAMPLER).strip() or DEFAULT_REFINE_SIGMA_SAMPLER
-    sigma_tensor = raw.get("sigmas_tensor")
-    raw_sigmas = raw.get("sigmas")
-    if sigma_tensor is None and is_refine_sigmas_tensor(raw_sigmas):
-        sigma_tensor = raw_sigmas
-    parsed = raw.get("sigmas_parsed") or ()
-    if sigma_tensor is not None:
-        parsed = parse_refine_sigmas(sigma_tensor, fallback=False)
-    elif parsed:
-        parsed = parse_refine_sigmas(parsed, fallback=False)
-    else:
-        parsed = ()
     sample_model = raw.get("sample_model")
     if sample_model is None:
         sample_model = raw.get("model")
@@ -669,10 +622,6 @@ def normalize_refine_pack(
         "h3_latent_model": latent_name,
         "has_latent_upscale_model": latent_raw is not None,
         "sampler": sampler,
-        "sigmas": ",".join(f"{x:g}" for x in parsed),
-        "sigmas_parsed": parsed,
-        "sigmas_tensor": sigma_tensor,
-        "has_sigmas_tensor": sigma_tensor is not None,
         "confirm_first_pass": False,
         "builtin": bool(raw.get("builtin")),
         "sample_steps": _clamp_int(raw.get("sample_steps"), 0, 0, 200),
@@ -748,10 +697,6 @@ def refine_fingerprint(plan) -> dict[str, Any]:
         "refine_upscale_model": bool(pack.get("has_upscale_model") or pack.get("upscale_model") is not None),
         "refine_latent_upscale_model": latent_upscale_model_name(pack),
         "refine_sampler": pack.get("sampler") or "",
-        "refine_sigmas": ",".join(f"{x:.4f}" for x in (pack.get("sigmas_parsed") or ()))
-        if pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None
-        else (pack.get("sigmas") or ""),
-        "refine_sigmas_wired": bool(pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None),
         "refine_sample_model": bool(pack.get("has_sample_model") or pack.get("sample_model") is not None),
         "refine_sample_model_r2v": bool(
             pack.get("has_sample_model_r2v") or pack.get("sample_model_r2v") is not None
@@ -806,27 +751,21 @@ def refine_report_line(plan) -> str | None:
     )
     if pack.get("has_sample_model_r2v") or pack.get("sample_model_r2v") is not None:
         model_note += ", R2V 二采模型"
-    wired = bool(pack.get("has_sigmas_tensor") or pack.get("sigmas_tensor") is not None)
-    parsed = pack.get("sigmas_parsed") or ()
     sampler = pack.get("sampler") or DEFAULT_REFINE_SIGMA_SAMPLER
-    n_steps = max(1, len(parsed) - 1) if parsed else 0
     if mode == "latent_upscale":
         line = f"Refine: ON ({mode}{model_note}{extra})"
     else:
         builtin = bool(pack.get("builtin"))
-        if wired:
-            how = f"sigmas {sampler}"
-        elif builtin:
+        if builtin:
             steps = int(pack.get("sample_steps") or 0)
             sched = pack.get("scheduler") or DEFAULT_REFINE_SCHEDULER
             how = f"builtin {sampler} {sched} {steps}-step"
         else:
-            how = "sigmas 未接线"
-        step_note = f" {n_steps}-step" if n_steps and wired else ""
+            how = sampler
         extra_steps = int(pack.get("extra_steps") or 0)
-        densify_note = f", +{extra_steps} low-sigma" if extra_steps and builtin and not wired else ""
+        densify_note = f", +{extra_steps} low-sigma" if extra_steps and builtin else ""
         line = (
-            f"Refine: ON ({mode}, {how}{step_note}{densify_note}"
+            f"Refine: ON ({mode}, {how}{densify_note}"
             f"{pass_note}{model_note}{extra})"
         )
     tile = refine_tile_cfg(pack)

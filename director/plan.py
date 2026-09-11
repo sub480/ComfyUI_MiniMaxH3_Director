@@ -10,6 +10,7 @@ import logging
 import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import torch
@@ -265,6 +266,10 @@ class SegmentPlan:
     ref_image_size: str = "match"
     # Per-segment 一采 / 二采. Default second (run both when Refine is connected).
     pass_mode: str = PASS_MODE_SECOND
+    # Per-segment first-pass seed. inherit uses Director's sampling seed.
+    seed_mode: str = "inherit"
+    seed: int = 0
+    resolved_seed: int | None = field(default=None, repr=False)
 
     @property
     def frame_count(self) -> int:
@@ -274,6 +279,43 @@ class SegmentPlan:
     def timeline_index(self) -> int:
         """Index used for UI preview / highlight (timeline card)."""
         return int(self.index if self.ui_index is None else self.ui_index)
+
+
+SEGMENT_SEED_MODES = frozenset({"inherit", "random", "fixed"})
+MAX_SEED = (1 << 64) - 1
+
+
+def normalize_segment_seed_mode(value: Any) -> str:
+    mode = str(value or "inherit").strip().lower()
+    return mode if mode in SEGMENT_SEED_MODES else "inherit"
+
+
+def segment_seed_settings_from_data(data: dict | None) -> tuple[str, int]:
+    raw = data if isinstance(data, dict) else {}
+    mode = normalize_segment_seed_mode(raw.get("seedMode"))
+    try:
+        value = int(str(raw.get("seed") or "0").strip())
+    except (TypeError, ValueError):
+        value = 0
+    return mode, max(0, min(value, MAX_SEED))
+
+
+def resolve_segment_seed(seg: SegmentPlan, default_seed: int, *, randomize: bool = False) -> int:
+    if seg.resolved_seed is not None:
+        return int(seg.resolved_seed)
+    mode = normalize_segment_seed_mode(seg.seed_mode)
+    if mode == "fixed":
+        value = int(seg.seed)
+    elif mode == "random" and randomize:
+        import secrets
+
+        value = secrets.randbits(64)
+    else:
+        value = int(default_seed)
+    value = max(0, min(value, MAX_SEED))
+    if randomize or mode != "random":
+        seg.resolved_seed = value
+    return value
 
 
 @dataclass
@@ -313,8 +355,6 @@ class DirectorPlan:
     sample_steps: int = 25
     sample_sampler: str = ""
     sample_scheduler: str = ""
-    sample_sigmas: tuple[float, ...] | None = None
-    sample_sigmas_linked: bool = False
     sample_shift_video: float = 12.0
     sample_shift_audio: float = 3.0
     lora_trigger_words: str = ""
@@ -726,20 +766,7 @@ def count_all_timeline_segments(timeline_data: str) -> int:
         return 1
 
     segments = timeline.get("segments") or []
-    global_task = (timeline.get("global") or {}).get("taskType") or ""
-    task_key = resolve_task_key(global_task) if global_task else ""
-    if task_key == "fl2v" or str(timeline.get("timelineMode") or "").lower() == "fl2v":
-        from .fl2v_timeline import count_fl2v_runnable_shots
-
-        return count_fl2v_runnable_shots(timeline)
-    if is_gen_timeline(timeline, task_key):
-        return max(1, len(segments) or 1)
-
-    source_total = logical_frame_count(timeline) or int(timeline.get("totalFrames") or 0)
-    export_total = _resolve_export_total(timeline, source_total)
-    plan_total = export_total or source_total or 1
-    ranges = _segment_ranges_from_timeline(timeline, source_total or plan_total)
-    return max(1, len(_clip_segment_ranges(ranges, plan_total)))
+    return max(1, len(segments))
 
 
 def count_timeline_segments(timeline_data: str) -> int:
@@ -774,14 +801,15 @@ def build_director_plan(
             timeline = json.loads(timeline_data)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid timeline_data JSON: {exc}") from exc
-    timeline["frameRate"] = H3_FPS
+    timeline.update(frameRate=H3_FPS, timelineMode="prompt_batch", editMode="segment")
+    timeline.pop("shots", None)
 
     global_block = timeline.get("global") or {}
-    edit_mode = timeline.get("editMode") or "global"
-    if edit_mode not in ("global", "segment"):
-        edit_mode = "global"
+    global_block["taskType"] = "mixed"
+    timeline["global"] = global_block
+    edit_mode = "segment"
 
-    task_type = global_block.get("taskType") or global_task_type or "v2v — 视频转视频(Video to Video)"
+    task_type = "mixed"
     prompt = global_block.get("prompt") or global_prompt or ""
     if load_media:
         global_refs = _load_refs(global_block.get("refs") or [])
@@ -797,19 +825,6 @@ def build_director_plan(
     global_ref_video = _resolve_global_reference_video(timeline)
 
     task_key_early = resolve_task_key(task_type)
-    if task_key_early == "fl2v" or str(timeline.get("timelineMode") or "").lower() == "fl2v":
-        from .fl2v_timeline import build_fl2v_director_plan
-
-        return build_fl2v_director_plan(
-            timeline,
-            global_task_type=task_type,
-            global_prompt=prompt,
-            total_frames=total_frames,
-            frame_rate=frame_rate,
-            width=width,
-            height=height,
-            ref_max_size=ref_max_size,
-        )
     if is_gen_timeline(timeline, task_key_early):
         return build_gen_director_plan(
             timeline,
@@ -881,6 +896,7 @@ def build_director_plan(
     continuous_ref = _continuous_reference_enabled(timeline, edit_mode, resolve_task_key(task_type))
 
     for idx, (start, end, seg_data) in enumerate(segment_ranges):
+        seg_seed_mode, seg_seed = segment_seed_settings_from_data(seg_data)
         if edit_mode == "global":
             seg_prompt = prompt
             seg_task = task_type
@@ -920,6 +936,8 @@ def build_director_plan(
                 ref_audios=seg_ref_audios,
                 reference_video_meta=seg_ref_video,
                 reference_video_start_frame=ref_start,
+                seed_mode=seg_seed_mode,
+                seed=seg_seed,
             )
         )
 
@@ -1072,81 +1090,21 @@ def refs_to_kwargs_for_context(task_key: str, refs: list[SegmentRef]) -> dict[st
 
 
 def plan_summary(plan: DirectorPlan) -> str:
-    mode = str(plan.raw.get("timelineMode") or "")
-    if mode in ("gen_blank", "gen_image", "prompt_batch", "image_batch", "fl2v"):
-        if mode == "fl2v":
-            mode_label = "首尾帧 (fl2v)"
-        elif mode in ("prompt_batch", "image_batch"):
-            mode_label = f"批量生成 ({plan.global_task_key})"
-        else:
-            mode_label = "空白画布" if mode == "gen_blank" else "图片生成"
-        lines = [
-            f"MiniMax H3 Director [{mode_label}] ({plan.edit_mode}): "
-            f"{plan.segment_count} segment(s), {plan.total_frames} frames @ {plan.frame_rate:.2f} fps",
-            f"Output: {plan.width}×{plan.height} ({plan.output_mode})",
-            f"Global task: {get_task_prompt_spec(plan.global_task_type).label}",
-        ]
-        refine_line = None
-        try:
-            from .refine_pack import refine_report_line
-
-            refine_line = refine_report_line(plan)
-        except Exception:
-            refine_line = None
-        if refine_line:
-            lines.append(refine_line)
-        if plan.continuity_enabled:
-            pinned = [
-                seg.index + 1
-                for seg in plan.segments
-                if seg.index > 0 and getattr(seg, "continuity_from_prev", True)
-            ]
-            skipped_pin = [
-                seg.index + 1
-                for seg in plan.segments
-                if seg.index > 0 and not getattr(seg, "continuity_from_prev", True)
-            ]
-            lines.append(
-                f"Segment continuity: ON (motion context {plan.continuity_overlap_frames}f)"
-            )
-            if pinned:
-                lines.append("  Pin from prev: #" + ", #".join(str(i) for i in pinned))
-            if skipped_pin:
-                lines.append(
-                    "  Hard cut (per-segment off): #"
-                    + ", #".join(str(i) for i in skipped_pin)
-                )
-        for seg in plan.segments:
-            pin_note = ""
-            if plan.continuity_enabled and seg.index > 0:
-                pin_note = (
-                    " — pin←prev"
-                    if getattr(seg, "continuity_from_prev", True)
-                    else " — hard cut"
-                )
-            lines.append(
-                f"  #{seg.index + 1} [{seg.start_frame}:{seg.end_frame}] "
-                f"{seg.frame_count}f — {seg.task_key}{pin_note} — "
-                f"{seg.prompt[:60]}{'…' if len(seg.prompt) > 60 else ''}"
-            )
-        return "\n".join(lines)
-
-    mode_label = (
-        f"视频编辑 ({plan.global_task_key})"
-        if plan.global_task_key in {"v2v", "rv2v"}
-        else "源视频时间轴"
-    )
     lines = [
-        f"MiniMax H3 Director [{mode_label}] ({plan.edit_mode}): {plan.segment_count} segment(s), "
-        f"{plan.total_frames} frames @ {plan.frame_rate:.2f} fps",
+        f"MiniMax H3 Director [Mixed] ({plan.edit_mode}): "
+        f"{plan.segment_count} segment(s), {plan.total_frames} frames @ {plan.frame_rate:.2f} fps",
+        f"Output: {plan.width}×{plan.height} ({plan.output_mode})",
+        f"Global task: {get_task_prompt_spec(plan.global_task_type).label}",
     ]
-    if plan.export_max_frames > 0 and plan.source_total_frames > plan.total_frames:
-        lines.append(
-            f"Export cap: {plan.total_frames}/{plan.source_total_frames} frames "
-            f"(max {plan.export_max_frames})"
-        )
-    export_label = "分段导出" if plan.export_mode == "segments" else "全部导出"
-    lines.append(f"Export mode: {export_label}")
+    refine_line = None
+    try:
+        from .refine_pack import refine_report_line
+
+        refine_line = refine_report_line(plan)
+    except Exception:
+        refine_line = None
+    if refine_line:
+        lines.append(refine_line)
     if plan.continuity_enabled:
         pinned = [
             seg.index + 1
@@ -1159,37 +1117,15 @@ def plan_summary(plan: DirectorPlan) -> str:
             if seg.index > 0 and not getattr(seg, "continuity_from_prev", True)
         ]
         lines.append(
-            f"Segment continuity: ON (motion context {plan.continuity_overlap_frames}f "
-            "→ pin previous tail + trim prefix; t2v/i2v/fl2v/r2v/v2v/rv2v)"
+            f"Segment continuity: ON (motion context {plan.continuity_overlap_frames}f)"
         )
         if pinned:
-            lines.append(
-                "  Pin from prev: #"
-                + ", #".join(str(i) for i in pinned)
-            )
+            lines.append("  Pin from prev: #" + ", #".join(str(i) for i in pinned))
         if skipped_pin:
             lines.append(
                 "  Hard cut (per-segment off): #"
                 + ", #".join(str(i) for i in skipped_pin)
             )
-    elif plan.segment_count >= 2 and plan.global_task_key in {
-        "t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v",
-    }:
-        lines.append(
-            "Segment continuity: OFF — hard cuts between segments "
-            "(enable「段间引导」in Director UI; recommend 22 frames)"
-        )
-    else:
-        lines.append("Segment continuity: OFF (per-segment generation)")
-    refine_line = None
-    try:
-        from .refine_pack import refine_report_line
-
-        refine_line = refine_report_line(plan)
-    except Exception:
-        refine_line = None
-    if refine_line:
-        lines.append(refine_line)
     if plan.run_indices is not None:
         selected = sorted(plan.run_indices)
         skipped = [i + 1 for i in range(plan.segment_count) if i not in plan.run_indices]
@@ -1197,7 +1133,6 @@ def plan_summary(plan: DirectorPlan) -> str:
             f"Run selection: {len(selected)}/{plan.segment_count} segment(s) "
             f"(#{', #'.join(str(i + 1) for i in selected)}; skipped #{', #'.join(map(str, skipped)) or 'none'})"
         )
-    lines.append(f"Global task: {get_task_prompt_spec(plan.global_task_type).label}")
     for seg in plan.segments:
         pin_note = ""
         if plan.continuity_enabled and seg.index > 0:

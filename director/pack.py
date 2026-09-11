@@ -6,7 +6,6 @@ Zip layout uses ASCII paths that match the English UI:
 
 from __future__ import annotations
 
-import base64
 import copy
 import hashlib
 import json
@@ -45,8 +44,6 @@ MAX_ZIP_ENTRIES = 8000
 MAX_SINGLE_FILE = 8 * 1024 * 1024 * 1024
 PACK_EXPORT_TTL_SEC = 60 * 60
 ZIP_STREAM_CHUNK = 1024 * 1024
-# POST JSON already works; keep small packs on that path instead of FileResponse.
-INLINE_JSON_MAX = 48 * 1024 * 1024
 
 IMAGE_KEYS = ("imageFile",)
 AUDIO_KEYS = ("audioFile",)
@@ -622,7 +619,7 @@ def build_export_pack(timeline: dict, widgets: dict | None = None, *, dry_run: b
         _write_json(staging / "timeline.json", data)
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        download_name = f"MiniMaxH3Director-{task_key}-{stamp}.mmxpack.zip"
+        download_name = f"H3_D_NEO-{task_key}-{stamp}.mmxpack.zip"
         stored_name = f"{uuid.uuid4().hex}.mmxpack.zip"
         _purge_pack_exports(keep=stored_name)
         zip_path = _pack_export_root() / stored_name
@@ -701,7 +698,7 @@ def _prefix_pack_paths(obj: Any, prefix: str) -> None:
         if not val:
             continue
         rel = str(val).replace("\\", "/").strip().lstrip("/")
-        if rel.startswith("H3_D/packs/"):
+        if rel.startswith("H3_D_NEO/packs/"):
             continue
         if rel.startswith(PACK_PREFIXES):
             new_rel = f"{prefix}/{rel}"
@@ -795,7 +792,7 @@ def import_extracted_pack(extracted: Path) -> dict[str, Any]:
         raise ValueError(f"Unsupported timeline version: {timeline_version}")
 
     pack_id = uuid.uuid4().hex[:12]
-    rel_prefix = f"H3_D/{INPUT_PACKS_DIR_NAME}/{pack_id}"
+    rel_prefix = f"H3_D_NEO/{INPUT_PACKS_DIR_NAME}/{pack_id}"
     dest = h3_input_path(INPUT_PACKS_DIR_NAME, pack_id)
     _copy_tree_media(extracted, dest)
     _prefix_pack_paths(timeline, rel_prefix)
@@ -820,109 +817,3 @@ def import_extracted_pack(extracted: Path) -> dict[str, Any]:
         "packId": pack_id,
         "missing": unique_missing,
     }
-
-
-def _resolve_uploaded_zip(name: str, subfolder: str = "", type_name: str = "input") -> Path:
-    path = resolve_media_path(name, subfolder=subfolder, type_name=type_name)
-    if path is None or not path.is_file():
-        raise ValueError("Uploaded pack zip was not found.")
-    if path.suffix.lower() not in {".zip"}:
-        raise ValueError("Pack must be a .zip file.")
-    return path
-
-
-async def minimax_export_pack(request):
-    try:
-        body = await request.json()
-    except Exception as exc:
-        return web.Response(status=400, text=f"Invalid JSON: {exc}")
-    timeline = body.get("timeline")
-    if not isinstance(timeline, dict):
-        return web.Response(status=400, text="Missing timeline object.")
-    widgets = body.get("widgets") if isinstance(body.get("widgets"), dict) else {}
-    dry_run = bool(body.get("dryRun") or body.get("dry_run"))
-    try:
-        result = build_export_pack(timeline, widgets, dry_run=dry_run)
-    except Exception as exc:
-        log.warning("Director pack export failed: %s", exc)
-        return web.Response(status=400, text=str(exc))
-    if dry_run:
-        return web.json_response(result)
-    filename = str(result.get("filename") or "")
-    if not re.fullmatch(r"[A-Za-z0-9]+\.mmxpack\.zip", filename):
-        return web.Response(status=500, text="Export produced an invalid pack filename.")
-    path = _pack_export_root() / filename
-    download_name = str(result.get("downloadName") or filename)
-    download_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download_name) or filename
-    extra = {
-        "X-Pack-Download-Name": download_name,
-        "X-Pack-Missing": json.dumps(result.get("missing") or [], ensure_ascii=True),
-    }
-    try:
-        size = int(path.stat().st_size)
-    except OSError:
-        return web.Response(status=404, text="Pack not found.")
-    if size <= 0:
-        return web.Response(status=500, text="Export produced an empty pack zip.")
-    # Small packs: JSON + base64. fetchApi POST JSON is reliable; GET FileResponse
-    # on Windows is HTTP 200 with an empty body (0-byte .zip).
-    if size <= INLINE_JSON_MAX:
-        data = path.read_bytes()
-        _unlink_quiet(path)
-        result["zipB64"] = base64.b64encode(data).decode("ascii")
-        result["downloadName"] = download_name
-        result["bytes"] = size
-        return web.json_response(result)
-    return await _send_zip_file(request, path, download_name, extra, unlink_after=True)
-
-
-async def minimax_download_pack(request):
-    filename = str(request.query.get("filename") or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9]+\.mmxpack\.zip", filename):
-        return web.Response(status=400, text="Invalid pack filename.")
-    path = _pack_export_root() / filename
-    if not path.is_file():
-        return web.Response(status=404, text="Pack not found.")
-    download_name = str(request.query.get("download") or filename)
-    download_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download_name) or filename
-    return await _send_zip_file(request, path, download_name)
-
-
-async def minimax_import_pack(request):
-    extracted: Path | None = None
-    upload_dir: Path | None = None
-    input_zip: Path | None = None
-    try:
-        ctype = request.content_type or ""
-        if "multipart" in ctype:
-            post = await request.post()
-            upload = post.get("pack")
-            if upload is None or not hasattr(upload, "file"):
-                return web.Response(status=400, text="Missing pack file.")
-            upload_dir = Path(tempfile.mkdtemp(prefix="mmx_pack_up_"))
-            zip_path = upload_dir / "pack.zip"
-            with open(zip_path, "wb") as out:
-                shutil.copyfileobj(upload.file, out)
-        else:
-            body = await request.json()
-            zip_path = _resolve_uploaded_zip(
-                str(body.get("filename") or body.get("name") or ""),
-                subfolder=str(body.get("subfolder") or ""),
-                type_name=str(body.get("type") or "input"),
-            )
-            if zip_path.suffix.lower() == ".zip" and _is_under_dir(zip_path, _input_dir()):
-                input_zip = zip_path
-        extracted = Path(tempfile.mkdtemp(prefix="mmx_pack_ex_"))
-        extract_pack_zip(zip_path, extracted)
-        result = import_extracted_pack(extracted)
-        return web.json_response(result)
-    except Exception as exc:
-        log.warning("Director pack import failed: %s", exc)
-        return web.Response(status=400, text=str(exc))
-    finally:
-        if extracted is not None:
-            shutil.rmtree(extracted, ignore_errors=True)
-        if upload_dir is not None:
-            shutil.rmtree(upload_dir, ignore_errors=True)
-        if input_zip is not None:
-            _unlink_quiet(input_zip)

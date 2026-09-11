@@ -1,15 +1,10 @@
 /** MiniMax H3 Director UI i18n (zh / en) with localStorage persistence. */
 
-export const LOCALE_STORAGE_KEY = "mmx_director_ui_locale";
-
 const ZH = {
     "toolbar.addRefGroup": "添加素材组",
     "toolbar.uploadVideo": "上传视频",
     "toolbar.addShot": "添加一组",
     "toolbar.appendVideo": "追加视频",
-    "toolbar.split": "+ 分割",
-    "toolbar.equalSplit": "均分",
-    "toolbar.smartSplit": "智能分割",
     "toolbar.runSelect": "选择运行",
     "toolbar.selectAll": "全选",
     "toolbar.deleteSegment": "删除片段",
@@ -23,25 +18,23 @@ const ZH = {
     "toolbar.timelineZoomTitle": "开启后可用滑块横向放大时间轴；超出部分用下方滚动条查看",
     "tooltip.timelineZoom": "横向放大时间轴",
     "toolbar.noVideo": "未上传视频",
-    "toolbar.exportPack": "导出导演包",
-    "toolbar.importPack": "导入导演包",
     "toolbar.snapshots": "快照",
+    "snapshot.quickUpdate": "更新",
+    "snapshot.quickReset": "重置",
     "tooltip.snapshots": "保存、预览和还原导演台配置",
     "tooltip.snapshotSelector": "切换当前 mixed 工作区或已保存的快照",
+    "tooltip.snapshotQuickUpdate": "Mixed 下新建快照；快照下覆盖当前快照",
+    "tooltip.snapshotQuickReset": "丢弃改动并恢复当前快照",
     "toolbar.promptSync": "同步",
     "tooltip.promptSync": "读取 director_prompt 输入并刷新导演台分组",
     "promptSync.title": "同步 Director Prompt",
     "promptSync.needConnection": "请先将包含 Director JSON 的 STRING 节点连接到 director_prompt。",
     "promptSync.empty": "未能从 director_prompt 的上游节点读取到 JSON 字符串。",
     "promptSync.failed": "同步失败：{err}",
-    "tooltip.exportPack": "导出当前时间轴与参考素材为 zip（英文目录名，可换机器再导入）",
-    "tooltip.importPack": "导入导演包，覆盖当前时间轴与素材槽",
 
     "tooltip.addRefGroup": "添加一组参考素材（图片 / 音频 / 视频）",
     "tooltip.addShot": "添加一组（可只写提示词文生，或上传首帧/尾帧；支持只传尾帧）",
     "tooltip.appendVideo": "选择/上传并追加到时间轴末尾，作为独立片段",
-    "tooltip.equalSplitN": "均分段数",
-    "tooltip.smartSplit": "使用 PySceneDetect 按分镜自动分割（需 pip install scenedetect）",
     "tooltip.runSelect": "开启后只运行勾选的片段；未勾选段不采样也不导出。关闭时运行全部",
     "tooltip.runSelectAll": "勾选=全选，取消=全部不选；仍可在各片段上单独勾选",
     "tooltip.deleteSegment": "删除选中片段并裁剪视频，时间轴自动衔接",
@@ -104,6 +97,13 @@ const ZH = {
     "tooltip.segmentContinuity": "总开关：开启后按各段「引用上段」将上一段运动/音频钉入下一段（含 r2v/v2v/rv2v）。关闭：全部硬切。默认上下文 22 帧。请勿与独立 H3 Motion Context 同装。",
     "batch.continuityFromPrev": "引用上段",
     "tooltip.segmentContinuityFromPrev": "需先打开总开关「段间引导」。勾选：本段引用上一段做运动引导；取消：本段硬切。第 1 段无上段，不显示。默认勾选。",
+    "batch.seed": "种子",
+    "batch.seedMode.inherit": "默认",
+    "batch.seedMode.random": "随机",
+    "batch.seedMode.fixed": "固定",
+    "tooltip.batchSeed": "只影响本组。一采和二采使用同一个最终种子。",
+    "tooltip.batchSeedMode": "默认：使用一采配置的种子；随机：每次排队重新生成；固定：使用本组数值。",
+    "tooltip.batchFixedSeed": "本组固定种子，范围 0–18446744073709551615。",
     "tooltip.continuityJointOn": "段间引导：S{a} → S{b}（点击关闭）",
     "tooltip.continuityJointOff": "无引导（硬切）：S{a} → S{b}（点击开启）",
     "output.continuityOverlap": "上下文帧数",
@@ -214,8 +214,6 @@ const ZH = {
     "batch.pass.diff.steps": "一采步数",
     "batch.pass.diff.sampler": "一采采样器",
     "batch.pass.diff.scheduler": "调度器",
-    "batch.pass.diff.sigmas": "一采噪声表",
-    "batch.pass.diff.sigmas_source": "一采 SIGMAS 接线",
     "batch.pass.diff.shift_video": "视频 shift",
     "batch.pass.diff.shift_audio": "音频 shift",
     "batch.pass.diff.<invalid-meta>": "缓存信息损坏",
@@ -237,15 +235,9 @@ const ZH = {
     "batch.hint.mixed": "混合模式 · 每组可选文生 / 图生 / 首尾帧 / 参考主体 / 视频编辑 / 参考素材改视频；v2v 与 rv2v 的源视频和专属素材均在组内设置 · ref2v 类组请接 model_r2v",
     "batch.groupTitle.mixed": "组 {n}",
     "tooltip.mixedGroupType": "本组任务类型（与对应原模式功能一致）",
-    "external.i2vActive": "已连接外部 Image to Video 组：时间轴已按接线同步；执行时以图中接线为准（覆盖下方 UI 素材）。可用「选择运行」勾选组序。",
-    "external.r2vActive": "已连接外部 Reference to Video 组：时间轴已按接线同步；执行时以图中接线为准（覆盖下方 UI 素材）。可用「选择运行」勾选组序。",
-    "external.groupCount": "{n} 组",
-    "external.durationHint": "时长/增删请改 Group 节点。",
     "external.durationLocked": "外部组模式下时长以 Group 节点 duration_sec 为准，请在图中修改。",
     "batch.hint.defaultVideo": "每组生成一段视频",
     "batch.hint.defaultImage": "每组生成 1 张图片",
-    "batch.notice.r2vNoRefs": "当前没有参考素材：请在素材组中选择/上传图片 / 音频 / 视频。未添加素材时生成会退化成文生视频（t2v）。",
-    "batch.notice.r2iNoRefs": "当前没有参考图：请在提示词组卡片中选择/上传图片1–9。未添加素材时生成会退化成文生图（t2i）。",
     "batch.groupTitle.prompt": "提示词组 {n}",
     "batch.groupTitle.asset": "素材组 {n}",
     "batch.durationTooltip": "填写秒数（1 位小数）；官方公式对齐 → {frames} 帧 · 实际约 {play}s",
@@ -333,12 +325,10 @@ const ZH = {
     "segment.infoRange": "帧 {start}–{end} ({length}f) · {sec}s",
     "segment.refSummary": "图片 {imgs}/{maxImgs} · 音频 {audios}/{maxAudios}",
     "bounds.range": "起点: {start} | 终点: {end}",
-    "output.fpsLabel": "帧率",
     "fl2v.tag.start": "首帧",
     "fl2v.tag.end": "尾帧",
 
     "common.uploading": "上传中…",
-    "common.analyzing": "分析中…",
     "common.delete": "删除",
     "mediaPicker.loading": "正在读取 input/ 媒体…",
     "mediaPicker.empty": "当前没有可选的已上传媒体",
@@ -440,14 +430,6 @@ const ZH = {
     "upload.refVideoBatchFailed": "参考视频上传失败：{err}",
     "parse.prefix": "解析",
     "parse.refVideo": "解析参考视频",
-
-    "smartSplit.needVideo": "请先选择/上传视频后再使用智能分割。",
-    "smartSplit.tooShort": "视频太短，无法智能分割。",
-    "smartSplit.noMaterial": "未找到可用的视频素材。",
-    "smartSplit.analyzing": "正在分析分镜…",
-    "smartSplit.noSegments": "智能分割未生成有效片段。",
-    "smartSplit.done": "完成：约 {shots} 个镜头 → {segs} 段。您也可以手动调整分割点。",
-    "smartSplit.failed": "智能分割失败：{err}",
 
     "canvas.uploadPicture1": "选择/上传图片1",
     "canvas.uploadR2vMedia": "选择/上传参考图/视频",
@@ -566,8 +548,6 @@ const ZH = {
     "widget.controlAfterGenerate": "生成前后定制",
     "widget.tooltip.clearVram": "段间清理显存：每段结束后卸载模型并清空 CUDA 缓存。",
     "widget.tooltip.exportSourceImages": "将时间轴原片输出到独立的 source_images 口；需另接预览/合成节点，不会改变主 images。默认关以节省内存。",
-    "widget.tooltip.sigmas": "可选。一采噪声表，接 BasicScheduler 或 ManualSigmas。接线后覆盖步数和调度器（采样器下拉仍有效）。BasicScheduler 请接 SigmaShift 之后的同一套 H3 MODEL。",
-    "widget.tooltip.refineSigmas": "可选。二采噪声表。接线后覆盖二采步数 / 调度器 / denoise / 低噪加步。",
     "common.upload": "选择/上传",
     "common.clickUpload": "点击选择/上传",
     "batch.delete": "删除",
@@ -600,13 +580,6 @@ const ZH = {
     "player.frameOf": "帧 {cur}/{total}{clip}",
     "executing.parseTimeline": "解析时间轴 / 加载视频",
     "executing.error": "执行出错",
-    "pack.largeConfirm": "导演包约 {mb} MB（含参考视频时可能很大）。",
-    "pack.exportFailed": "导出导演包失败",
-    "pack.importFailed": "导入导演包失败",
-    "pack.exportDoneMissing": "已导出，但以下素材文件未找到，包内对应槽位为空：",
-    "pack.importDoneMissing": "已导入，但以下素材缺失：",
-    "pack.alertFailed": "导演包操作失败：{err}",
-    "pack.failedTitle": "导演包操作失败",
 };
 
 const EN = {
@@ -614,9 +587,6 @@ const EN = {
     "toolbar.uploadVideo": "Upload video",
     "toolbar.addShot": "Add shot",
     "toolbar.appendVideo": "Append video",
-    "toolbar.split": "+ Split",
-    "toolbar.equalSplit": "Equal split",
-    "toolbar.smartSplit": "Smart split",
     "toolbar.runSelect": "Select to run",
     "toolbar.selectAll": "Select all",
     "toolbar.deleteSegment": "Delete segment",
@@ -630,25 +600,23 @@ const EN = {
     "toolbar.timelineZoomTitle": "When on, drag the slider to zoom the timeline horizontally; use the scrollbar for overflow",
     "tooltip.timelineZoom": "Zoom the timeline horizontally",
     "toolbar.noVideo": "No video uploaded",
-    "toolbar.exportPack": "Export pack",
-    "toolbar.importPack": "Import pack",
     "toolbar.snapshots": "Snapshots",
+    "snapshot.quickUpdate": "Update",
+    "snapshot.quickReset": "Reset",
     "tooltip.snapshots": "Save, preview, and restore Director configurations",
     "tooltip.snapshotSelector": "Switch between the current mixed workspace and saved snapshots",
+    "tooltip.snapshotQuickUpdate": "Create a snapshot from Mixed, or overwrite the active snapshot",
+    "tooltip.snapshotQuickReset": "Discard changes and restore the active snapshot",
     "toolbar.promptSync": "Sync",
     "tooltip.promptSync": "Read director_prompt and refresh Director groups",
     "promptSync.title": "Sync Director Prompt",
     "promptSync.needConnection": "Connect a STRING node containing Director JSON to director_prompt first.",
     "promptSync.empty": "Could not read a JSON string from the upstream director_prompt node.",
     "promptSync.failed": "Sync failed: {err}",
-    "tooltip.exportPack": "Export the current timeline and reference media as a zip (ASCII folders; portable)",
-    "tooltip.importPack": "Import a director pack, replacing the current timeline and media slots",
 
     "tooltip.addRefGroup": "Add a reference group (images / audio / video)",
     "tooltip.addShot": "Add a shot (prompt-only text-to-video, or start and/or end; end-only OK)",
     "tooltip.appendVideo": "Choose/upload and append as a separate clip at timeline end",
-    "tooltip.equalSplitN": "Number of equal segments",
-    "tooltip.smartSplit": "Auto-split scenes with PySceneDetect (requires: pip install scenedetect)",
     "tooltip.runSelect": "When on, only checked segments run; unchecked segments are neither sampled nor exported. When off, run all.",
     "tooltip.runSelectAll": "Checked = all; unchecked = none; per-segment override still available",
     "tooltip.deleteSegment": "Delete selected segment and trim video; timeline reflows",
@@ -711,6 +679,13 @@ const EN = {
     "tooltip.segmentContinuity": "Master switch: when on, each segment’s “From prev” pin controls whether the previous motion/audio is used (incl. r2v/v2v/rv2v). Off: hard cuts everywhere. Default context 22 frames. Do not install standalone H3 Motion Context alongside.",
     "batch.continuityFromPrev": "From prev",
     "tooltip.segmentContinuityFromPrev": "Requires master “Segment continuity”. On: pin previous segment into this one. Off: hard cut. Hidden on segment 1. Default on.",
+    "batch.seed": "Seed",
+    "batch.seedMode.inherit": "Default",
+    "batch.seedMode.random": "Random",
+    "batch.seedMode.fixed": "Fixed",
+    "tooltip.batchSeed": "Affects this group only. First and refine passes use the same resolved seed.",
+    "tooltip.batchSeedMode": "Default: use the first-pass seed; Random: regenerate on every queue; Fixed: use this group's value.",
+    "tooltip.batchFixedSeed": "Fixed seed for this group, from 0 to 18446744073709551615.",
     "tooltip.continuityJointOn": "Continuity on: S{a} → S{b} (click to disable)",
     "tooltip.continuityJointOff": "Hard cut: S{a} → S{b} (click to enable)",
     "output.continuityOverlap": "Context frames",
@@ -821,8 +796,6 @@ const EN = {
     "batch.pass.diff.steps": "first-pass steps",
     "batch.pass.diff.sampler": "first-pass sampler",
     "batch.pass.diff.scheduler": "scheduler",
-    "batch.pass.diff.sigmas": "first-pass sigmas",
-    "batch.pass.diff.sigmas_source": "first-pass SIGMAS link",
     "batch.pass.diff.shift_video": "video shift",
     "batch.pass.diff.shift_audio": "audio shift",
     "batch.pass.diff.<invalid-meta>": "corrupt cache metadata",
@@ -844,15 +817,9 @@ const EN = {
     "batch.hint.mixed": "Mixed mode · each group can use t2v / i2v / fl2v / r2v / v2v / rv2v. Set v2v and rv2v source video and dedicated media inside that group. Wire model_r2v for ref2v-family groups",
     "batch.groupTitle.mixed": "Group {n}",
     "tooltip.mixedGroupType": "Task type for this group (same behavior as the original mode)",
-    "external.i2vActive": "External Image to Video groups connected: timeline synced from graph; wiring overrides UI cards at run time. Use Select-to-run for group indices.",
-    "external.r2vActive": "External Reference to Video groups connected: timeline synced from graph; wiring overrides UI cards at run time. Use Select-to-run for group indices.",
-    "external.groupCount": "{n} group(s)",
-    "external.durationHint": "Edit duration / add-remove on Group nodes.",
     "external.durationLocked": "Duration is controlled by the Group node's duration_sec in external mode.",
     "batch.hint.defaultVideo": "One video per group",
     "batch.hint.defaultImage": "One image per group",
-    "batch.notice.r2vNoRefs": "No reference assets: choose/upload images / audio / video in a group. Without them, generation falls back to t2v.",
-    "batch.notice.r2iNoRefs": "No reference images: choose/upload Picture 1–9 on a group card. Without them, generation falls back to t2i.",
     "batch.groupTitle.prompt": "Prompt group {n}",
     "batch.groupTitle.asset": "Asset group {n}",
     "batch.durationTooltip": "Seconds (1 decimal); official snap → {frames} frames · ~{play}s play",
@@ -940,12 +907,10 @@ const EN = {
     "segment.infoRange": "Frames {start}–{end} ({length}f) · {sec}s",
     "segment.refSummary": "Pics {imgs}/{maxImgs} · Audio {audios}/{maxAudios}",
     "bounds.range": "Start: {start} | End: {end}",
-    "output.fpsLabel": "FPS",
     "fl2v.tag.start": "Start",
     "fl2v.tag.end": "End",
 
     "common.uploading": "Uploading…",
-    "common.analyzing": "Analyzing…",
     "common.delete": "Delete",
     "mediaPicker.loading": "Loading media from input/…",
     "mediaPicker.empty": "No uploaded media available",
@@ -1047,14 +1012,6 @@ const EN = {
     "upload.refVideoBatchFailed": "Reference video upload failed: {err}",
     "parse.prefix": "Parsing",
     "parse.refVideo": "Parsing reference video",
-
-    "smartSplit.needVideo": "Choose/upload a video before using smart split.",
-    "smartSplit.tooShort": "Video too short for smart split.",
-    "smartSplit.noMaterial": "No usable video material found.",
-    "smartSplit.analyzing": "Analyzing scenes…",
-    "smartSplit.noSegments": "Smart split produced no valid segments.",
-    "smartSplit.done": "Done: ~{shots} shots → {segs} segments. You can also adjust split points manually.",
-    "smartSplit.failed": "Smart split failed: {err}",
 
     "canvas.uploadPicture1": "Choose/Upload Picture 1",
     "canvas.uploadR2vMedia": "Choose/Upload ref image / video",
@@ -1173,8 +1130,6 @@ const EN = {
     "widget.controlAfterGenerate": "Control after generate",
     "widget.tooltip.clearVram": "Clear VRAM between segments: unload models and empty CUDA cache after each segment.",
     "widget.tooltip.exportSourceImages": "Decode the timeline source to the separate source_images output. Connect that output to a preview/compositor; it does not change images. Off by default to save memory.",
-    "widget.tooltip.sigmas": "Optional first-pass noise schedule (BasicScheduler or ManualSigmas). When wired, overrides Steps and Scheduler (the sampler dropdown still applies). Wire BasicScheduler after SigmaShift on the same H3 MODEL.",
-    "widget.tooltip.refineSigmas": "Optional second-pass noise schedule. When wired, overrides second-pass steps / scheduler / denoise / low-sigma extra steps.",
     "common.upload": "Choose/Upload",
     "common.clickUpload": "Click to choose/upload",
     "batch.delete": "Delete",
@@ -1207,16 +1162,7 @@ const EN = {
     "player.frameOf": "Frame {cur}/{total}{clip}",
     "executing.parseTimeline": "Parse timeline / load video",
     "executing.error": "Execution error",
-    "pack.largeConfirm": "This pack is about {mb} MB (reference videos can be large).",
-    "pack.exportFailed": "Failed to export director pack",
-    "pack.importFailed": "Failed to import director pack",
-    "pack.exportDoneMissing": "Exported, but these media files were missing so their slots are empty:",
-    "pack.importDoneMissing": "Imported, but these media files were missing:",
-    "pack.alertFailed": "Director pack failed: {err}",
-    "pack.failedTitle": "Director pack failed",
 };
-
-const DICTS = { zh: ZH, en: EN };
 
 /** Canonical aspect storage labels (Chinese) → i18n key */
 export const ASPECT_I18N_KEYS = {
@@ -1231,53 +1177,6 @@ export const ASPECT_I18N_KEYS = {
     "自定义": "aspect.custom",
 };
 
-let _locale = null;
-const _listeners = new Set();
-
-function detectDefaultLocale() {
-    try {
-        const nav = (typeof navigator !== "undefined" && (navigator.language || navigator.userLanguage)) || "zh";
-        return String(nav).toLowerCase().startsWith("zh") ? "zh" : "en";
-    } catch {
-        return "zh";
-    }
-}
-
-export function getLocale() {
-    if (_locale) return _locale;
-    try {
-        const saved = localStorage.getItem(LOCALE_STORAGE_KEY);
-        if (saved === "zh" || saved === "en") {
-            _locale = saved;
-            return _locale;
-        }
-    } catch { /* ignore */ }
-    _locale = detectDefaultLocale();
-    return _locale;
-}
-
-export function setLocale(lang) {
-    const next = lang === "en" ? "en" : "zh";
-    if (_locale === next) return _locale;
-    _locale = next;
-    try {
-        localStorage.setItem(LOCALE_STORAGE_KEY, next);
-    } catch { /* ignore */ }
-    for (const fn of _listeners) {
-        try { fn(next); } catch { /* ignore */ }
-    }
-    return _locale;
-}
-
-export function toggleLocale() {
-    return setLocale(getLocale() === "zh" ? "en" : "zh");
-}
-
-export function onLocaleChange(fn) {
-    if (typeof fn === "function") _listeners.add(fn);
-    return () => _listeners.delete(fn);
-}
-
 function formatTemplate(str, vars) {
     if (!vars) return str;
     return String(str).replace(/\{(\w+)\}/g, (_, k) => (
@@ -1286,9 +1185,7 @@ function formatTemplate(str, vars) {
 }
 
 export function t(key, vars) {
-    const locale = getLocale();
-    const dict = DICTS[locale] || ZH;
-    const raw = dict[key] ?? ZH[key] ?? key;
+    const raw = ZH[key] ?? key;
     return formatTemplate(raw, vars);
 }
 

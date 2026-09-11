@@ -203,11 +203,8 @@ export function resolveMixedGroupKey(segOrTask) {
 }
 
 export function getDirectorMode(taskTypeValue) {
-    const key = resolveTaskKey(taskTypeValue);
-    if (FL2V_TASKS.has(key)) return "fl2v";
-    if (PROMPT_BATCH_TASKS.has(key)) return "prompt_batch";
-    // v2v / rv2v (and any non-batch key) → source-video timeline, same as Bernini.
-    return "video";
+    void taskTypeValue;
+    return "prompt_batch";
 }
 
 /** t2i/t2v=plain, i2i/i2v=source image, r2i/r2v=up to 9 reference images */
@@ -405,6 +402,22 @@ export function resolveSegmentPassMode(seg) {
     return "second";
 }
 
+export function normalizeSegmentSeedMode(value) {
+    const mode = String(value || "inherit").trim().toLowerCase();
+    return mode === "random" || mode === "fixed" ? mode : "inherit";
+}
+
+export function normalizeSegmentSeed(value) {
+    const raw = String(value ?? "0").trim();
+    if (!/^\d+$/.test(raw)) return "0";
+    const maxSeed = 18446744073709551615n;
+    try {
+        return (BigInt(raw) > maxSeed ? maxSeed : BigInt(raw)).toString();
+    } catch {
+        return "0";
+    }
+}
+
 export function newBatchSegment(overrides = {}) {
     const taskKey = resolveTaskKey(overrides.taskType || "");
     const isVideo = isVideoBatchTask(taskKey) || FL2V_TASKS.has(taskKey) || MIXED_GROUP_TASKS.includes(taskKey);
@@ -424,6 +437,8 @@ export function newBatchSegment(overrides = {}) {
     const refImageSize = normalizeRefImageSize(
         overrides.refImageSize,
     );
+    const seedMode = normalizeSegmentSeedMode(overrides.seedMode);
+    const seed = normalizeSegmentSeed(overrides.seed);
     return {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         start: 0,
@@ -447,6 +462,8 @@ export function newBatchSegment(overrides = {}) {
         frameCount: fc,
         ...(isVideo ? { durationSec } : {}),
         refImageSize,
+        seedMode,
+        seed,
     };
 }
 

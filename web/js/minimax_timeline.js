@@ -106,39 +106,15 @@ import {
 } from "./minimax_ref_slots.js";
 import {
     FL2V_STYLES,
-    bindFl2vEvents,
-    buildFl2vPayloadFields,
     drawFl2vSegmentThumbnails,
-    ensureFl2vTimeline,
-    fl2vStartIndices,
-    getFl2vTotalDurationSec,
-    getFl2vSampleFrames,
-    getFl2vVisualFrames,
-    getFl2vUiHeight,
-    removeFl2vShot,
-    rippleFl2vRightEdge,
-    mountFl2vPanel,
-    newFl2vShot,
-    normalizeFl2vSegments,
-    openFl2vUpload,
-    setFl2vToolbar,
     setFl2vShotPreview,
-    flushFl2vPromptDraft,
-    flushFl2vDurationInputs,
-    syncFl2vDurationSecAfterDrag,
-    syncFl2vFromShots,
-    updateFl2vDetailUI,
-    updateFl2vToolbarBtns,
 } from "./minimax_fl2v.js";
 import { mountPromptImageMentions, refreshPromptTokenEditors, teardownPromptImageMentions } from "./minimax_prompt_mentions.js";
 import {
     applyI18nDom,
     aspectDisplayLabel,
-    getLocale,
-    onLocaleChange,
     t,
     taskDisplayLabel,
-    toggleLocale,
 } from "./minimax_i18n.js";
 import { bindSnapshotActions, bindSnapshotSelector } from "./minimax_snapshots.js";
 
@@ -750,54 +726,10 @@ function hookDirectorSampleWidgetSnapshots(node) {
         w.callback = function (...args) {
             const r = prev?.apply(this, args);
             snapshotDirectorSampleWidgets(node);
+            node._minimaxEditor?._snapshotSelector?.notifyChanged?.();
             return r;
         };
     }
-}
-
-function lockDirectorNamedSigmasInput(node, name, tooltipKey) {
-    const inp = (node?.inputs || []).find((i) => String(i.name) === name);
-    if (!inp) return;
-    if (tooltipKey) inp.tooltip = t(tooltipKey);
-    const flag = `_mmx${name}Locked`;
-    if (inp[flag]) return;
-    inp[flag] = true;
-    try {
-        Object.defineProperty(inp, "widget", {
-            get() { return undefined; },
-            set() { /* socket-only: never convert SIGMAS to a widget */ },
-            configurable: true,
-            enumerable: true,
-        });
-    } catch {
-        inp.widget = undefined;
-    }
-}
-
-function lockDirectorSigmasInput(node) {
-    lockDirectorNamedSigmasInput(node, "sigmas", "widget.tooltip.sigmas");
-    lockDirectorNamedSigmasInput(node, "refine_sigmas", "widget.tooltip.refineSigmas");
-}
-
-function hideDirectorSigmasWidget(node) {
-    hideDirectorNamedSigmasWidget(node, "sigmas");
-    hideDirectorNamedSigmasWidget(node, "refine_sigmas");
-}
-
-function hideDirectorNamedSigmasWidget(node, name) {
-    const w = widgetByName(node, name);
-    if (!w) return;
-    if (typeof w.computeSize === "function"
-        && w.computeSize !== hiddenWidgetSize
-        && !w._mmxOrigComputeSize) {
-        w._mmxOrigComputeSize = w.computeSize.bind(w);
-    }
-    w.hidden = true;
-    if (!w.options) w.options = {};
-    w.options.hidden = true;
-    w.computeSize = hiddenWidgetSize;
-    w.draw = hiddenWidgetDraw;
-    if (w.element) w.element.style.display = "none";
 }
 
 function setDirectorWidgetVisible(node, name, visible) {
@@ -830,13 +762,6 @@ function setDirectorWidgetVisible(node, name, visible) {
     }
 }
 
-function directorHasSigmasLink(node) {
-    const inp = (node?.inputs || []).find((i) => String(i.name) === "sigmas");
-    if (!inp) return false;
-    if (inp.link != null) return true;
-    return Array.isArray(inp.links) && inp.links.length > 0;
-}
-
 function hideDirectorHiddenWidgets(node) {
     if (!node) return;
     for (const w of node.widgets || []) {
@@ -849,8 +774,6 @@ function hideDirectorHiddenWidgets(node) {
 function syncDirectorSchedulerWidgets(node, { restore = false } = {}) {
     if (!node) return;
     hookDirectorSampleWidgetSnapshots(node);
-    lockDirectorSigmasInput(node);
-    hideDirectorSigmasWidget(node);
     hideDirectorHiddenWidgets(node);
     if (restore) restoreDirectorSampleWidgets(node);
     hideDirectorHiddenWidgets(node);
@@ -974,7 +897,7 @@ const STYLES = `
  @media(max-width:600px){.bd-snapshot-body{grid-template-columns:1fr}.bd-snapshot-body aside{border-right:0;border-bottom:1px solid #414951;max-height:42%}}
 .bd-wrap.bd-batch-fill{height:100%!important;min-height:0!important;max-height:100%;flex:1 1 0;overflow:hidden}
 .bd-bottom-inset{display:none}
-.bd-wrap.bd-batch-fill>.bd-bottom-inset{display:block;flex:0 0 4px;height:4px}
+.bd-wrap.bd-batch-fill>.bd-bottom-inset{display:block;flex:0 0 10px;height:10px;margin-top:-6px}
 .bd-wrap>.bd-toolbar-wrap{flex-shrink:0}
 .bd-main{flex:1 1 0;min-height:0;display:flex;flex-direction:column;gap:6px;width:100%;overflow:hidden}
 .bd-wrap>.bd-live-sample{flex-shrink:0;position:relative;z-index:4;width:100%;margin:0}
@@ -995,7 +918,7 @@ const STYLES = `
 .bd-wrap.bd-batch-fill .bd-main>.bd-batch:not(.hidden){
   flex:1 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column
 }
-.bd-wrap.bd-batch-fill .bd-batch-toolbar,.bd-wrap.bd-batch-fill .bd-batch-i2v-notice,.bd-wrap.bd-batch-fill .bd-batch-picker{flex-shrink:0}
+.bd-wrap.bd-batch-fill .bd-batch-toolbar,.bd-wrap.bd-batch-fill .bd-batch-picker{flex-shrink:0}
 .bd-wrap.bd-batch-fill .bd-batch-list{
     flex:0 0 auto;min-height:0;max-height:none!important;overflow-y:visible;height:auto;
   display:flex;flex-direction:column
@@ -1094,9 +1017,6 @@ const STYLES = `
 .bd-toolbar-wrap{display:flex;flex-direction:column;gap:4px;width:100%}
 .bd-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;width:100%}
 .bd-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1;min-width:0}
-.bd-smart-split-msg{width:100%;box-sizing:border-box;font-size:11px;line-height:1.4;color:#f66;padding:0 2px;min-height:0}
-.bd-smart-split-msg.hidden{display:none!important}
-.bd-smart-split-msg.ok{color:#8c8}
 .bd-external-groups-msg{width:100%;box-sizing:border-box;font-size:11px;line-height:1.45;color:#9ad;padding:8px 10px;margin:0 0 4px;background:#152018;border:1px solid #2f4a38;border-radius:6px}
 .bd-external-groups-msg.hidden{display:none!important}
 .bd-wrap.bd-external-groups .bd-batch-card,.bd-wrap.bd-external-groups .bd-fl2v-shot{opacity:.48;pointer-events:none}
@@ -1142,7 +1062,7 @@ const STYLES = `
 .bd-refine-mp-inline>span{color:#888;font-size:10px;white-space:nowrap}
 .bd-refine-mp-inline input{width:52px;box-sizing:border-box;background:#111;color:#ddd;border:1px solid #333;border-radius:4px;height:26px;padding:0 6px;font-size:11px}
 .bd-out-refine-wrap.linked{opacity:.7}
-.bd-refine-panel{width:100%;box-sizing:border-box;margin:6px 0 0;padding:10px 12px;background:#161616;border:1px solid #333;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:8px 12px}
+.bd-refine-panel{width:100%;box-sizing:border-box;margin:0;padding:10px 12px;background:#161616;border:1px solid #333;border-radius:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:8px 12px}
 .bd-refine-panel.hidden{display:none!important}
 .bd-refine-panel .bd-refine-field{display:flex;flex-direction:column;gap:3px;min-width:0}
 .bd-refine-panel .bd-refine-field.hidden{display:none!important}
@@ -1158,6 +1078,7 @@ const STYLES = `
 .bd-split{display:block;width:100%;box-sizing:border-box;min-width:0}
 .bd-player{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%}
 .bd-btn{background:#222;color:#e0e0e0;border:1px solid #111;border-radius:4px;padding:6px 12px;font-size:11px;line-height:1.35;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:center}
+.bd-snapshot-quick.active{background:#1a3a2a;color:#4fff8f;border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.25)}
 .bd-actions>.bd-btn{height:29px;min-height:29px}
 .bd-btn:hover{background:#333;border-color:#555}
 .bd-btn-danger:hover{background:#4a1515;border-color:#c44;color:#faa}
@@ -1301,7 +1222,6 @@ const STYLES = `
 .bd-video-tag{color:#4fff8f;font-size:10px}
 .bd-num{width:42px;background:#181818;border:1px solid #333;border-radius:4px;color:#eee;padding:5px 4px;font-size:11px;text-align:center;-moz-appearance:textfield}
 .bd-num::-webkit-outer-spin-button,.bd-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.bd-removed-video-split-control{display:none!important}
 .bd-output label{color:#888;font-size:10px;white-space:nowrap}
 .bd-output .bd-out-fixed{display:flex;gap:4px;align-items:center}
 .bd-output .bd-out-fixed.hidden{display:none}
@@ -1507,7 +1427,7 @@ async function uploadToInput(file) {
     const body = new FormData();
     body.append("image", uploadFile, uploadFile.name);
     body.append("type", "input");
-    body.append("subfolder", "H3_D/references");
+    body.append("subfolder", "H3_D_NEO/references");
     body.append("overwrite", "false");
     const resp = await api.fetchApi("/upload/image", { method: "POST", body });
     if (!resp.ok) {
@@ -1649,6 +1569,17 @@ function buildClipFrameMap(clipIndex, count) {
 
 const CLIP_SEGMENT_COLORS = ["rgba(255,200,50,0.9)", "rgba(102,170,255,0.9)", "rgba(79,255,143,0.9)", "rgba(255,102,170,0.9)"];
 
+function elementOuterHeight(el) {
+    if (!el) return 0;
+    const h = Number(el.offsetHeight) || 0;
+    try {
+        const style = getComputedStyle(el);
+        return h + (Number.parseFloat(style.marginTop) || 0) + (Number.parseFloat(style.marginBottom) || 0);
+    } catch {
+        return h;
+    }
+}
+
 function getDirectorUiHeight(editor) {
     if (editor?.getDirectorMode?.() === "prompt_batch") {
         const batchH = getImageBatchUiHeight(editor);
@@ -1662,11 +1593,11 @@ function getDirectorUiHeight(editor) {
             ));
             const mainChildren = visibleChildren(main);
             const mainH = mainChildren.reduce((sum, child) => (
-                sum + (child === editor.batchPanel ? batchH : child.offsetHeight)
+                sum + (child === editor.batchPanel ? batchH : elementOuterHeight(child))
             ), 0) + Math.max(0, mainChildren.length - 1) * 6;
             const rootChildren = visibleChildren(root);
             const rootH = rootChildren.reduce((sum, child) => (
-                sum + (child === main ? mainH : child.offsetHeight)
+                sum + (child === main ? mainH : elementOuterHeight(child))
             ), 0) + Math.max(0, rootChildren.length - 1) * 6;
             if (rootH > 0) return Math.ceil(rootH);
         }
@@ -1676,9 +1607,6 @@ function getDirectorUiHeight(editor) {
             return batchH + track + 100;
         }
         return batchH + 100;
-    }
-    if (editor?.getDirectorMode?.() === "fl2v") {
-        return getFl2vUiHeight(editor) + 110;
     }
     let h = (editor?.canvasHeight || RULER_H + SEG_LABEL_H + TRACK_H) + 370 + 52;
     if (
@@ -1950,7 +1878,7 @@ function bindDirectorDomWidgetSizing(node, widget, getEditor) {
 
 function initDirectorEditor(node) {
     // Must not share Bernini's `_directorDomWidget` — their loadedGraphNode mounts on that key.
-    if (!isMiniMaxH3DirectorNode(node)) return null;
+    if (!isH3_D_NEONode(node)) return null;
     const widget = pruneDirectorDomWidgets(node);
     const container = widget?.element;
     if (!container) return null;
@@ -1974,7 +1902,7 @@ function initDirectorEditor(node) {
     try {
         for (const wrap of [...container.querySelectorAll(":scope > .bd-wrap")]) wrap.remove();
         hookTaskTypeWidget(node);
-        const editor = new MiniMaxH3DirectorEditor(node, container, widget);
+        const editor = new H3_D_NEOEditor(node, container, widget);
         hookLiveTaeVaeWidget(node, editor);
         node._minimaxEditor = editor;
         widget._minimaxEditor = editor;
@@ -2106,8 +2034,9 @@ function hideWidget(w) {
 function parseTimeline(raw, totalFrames, fps) {
     const total = totalFrames || 124;
     const base = {
-        version: 4,
-        editMode: "global",
+        version: 5,
+        timelineMode: "prompt_batch",
+        editMode: "segment",
         totalFrames: total,
         frameRate: coerceTimelineFps(fps || 24),
         video: {
@@ -2120,7 +2049,7 @@ function parseTimeline(raw, totalFrames, fps) {
         },
         videoClips: [],
         global: {
-            taskType: "", prompt: "", refs: [], refAudios: [], referenceVideo: {},
+            taskType: "mixed", prompt: "", refs: [], refAudios: [], referenceVideo: {},
             continuousReference: false,
         },
         output: {
@@ -2152,6 +2081,12 @@ function parseTimeline(raw, totalFrames, fps) {
             const text = String(raw ?? "");
             if (!text.trim()) return base;
             data = JSON.parse(text);
+        }
+        if (
+            data.timelineMode !== "prompt_batch"
+            || resolveTaskKey(data.global?.taskType || "") !== "mixed"
+        ) {
+            return base;
         }
         data.version = data.version || 4;
         data.editMode = data.editMode || "global";
@@ -2237,55 +2172,12 @@ function parseTimeline(raw, totalFrames, fps) {
         );
         const detailMode = data.batchDetailMode;
         data.batchDetailMode = detailMode === "solo" ? "solo" : "all";
-        if (data.timelineMode === "fl2v" || resolveTaskKey(data.global?.taskType || "") === "fl2v") {
-            data.timelineMode = "fl2v";
-            data.editMode = "segment";
-            data.shots = Array.isArray(data.shots) ? data.shots : [];
-            const stored = parseInt(data.totalFrames, 10);
-            const farthest = Math.max(
-                0,
-                ...(data.segments || []).map((s) => (parseInt(s.start, 10) || 0) + (parseInt(s.length ?? s.frameCount, 10) || 0)),
-                ...(data.keyframes || []).map((k) => (parseInt(k.start, 10) || 0) + (parseInt(k.frameCount ?? k.length, 10) || 0)),
-            );
-            data.totalFrames = (Number.isFinite(stored) && stored > 0)
-                ? stored
-                : Math.max(farthest, total, 240);
-            return data;
-        }
-        if (data.timelineMode === "image_batch" || data.timelineMode === "prompt_batch") {
-            data.timelineMode = "prompt_batch";
-            data.editMode = "segment";
-            data.totalFrames = sumFrameCounts(data.segments) || data.totalFrames || total;
-            return data;
-        }
-        if (data.timelineMode === "gen_blank" || data.timelineMode === "gen_image") {
-            const gkey = resolveTaskKey(data.global?.taskType || "");
-            if (isPromptBatchTask(gkey)) {
-                data.timelineMode = "prompt_batch";
-                data.editMode = "segment";
-            }
-            data.totalFrames = sumFrameCounts(data.segments) || data.totalFrames || total;
-            return data;
-        }
-        if (!data.videoClips?.length && data.video?.videoFile) {
-            data.videoClips = [{
-                id: data.video.id || uid(),
-                fileName: data.video.fileName || "",
-                videoFile: data.video.videoFile || data.video.fileName || "",
-                subfolder: data.video.subfolder || "",
-                type: data.video.type || "input",
-                width: data.video.width || 0,
-                height: data.video.height || 0,
-                duration: data.video.duration || 0,
-                nativeFps: data.video.nativeFps || data.video.native_fps || 0,
-                nativeFrameCount: data.video.nativeFrameCount || data.video.native_frame_count || 0,
-                sourceFrameCount: data.video.sourceFrameCount || data.video.frameMap?.length || 0,
-                storageWidth: data.video.storageWidth,
-                storageHeight: data.video.storageHeight,
-            }];
-        }
-        data.videoClips = data.videoClips || [];
-        data.totalFrames = data.totalFrames || data.video.sourceFrameCount || data.video.frameMap?.length || total;
+        data.timelineMode = "prompt_batch";
+        data.editMode = "segment";
+        data.global.taskType = "mixed";
+        delete data.shots;
+        delete data.keyframes;
+        data.totalFrames = sumFrameCounts(data.segments) || data.totalFrames || total;
         return data;
     } catch {
         return base;
@@ -2309,7 +2201,7 @@ function makeTimelineFileName(path) {
     return name;
 }
 
-class MiniMaxH3DirectorEditor {
+class H3_D_NEOEditor {
     constructor(node, container, domWidget) {
         this.node = node;
         this.container = container;
@@ -2375,17 +2267,10 @@ class MiniMaxH3DirectorEditor {
         this._pendingH3FpsLock = storedFps;
         this.buildDOM();
         this.bindEvents();
-        this._unsubLocale = onLocaleChange(() => this.applyLocale());
         this.applyLocale();
         this._directorMode = getDirectorMode(this.taskTypeWidget?.value);
         this._taskKey = resolveTaskKey(this.taskTypeWidget?.value);
-        if (this._directorMode === "video") {
-            this.restoreVideoFromTimeline();
-        } else if (this._directorMode === "prompt_batch" || this._directorMode === "image_batch") {
-            ensureImageBatchTimeline(this);
-        } else {
-            this.ensureGenTimeline();
-        }
+        ensureImageBatchTimeline(this);
         this.applyTaskLayout(this._directorMode);
         this.lockH3FrameRate({ fromFps: this._pendingH3FpsLock });
         this._pendingH3FpsLock = null;
@@ -2503,10 +2388,8 @@ class MiniMaxH3DirectorEditor {
         this.root?.classList.toggle("bd-external-groups", active);
         // Refresh add/delete visibility when external wiring toggles.
         if (this.isR2vBatch?.() || this.isMixedMode?.()) setR2vToolbar(this, true);
-        else if (this.isFl2vMode?.()) setFl2vToolbar(this, true);
         else {
             updateR2vToolbarBtns(this);
-            updateFl2vToolbarBtns(this);
         }
         if (!active) {
             el.textContent = "";
@@ -2557,7 +2440,7 @@ class MiniMaxH3DirectorEditor {
         if (!this.hasExternalI2vGroups?.() && !this.hasExternalR2vGroups?.()) return;
         const nodes = collectExternalGroupNodes(this);
         if (!nodes?.length) return;
-        const items = (this.timeline.shots?.length ? this.timeline.shots : this.timeline.segments) || [];
+        const items = this.timeline.segments || [];
         const n = Math.min(nodes.length, items.length);
         for (let i = 0; i < n; i++) {
             const item = items[i] || {};
@@ -2571,7 +2454,6 @@ class MiniMaxH3DirectorEditor {
         this.updateExternalGroupsBanner();
         // Keep any in-progress Director textarea edits before rebuilding from graph.
         if (this.isImageBatch?.()) flushBatchPromptInputs(this);
-        if (this.isFl2vMode?.()) flushFl2vPromptDraft(this);
         const specs = collectExternalGroupSpecs(this);
         if (!specs?.length) {
             this._externalGroupsSyncSig = null;
@@ -2600,43 +2482,7 @@ class MiniMaxH3DirectorEditor {
         if (this._externalGroupsSyncSig === sig) return;
         this._externalGroupsSyncSig = sig;
 
-        if (mode === "fl2v") {
-            const prev = this.timeline.shots || [];
-            const prevByNode = new Map(
-                prev.filter((s) => s?.externalNodeId != null)
-                    .map((s) => [String(s.externalNodeId), s]),
-            );
-            const allowIndexFallback = !prev.some((s) => s?.externalNodeId != null);
-            this.timeline.shots = specs.map((spec, i) => {
-                const matched = (spec.nodeId != null && prevByNode.get(String(spec.nodeId)))
-                    || (allowIndexFallback ? (prev[i] || null) : null);
-                // Same Group node → keep Director draft if widget briefly empty.
-                // Different/new node at this index → never inherit another shot's prompt.
-                const specPrompt = String(spec.prompt ?? "").trim();
-                const prompt = specPrompt
-                    || (matched ? String(matched.prompt || "").trim() : "");
-                return newFl2vShot({
-                    id: matched?.id,
-                    durationSec: spec.durationSec ?? defaultDurationSec("fl2v"),
-                    prompt,
-                    externalNodeId: spec.nodeId ?? null,
-                    // External graph is source of truth for media previews.
-                    startImage: imageRefFromPath(spec.firstImageFile),
-                    endImage: imageRefFromPath(spec.lastImageFile),
-                });
-            });
-            syncFl2vFromShots(this);
-            this.selectedIndex = Math.min(this.selectedIndex ?? 0, Math.max(0, this.timeline.shots.length - 1));
-            updateFl2vDetailUI?.(this);
-            this.scheduleRender?.();
-            this.commit?.(false, { syncTimeline: true });
-            this.updateVideoNameLabel?.();
-            this.updateDomWidgetHeight?.();
-            this.updateRunSelectUI?.();
-            return;
-        }
-
-        if (mode === "prompt_batch" || mode === "image_batch" || isPromptBatchTask(taskKey)) {
+        if (mode === "prompt_batch") {
             const prev = this.timeline.segments || [];
             const prevByNode = new Map(
                 prev.filter((s) => s?.externalNodeId != null)
@@ -2824,12 +2670,16 @@ class MiniMaxH3DirectorEditor {
 
     resizeNodeForContentMinChange() {
         const nextMinHeight = this.getDirectorUiMinHeight();
-        if (!this.node?.size) return;
+        if (!this.node?.size) {
+            this.updateDomWidgetHeight({ settle: true });
+            return;
+        }
         bindDomWidgetContentComputeSize(this);
         const idealHeight = Number(this.node.computeSize?.()?.[1]);
-        if (!Number.isFinite(idealHeight) || Math.abs(this.node.size[1] - idealHeight) < 1) return;
-        this.node.setSize?.([this.node.size[0], Math.max(nextMinHeight, idealHeight)]);
-        this.node.setDirtyCanvas?.(true, true);
+        if (Number.isFinite(idealHeight) && Math.abs(this.node.size[1] - idealHeight) >= 1) {
+            this.node.setSize?.([this.node.size[0], Math.max(nextMinHeight, idealHeight)]);
+            this.node.setDirtyCanvas?.(true, true);
+        }
         this.updateDomWidgetHeight({ settle: true });
     }
 
@@ -2850,7 +2700,7 @@ class MiniMaxH3DirectorEditor {
 
     /** Patch batch card `.running` without tearing down the list (progress path). */
     _syncBatchRunHighlight() {
-        if (!this.isImageBatch?.() || !this.batchList) return;
+        if ((!this.isImageBatch?.() && !this.isFl2vMode?.()) || !this.batchList) return;
         const runningIdx = this._runHighlightSeg;
         this.batchList.querySelectorAll(".bd-batch-card").forEach((card) => {
             const i = parseInt(card.dataset.batchIndex, 10);
@@ -2874,185 +2724,61 @@ class MiniMaxH3DirectorEditor {
     }
 
     buildTimelinePayload() {
-        if (this.isFl2vMode()) {
-            const fl = buildFl2vPayloadFields(this);
-            const outMode = this.timeline.output?.mode || "long_edge";
-            const output = normalizeOutputContinuity({
-                ...(this.timeline.output || {}),
-                mode: outMode,
-            });
-            const body = { ...this.timeline };
-            delete body.segments;
-            delete body.keyframes;
-            stripTimelineContinuityRootFields(body);
-            stripTimelineEphemeralFields(body);
-            return {
-                ...body,
-                version: 5,
-                ...fl,
-                frameRate: this.getFrameRate(),
-                global: {
-                    ...(this.timeline.global || {}),
-                    taskType: this.globalTask?.value || this.taskTypeWidget?.value || "",
-                    prompt: this.timeline.global?.prompt || "",
-                },
-                output,
-                ...this._runSelectionPayload(),
-            };
-        }
-        if (this.isImageBatch()) {
-            this._persistCurrentBatchWorkspace();
-            const taskKey = this.getTaskKey();
-            const i2iSrc = (taskKey === "i2i" || taskKey === "i2v") ? this.getI2iSourceDimensions() : null;
-            const outMode = imageBatchRequiresFixedOutput(taskKey)
-                ? "fixed"
-                : (this.timeline.output?.mode || "long_edge");
-            const output = normalizeOutputContinuity({
-                ...this.timeline.output,
-                mode: outMode,
-            });
-            if (!isVideoBatchTask(taskKey)) {
-                output.exportMode = "all";
-            }
-            if (i2iSrc?.width > 0 && i2iSrc?.height > 0) {
-                output.sourceWidth = i2iSrc.width;
-                output.sourceHeight = i2iSrc.height;
-            }
-            const batchBody = { ...this.timeline };
-            stripTimelineContinuityRootFields(batchBody);
-            stripTimelineEphemeralFields(batchBody);
-            return {
-                ...batchBody,
-                version: 5,
-                timelineMode: "prompt_batch",
-                editMode: "segment",
-                totalFrames: sumFrameCounts(this.timeline.segments),
-                frameRate: this.getFrameRate(),
-                width: this.timeline.output?.width,
-                height: this.timeline.output?.height,
-                global: {
-                    ...this.timeline.global,
-                    taskType: this.globalTask?.value || this.taskTypeWidget?.value || "",
-                    prompt: this.timeline.global?.prompt || "",
-                    ...(i2iSrc?.width > 0 ? { sourceWidth: i2iSrc.width, sourceHeight: i2iSrc.height } : {}),
-                },
-                output,
-                segments: this.timeline.segments.map((s, i) => {
-                    const clean = sanitizeSegmentForPayload(s);
-                    return {
-                        id: clean.id,
-                        start: clean.start,
-                        length: clean.frameCount ?? clean.length ?? 1,
-                        frameCount: clean.frameCount ?? clean.length ?? 1,
-                        durationSec: clean.durationSec,
-                        prompt: clean.prompt || "",
-                        negativePrompt: clean.negativePrompt || "",
-                        taskType: clean.taskType || "",
-                        refs: clean.refs || [],
-                        refAudios: clean.refAudios || [],
-                        refVideos: clean.refVideos || [],
-                        genImage: clean.genImage || { imageFile: "" },
-                        startImage: clean.startImage || null,
-                        endImage: clean.endImage || null,
-                        sourceVideo: clean.sourceVideo,
-                        // Persist per-segment「引用上段」(default true when unset).
-                        continuityFromPrev: isSegmentContinuityFromPrev(clean, i),
-                        refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
-                        passMode: resolveSegmentPassMode(clean),
-                        uiCardHeight: Number.isFinite(Number(clean.uiCardHeight))
-                            ? Math.round(Number(clean.uiCardHeight))
-                            : undefined,
-                        uiCollapsed: !!clean.uiCollapsed,
-                        uiGroupName: String(clean.uiGroupName || "").trim(),
-                    };
-                }),
-                ...this._runSelectionPayload(),
-            };
-        }
-        if (this.isGenMode()) {
-            const mode = this.getDirectorMode();
-            const genBody = { ...this.timeline };
-            stripTimelineContinuityRootFields(genBody);
-            stripTimelineEphemeralFields(genBody);
-            return {
-                ...genBody,
-                version: 5,
-                timelineMode: mode,
-                totalFrames: sumFrameCounts(this.timeline.segments),
-                frameRate: this.getFrameRate(),
-                width: this.timeline.output?.width,
-                height: this.timeline.output?.height,
-                refMaxSize: this.timeline.output?.longEdge,
-                global: {
-                    ...this.timeline.global,
-                    taskType: this.globalTask?.value || this.taskTypeWidget?.value || "",
-                    prompt: this.timeline.global?.prompt || "",
-                },
-                output: normalizeOutputContinuity({ ...this.timeline.output }),
-                segments: this.timeline.segments.map((s) => {
-                const clean = sanitizeSegmentForPayload(s);
-                return {
-                    ...clean,
-                    frameCount: clean.frameCount ?? clean.length,
-                };
-            }),
-            ...this._runSelectionPayload(),
-            };
-        }
-        this._persistCurrentVideoWorkspace();
-        const video = { ...(this.timeline.video || {}) };
-        const frameMap = video.frameMap?.length ? video.frameMap : [];
-        const src = this.getSourceDimensions();
-        const resolved = resolveOutputDimensions(src.width, src.height, this.timeline.output || {}, {
-            refMaxSize: this.refMaxWidget?.value,
+        this._persistCurrentBatchWorkspace();
+        const output = normalizeOutputContinuity({
+            ...this.timeline.output,
+            mode: "fixed",
         });
-        const storageW = resolved.width || video.storageWidth || this._storageWidth;
-        const storageH = resolved.height || video.storageHeight || this._storageHeight;
-        const clips = this.getVideoClips().map((c) => ({
-            ...c,
-            storageWidth: storageW,
-            storageHeight: storageH,
-        }));
-        const timelineBody = { ...this.timeline };
-        stripTimelineContinuityRootFields(timelineBody);
-        stripTimelineEphemeralFields(timelineBody);
-        const clipSourceTotal = clips.reduce(
-            (s, c) => s + (parseInt(c.sourceFrameCount, 10) || 0),
-            0,
-        );
-        const sourceFrameCount = parseInt(video.sourceFrameCount, 10)
-            || clipSourceTotal
-            || (frameMap.length ? 0 : this.getTotalFrames());
+        const batchBody = { ...this.timeline };
+        delete batchBody.shots;
+        delete batchBody.keyframes;
+        stripTimelineContinuityRootFields(batchBody);
+        stripTimelineEphemeralFields(batchBody);
         return {
-            ...timelineBody,
+            ...batchBody,
             version: 5,
-            timelineMode: "video",
-            totalFrames: this.getTotalFrames(),
+            timelineMode: "prompt_batch",
+            editMode: "segment",
+            totalFrames: sumFrameCounts(this.timeline.segments),
             frameRate: this.getFrameRate(),
-            videoClips: clips,
+            width: this.timeline.output?.width,
+            height: this.timeline.output?.height,
             global: {
-                ...(this.timeline.global || {}),
-                taskType: this.globalTask?.value || this.taskTypeWidget?.value || "",
+                ...this.timeline.global,
+                taskType: "mixed",
                 prompt: this.timeline.global?.prompt || "",
-                referenceVideo: this.timeline.global?.referenceVideo || {},
-                continuousReference: !!this.timeline.global?.continuousReference,
             },
-            segments: (this.timeline.segments || []).map((s) => {
-                const clean = sanitizeSegmentForPayload(s);
+            output,
+            segments: this.timeline.segments.map((segment, index) => {
+                const clean = sanitizeSegmentForPayload(segment);
                 return {
-                    ...clean,
-                    referenceVideo: clean.referenceVideo || {},
+                    id: clean.id,
+                    start: clean.start,
+                    length: clean.frameCount ?? clean.length ?? 1,
+                    frameCount: clean.frameCount ?? clean.length ?? 1,
+                    durationSec: clean.durationSec,
+                    prompt: clean.prompt || "",
+                    negativePrompt: clean.negativePrompt || "",
+                    taskType: clean.taskType || "t2v",
+                    refs: clean.refs || [],
+                    refAudios: clean.refAudios || [],
+                    refVideos: clean.refVideos || [],
+                    genImage: clean.genImage || { imageFile: "" },
+                    startImage: clean.startImage || null,
+                    endImage: clean.endImage || null,
+                    sourceVideo: clean.sourceVideo,
+                    continuityFromPrev: isSegmentContinuityFromPrev(clean, index),
+                    refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
+                    passMode: resolveSegmentPassMode(clean),
+                    seedMode: clean.seedMode || "inherit",
+                    seed: String(clean.seed || "0"),
+                    uiCardHeight: Number.isFinite(Number(clean.uiCardHeight))
+                        ? Math.round(Number(clean.uiCardHeight))
+                        : undefined,
+                    uiCollapsed: !!clean.uiCollapsed,
+                    uiGroupName: String(clean.uiGroupName || "").trim(),
                 };
             }),
-            video: {
-                ...video,
-                frameMap,
-                sourceFrameCount,
-                deletedSourceRanges: frameMap.length ? [] : (video.deletedSourceRanges || []),
-                storageWidth: storageW,
-                storageHeight: storageH,
-            },
-            output: normalizeOutputContinuity({ ...this.timeline.output }),
             ...this._runSelectionPayload(),
         };
     }
@@ -3063,8 +2789,7 @@ class MiniMaxH3DirectorEditor {
         // Refresh visibility first so queue flush can pull checkbox state reliably.
         this.updateSegmentContinuityUI();
         // Pack export / queue serialize: pull visible 秒数, not only prompt drafts.
-        if (this.isImageBatch?.()) flushBatchDurationInputs(this);
-        if (this.isFl2vMode?.()) flushFl2vDurationInputs(this);
+        if (this.isImageBatch?.() || this.isFl2vMode?.()) flushBatchDurationInputs(this);
         this._writeTimelineWidget();
     }
 
@@ -3086,11 +2811,12 @@ class MiniMaxH3DirectorEditor {
         this._flushPromptTokenEditors();
         // Batch prompt textareas can lag behind segment objects after duration
         // normalize — always harvest DOM drafts before serializing timeline_data.
-        if (this.isImageBatch?.()) flushBatchPromptInputs(this);
-        if (this.isFl2vMode?.()) flushFl2vPromptDraft(this);
+        if (this.isImageBatch?.() || this.isFl2vMode?.()) flushBatchPromptInputs(this);
+        if (this.isFl2vMode?.()) syncFl2vShotsFromSegments(this);
         this.syncFromWidgets();
         this.timelineWidget.value = JSON.stringify(this.buildTimelinePayload());
         this.node.setDirtyCanvas(true, false);
+        this._snapshotSelector?.notifyChanged?.();
     }
 
     _markNodeDirtyLight() {
@@ -3109,12 +2835,7 @@ class MiniMaxH3DirectorEditor {
                 <div class="bd-actions">
                     <button type="button" class="bd-btn bd-btn-primary hidden" data-a="r2v-add-group" data-i18n="toolbar.addShot" data-i18n-title="tooltip.addShot">添加一组</button>
                     <button type="button" class="bd-btn bd-btn-primary" data-a="video" data-i18n="toolbar.uploadVideo">上传视频</button>
-                    <button type="button" class="bd-btn bd-btn-primary hidden" data-a="fl2v-add-shot" data-i18n="toolbar.addShot" data-i18n-title="tooltip.addShot">添加一组</button>
                     <button type="button" class="bd-btn" data-a="video-append" data-i18n="toolbar.appendVideo" data-i18n-title="tooltip.appendVideo">追加视频</button>
-                    <button type="button" class="bd-btn bd-removed-video-split-control" data-a="split" data-i18n="toolbar.split">+ 分割</button>
-                    <input type="number" class="bd-num bd-removed-video-split-control" data-r="equal-n" min="2" max="64" value="2" data-i18n-title="tooltip.equalSplitN">
-                    <button type="button" class="bd-btn bd-removed-video-split-control" data-a="equal" data-i18n="toolbar.equalSplit">均分</button>
-                    <button type="button" class="bd-btn bd-removed-video-split-control" data-a="smart-split" data-i18n="toolbar.smartSplit" data-i18n-title="tooltip.smartSplit">智能分割</button>
                     <button type="button" class="bd-btn" data-a="run-select-toggle" data-i18n="toolbar.runSelect" data-i18n-title="tooltip.runSelect">选择运行</button>
                     <label class="bd-run-select-all-wrap hidden" data-r="run-select-all-wrap" data-i18n-title="tooltip.runSelectAll">
                         <input type="checkbox" data-r="run-select-all-cb">
@@ -3126,26 +2847,23 @@ class MiniMaxH3DirectorEditor {
                         <button type="button" data-a="mode-segment" data-i18n="toolbar.modeSegment">分段模式</button>
                     </div>
                     <select class="bd-select" data-r="global-task" data-i18n-title="tooltip.snapshotSelector"></select>
+                    <button type="button" class="bd-btn" data-a="snapshots">快照</button>
+                    <button type="button" class="bd-btn bd-snapshot-quick active" data-a="snapshot-update" data-i18n="snapshot.quickUpdate" data-i18n-title="tooltip.snapshotQuickUpdate">更新</button>
+                    <button type="button" class="bd-btn bd-snapshot-quick" data-a="snapshot-reset" data-i18n="snapshot.quickReset" data-i18n-title="tooltip.snapshotQuickReset">重置</button>
                     <span class="bd-video-tag" data-r="video-name" data-i18n="toolbar.noVideo">未上传视频</span>
                 </div>
                 <div class="bd-right">
                     <div class="bd-tl-zoom" data-r="tl-zoom">
-                        <button type="button" class="bd-btn bd-btn-zoom" data-a="zoom-toggle" data-i18n="toolbar.timelineZoom" data-i18n-title="toolbar.timelineZoomTitle">放大</button>
                         <input type="range" class="bd-tl-zoom-slider hidden" data-r="zoom" min="1" max="10" step="any" value="1" data-i18n-title="tooltip.timelineZoom">
                     </div>
-                     <button type="button" class="bd-btn" data-a="snapshots" data-i18n="toolbar.snapshots" data-i18n-title="tooltip.snapshots">快照</button>
                     <button type="button" class="bd-btn" data-a="prompt-sync" data-i18n="toolbar.promptSync" data-i18n-title="tooltip.promptSync" disabled>同步</button>
-                    <button type="button" class="bd-btn" data-a="lang-toggle" data-i18n="toolbar.langToggle" data-i18n-title="toolbar.langToggleTitle">EN</button>
                     <div class="bd-bounds" data-r="bounds">起点: 0.00 | 终点: -</div>
                     <div class="bd-timecode" data-r="timecode">0.00s</div>
                 </div>
             </div>
-            <div class="bd-smart-split-msg hidden" data-r="smart-split-msg" role="status"></div>
             <div class="bd-external-groups-msg hidden" data-r="external-groups-msg" role="status"></div>`;
         this.root.appendChild(toolbarWrap);
-        this.smartSplitMsgEl = toolbarWrap.querySelector('[data-r="smart-split-msg"]');
         this.externalGroupsMsgEl = toolbarWrap.querySelector('[data-r="external-groups-msg"]');
-        this.langToggleBtn = toolbarWrap.querySelector('[data-a="lang-toggle"]');
 
         this.mainBody = document.createElement("div");
         this.mainBody.className = "bd-main";
@@ -3461,18 +3179,13 @@ class MiniMaxH3DirectorEditor {
         this.batchPanel = batchUi.panel;
         this.batchList = batchUi.list;
         this.batchHint = batchUi.hint;
-        this.batchI2vNotice = batchUi.i2vNotice;
         this.batchAddBtn = batchUi.addBtn;
         this.batchPicker = batchUi.picker;
         this.batchDetailModeBtn = batchUi.detailModeBtn;
         wireBatchRunSelectControls(this, batchUi);
 
-        this.fl2vUi = mountFl2vPanel(this.mainBody);
+        this.fl2vUi = null;
         this.fl2vTotalWrap = this.root.querySelector('[data-r="fl2v-total-wrap"]');
-        if (this.fl2vUi) {
-            this.fl2vUi.totalInput = this.root.querySelector('[data-r="fl2v-total"]');
-        }
-        bindFl2vEvents(this);
 
         const groupPreviews = document.createElement("div");
         groupPreviews.className = "bd-group-preview-list hidden";
@@ -3522,7 +3235,6 @@ class MiniMaxH3DirectorEditor {
         this._thumbCtx = this._thumbCanvas.getContext("2d", { alpha: false });
 
         this.videoNameEl = this.root.querySelector('[data-r="video-name"]');
-        this.equalCountInput = this.root.querySelector('[data-r="equal-n"]');
         this.boundsEl = this.root.querySelector('[data-r="bounds"]');
         this.timecodeEl = this.root.querySelector('[data-r="timecode"]');
         this.playerTimecodeEl = this.root.querySelector('[data-r="player-timecode"]');
@@ -3530,7 +3242,6 @@ class MiniMaxH3DirectorEditor {
         this.frameTotalEl = this.root.querySelector('[data-r="frame-total"]');
         this.seekBar = this.root.querySelector('[data-r="seek"]');
         this.tlZoomWrap = this.root.querySelector('[data-r="tl-zoom"]');
-        this.zoomToggleBtn = this.root.querySelector('[data-a="zoom-toggle"]');
         this.zoomSlider = this.root.querySelector('[data-r="zoom"]');
         this.stageEl = this.root.querySelector('[data-r="video-stage"]');
         this.stageVideo = this.root.querySelector('[data-r="stage-video"]');
@@ -3543,6 +3254,8 @@ class MiniMaxH3DirectorEditor {
             this.stageVideo.playsInline = true;
         }
         this.globalTask = this.root.querySelector('[data-r="global-task"]');
+        this.snapshotUpdateBtn = this.root.querySelector('[data-a="snapshot-update"]');
+        this.snapshotResetBtn = this.root.querySelector('[data-a="snapshot-reset"]');
         this.globalPanel = this.root.querySelector('[data-r="global-panel"]');
         this.globalPanelTitle = this.globalPanel?.querySelector('[data-r="global-panel-title"]')
             || this.globalPanel?.querySelector("b");
@@ -3593,7 +3306,6 @@ class MiniMaxH3DirectorEditor {
         this.genSegFc = this.root.querySelector('[data-r="gen-seg-fc"]');
         this.controlsBar = this.root.querySelector(".bd-controls");
         this.btnVideo = this.root.querySelector('[data-a="video"]');
-        this.btnFl2vAddShot = this.root.querySelector('[data-a="fl2v-add-shot"]');
         this.btnVideoAppend = this.root.querySelector('[data-a="video-append"]');
         this.outHint = this.root.querySelector('[data-r="out-hint"]');
         this.outMode = this.root.querySelector('[data-r="out-mode"]');
@@ -3663,19 +3375,13 @@ class MiniMaxH3DirectorEditor {
             el.onclick = (e) => { stopDomEvent(e); fn(); };
         };
         bind('[data-a="video"]', () => this.pickVideoFile());
-        bind('[data-a="fl2v-add-shot"]', () => openFl2vUpload(this));
         bind('[data-a="r2v-add-group"]', () => addImageBatchGroup(this));
         bind('[data-a="video-append"]', () => this.pickAppendVideoFile());
-        bind('[data-a="split"]', () => this.splitAtFrame(this.currentFrame));
-        bind('[data-a="equal"]', () => this.equalSplit());
-        bind('[data-a="smart-split"]', () => { void this.smartSplit(); });
         bind('[data-a="del-split"]', () => this.deleteSelectedSplitPoint());
         bind('[data-a="run-select-toggle"]', () => this.toggleRunSelectMode());
         bind('[data-a="del"]', () => this.deleteSelectedSegment());
         bind('[data-a="mode-global"]', () => this.setEditMode("global"));
         bind('[data-a="mode-segment"]', () => this.setEditMode("segment"));
-        bind('[data-a="lang-toggle"]', () => toggleLocale());
-        bind('[data-a="zoom-toggle"]', () => this.toggleTimelineZoom());
         bind('[data-a="snapshots"]', () => {
             if (!this.openSnapshots) this.openSnapshots = bindSnapshotActions(this);
             void this.openSnapshots();
@@ -4152,8 +3858,6 @@ class MiniMaxH3DirectorEditor {
         cancelAnimationFrame(this._resizeRaf);
         cancelAnimationFrame(this._playRaf);
         this._resizeObserver?.disconnect();
-        this._unsubLocale?.();
-        this._unsubLocale = null;
         this._stopLiveSampleAnim?.();
         this._closeBdModal();
         this._snapshotCleanup?.();
@@ -4233,15 +3937,7 @@ class MiniMaxH3DirectorEditor {
         // Write pack duration/prompt onto Group nodes before graph sync, otherwise
         // syncExternalGroupsTimeline restores the previous duration_sec (often 5s).
         this.writeImportedTimelineToExternalGroups();
-        if (this._directorMode === "video") {
-            this.restoreVideoFromTimeline();
-        } else if (this._directorMode === "prompt_batch" || this._directorMode === "image_batch") {
-            ensureImageBatchTimeline(this);
-        } else if (this._directorMode === "fl2v") {
-            ensureFl2vTimeline(this);
-        } else {
-            this.ensureGenTimeline();
-        }
+        ensureImageBatchTimeline(this);
         // Pass the old mode/key so workspace switching can distinguish a real
         // restore from an in-place refresh.  Passing the new mode here makes
         // batch restore skip its cleanup path and leaves stale fill heights.
@@ -4438,26 +4134,17 @@ class MiniMaxH3DirectorEditor {
     }
 
     getTaskKey() {
-        return resolveTaskKey(
-            this.globalTask?.value
-            || this.timeline.global?.taskType
-            || this.taskTypeWidget?.value,
-        );
+        return "mixed";
     }
 
     getRunnableSegmentCount() {
-        if (this.isFl2vMode()) return fl2vStartIndices(this).length;
         return this.timeline.segments?.length || 0;
     }
 
     supportsRunSelect() {
         const n = this.getRunnableSegmentCount();
         if (n < 2) return false;
-        const mode = this.getDirectorMode();
-        if (mode === "video") return true;
-        if (mode === "fl2v") return true;
-        if (this.isImageBatch()) return isPromptBatchTask(this.getTaskKey());
-        return false;
+        return this.isImageBatch();
     }
 
     getRunProgressSegmentTotal() {
@@ -4637,20 +4324,19 @@ class MiniMaxH3DirectorEditor {
     }
 
     isImageBatch() {
-        const mode = this.getDirectorMode();
-        return mode === "prompt_batch" || mode === "image_batch";
+        return true;
     }
 
     isGenBlank() {
-        return this.getDirectorMode() === "gen_blank";
+        return false;
     }
 
     isGenImage() {
-        return this.getDirectorMode() === "gen_image";
+        return false;
     }
 
     isFl2vMode() {
-        return this.getDirectorMode() === "fl2v";
+        return false;
     }
 
     isR2vBatch() {
@@ -4924,7 +4610,11 @@ class MiniMaxH3DirectorEditor {
 
     _resetBatchWorkspaceLive(taskKey) {
         const key = resolveTaskKey(taskKey || this.getTaskKey());
-        this.timeline.segments = [newBatchSegment({ durationSec: defaultDurationSec(key) })];
+        const groupKey = key === "mixed" ? "t2v" : "";
+        this.timeline.segments = [newBatchSegment({
+            durationSec: defaultDurationSec(groupKey || key),
+            taskType: groupKey,
+        })];
         this.timeline.editMode = "segment";
         this.selectedIndex = 0;
         this._clearLiveRunSelection();
@@ -4933,6 +4623,7 @@ class MiniMaxH3DirectorEditor {
         this.timeline.global.refs = [];
         this.timeline.global.refAudios = [];
         this.timeline.global.refVideos = [];
+        this.timeline.global.referenceVideo = {};
         if (this.globalPrompt) this.globalPrompt.value = "";
         if (this.globalPromptWidget) this.globalPromptWidget.value = "";
     }
@@ -5151,308 +4842,87 @@ class MiniMaxH3DirectorEditor {
         if (showGlobalRefAudios || showSegRefAudios) this.renderRefAudioSlots();
     }
 
-    _stashFl2vWorkspace() {
-        const shots = this.timeline.shots || [];
-        const segs = this.timeline.segments || [];
-        const keys = this.timeline.keyframes || [];
-        if (!shots.length && !segs.length && !keys.length) return;
-        this.timeline.fl2vWorkspace = {
-            shots: JSON.parse(JSON.stringify(shots)),
-            segments: JSON.parse(JSON.stringify(segs)),
-            keyframes: JSON.parse(JSON.stringify(keys)),
-            durationSec: this.timeline.durationSec,
-            totalFrames: this.timeline.totalFrames,
-            selectedIndex: this.selectedIndex,
-            runSelectEnabled: !!this.timeline.runSelectEnabled,
-            runSelection: Array.isArray(this.timeline.runSelection)
-                ? [...this.timeline.runSelection]
-                : [],
-            output: this.timeline.output
-                ? JSON.parse(JSON.stringify(this.timeline.output))
-                : undefined,
-        };
-    }
-
-    _restoreFl2vWorkspace() {
-        const ws = this.timeline.fl2vWorkspace;
-        if (!ws) return false;
-        const hasShots = Array.isArray(ws.shots) && ws.shots.length;
-        const hasSegs = Array.isArray(ws.segments) && ws.segments.length;
-        const hasKeys = Array.isArray(ws.keyframes) && ws.keyframes.length;
-        if (!hasShots && !hasSegs && !hasKeys) return false;
-        if (hasShots) this.timeline.shots = JSON.parse(JSON.stringify(ws.shots));
-        if (hasSegs) this.timeline.segments = JSON.parse(JSON.stringify(ws.segments));
-        if (hasKeys) this.timeline.keyframes = JSON.parse(JSON.stringify(ws.keyframes));
-        if (ws.durationSec != null) this.timeline.durationSec = ws.durationSec;
-        if (ws.totalFrames != null) this.timeline.totalFrames = ws.totalFrames;
-        if (ws.selectedIndex != null) this.selectedIndex = ws.selectedIndex;
-        if (ws.runSelectEnabled != null) this.timeline.runSelectEnabled = !!ws.runSelectEnabled;
-        if (Array.isArray(ws.runSelection)) this.timeline.runSelection = [...ws.runSelection];
-        if (ws.output && typeof ws.output === "object") {
-            this.timeline.output = { ...(this.timeline.output || {}), ...JSON.parse(JSON.stringify(ws.output)) };
-        }
-        this.timeline.fl2vWorkspace = null;
-        return true;
-    }
-
     applyTaskLayout(prevMode, prevTaskKey) {
-        const mode = this.getDirectorMode();
-        const prev = prevMode || "video";
-        const wasBatch = prev === "prompt_batch" || prev === "image_batch";
-        const isBatch = mode === "prompt_batch";
-        const wasFl2v = prev === "fl2v";
-        const isFl2v = mode === "fl2v";
-        const wasGen = prev !== "video" && prev !== "prompt_batch" && prev !== "image_batch" && prev !== "fl2v";
-        const isGen = mode !== "video" && mode !== "prompt_batch" && mode !== "fl2v";
-        const currentKey = this.getTaskKey();
-        const stashBatchKey = prevTaskKey && isVideoBatchTask(prevTaskKey) ? prevTaskKey : null;
-        const stashVideoKey = prevTaskKey && getDirectorMode(prevTaskKey) === "video" ? prevTaskKey : null;
-
+        void prevMode;
+        void prevTaskKey;
         if (this.isPlaying) this._stopPlay();
+        this.timeline.timelineMode = "prompt_batch";
+        this.timeline.editMode = "segment";
+        this.timeline.global = this.timeline.global || {};
+        this.timeline.global.taskType = "mixed";
+        delete this.timeline.shots;
+        this._directorMode = "prompt_batch";
+        this._taskKey = "mixed";
+        if (this.taskTypeWidget) this.taskTypeWidget.value = "mixed";
+        if (this.globalTask && !this._snapshotSelector) this.globalTask.value = "mixed";
+        ensureImageBatchTimeline(this);
 
-        if (isFl2v) {
-            if (prev === "video") {
-                this._stashVideoWorkspace(stashVideoKey);
-                this._clearLiveRunSelection();
-            } else if (wasBatch) {
-                this._stashBatchWorkspace(stashBatchKey);
-                this._clearLiveRunSelection();
-            }
-            if (!this._restoreFl2vWorkspace()) {
-                ensureFl2vTimeline(this);
-                this._clearLiveRunSelection();
-            } else {
-                ensureFl2vTimeline(this);
-            }
-        } else if (isBatch) {
-            if (!wasBatch) {
-                if (wasFl2v) {
-                    this._stashFl2vWorkspace();
-                    this._clearLiveRunSelection();
-                }
-                // Keep v2v/rv2v video + segments so switching back can restore them.
-                // Run-select is per workspace: stash video's, then clear live so i2v/batch
-                // does not inherit「选择运行」from rv2v.
-                if (prev === "video") {
-                    this._stashVideoWorkspace(stashVideoKey);
-                    this._clearLiveRunSelection();
-                    this._clearVideoState();
-                }
-                this._switchToBatchTaskWorkspace(null, currentKey);
-            } else if (prevTaskKey && prevTaskKey !== currentKey) {
-                // t2v / i2v / r2v used to share one segment list — isolate per task.
-                this._switchToBatchTaskWorkspace(prevTaskKey, currentKey);
-            }
-            ensureImageBatchTimeline(this);
-        } else if (isGen) {
-            if (wasBatch) {
-                this._stashBatchWorkspace(stashBatchKey);
-                this._clearLiveRunSelection();
-            }
-            if (wasFl2v) {
-                this._stashFl2vWorkspace();
-                this._clearLiveRunSelection();
-            }
-            if (!wasGen && !wasBatch && !wasFl2v) {
-                if (prev === "video") {
-                    this._stashVideoWorkspace(stashVideoKey);
-                    this._clearLiveRunSelection();
-                }
-                const key = this.getTaskKey();
-                const defFc = defaultFrameCount(key);
-                const keepPrompt = this.timeline.global?.prompt || "";
-                this.timeline.segments = [{
-                    id: uid(),
-                    start: 0,
-                    length: defFc,
-                    frameCount: defFc,
-                    prompt: keepPrompt,
-                    taskType: "",
-                    refs: [],
-                    genImage: { imageFile: "" },
-                }];
-            }
-            this.ensureGenTimeline();
-        } else if (prev !== "video") {
-            // Leaving batch/gen/fl2v for video — stash before video restore.
-            if (wasBatch) {
-                this._stashBatchWorkspace(stashBatchKey);
-                this._clearLiveRunSelection();
-            }
-            if (wasFl2v) {
-                this._stashFl2vWorkspace();
-                this._clearLiveRunSelection();
-            }
-            this.timeline.timelineMode = "video";
-            this._switchToVideoTaskWorkspace(stashVideoKey, currentKey);
-        } else if (prevTaskKey && prevTaskKey !== currentKey) {
-            // v2v ↔ rv2v share director mode "video" but keep separate workspaces.
-            this._switchToVideoTaskWorkspace(prevTaskKey, currentKey);
-        }
-        this.timeline.timelineMode = mode;
-        this._directorMode = mode;
-        const taskKey = currentKey;
-        this._taskKey = taskKey;
-
-        const isR2v = isBatch && taskKey === "r2v";
-        const isMixed = isBatch && taskKey === "mixed";
-        const showBatchTrack = isBatch && isVideoBatchTask(taskKey);
-        // fl2v / t2v / i2v / r2v use the main timeline track; image batch + gen hide it.
-        const hideTimeline = (isBatch && !showBatchTrack) || isGen;
-        const hideVideoUpload = hideTimeline || NO_VIDEO_UPLOAD_TASKS.has(taskKey) || isR2v || isMixed;
-        const showBatchExport = (isBatch && isVideoBatchTask(taskKey)) || isFl2v;
-        // t2v / i2v / r2v: never show source-video upload (fl2v keeps "上传图片").
-        this.btnVideo?.classList.toggle("hidden", (hideVideoUpload && !isFl2v) || isR2v || isMixed);
-        this.btnVideoAppend?.classList.toggle("hidden", hideVideoUpload || isFl2v || isR2v || isMixed);
-        // Playback / seek / zoom are for source-video (v2v). fl2v / t2v / batch have no source clip.
-        this.controlsBar?.classList.toggle("hidden", hideTimeline || isBatch || isFl2v);
-        this.boundsEl?.classList.toggle("hidden", hideTimeline || isBatch || isFl2v);
-        this.timecodeEl?.classList.toggle("hidden", hideTimeline || isBatch || isFl2v);
-        this.viewport?.classList.toggle("hidden", isBatch && !showBatchTrack);
-        this.tlZoomWrap?.classList.toggle("hidden", isBatch && !showBatchTrack);
+        this.btnVideo?.classList.add("hidden");
+        this.btnVideoAppend?.classList.add("hidden");
+        this.controlsBar?.classList.add("hidden");
+        this.boundsEl?.classList.add("hidden");
+        this.timecodeEl?.classList.add("hidden");
+        this.viewport?.classList.remove("hidden");
+        this.tlZoomWrap?.classList.remove("hidden");
         this.updateStageVisibility();
         this.updateLiveSamplePanel();
         this.syncExternalGroupsTimeline();
-        this.root.querySelector(".bd-split")?.classList.toggle("hidden", isBatch || isFl2v);
-        this.batchPanel?.classList.toggle("hidden", !isBatch);
-        this.root?.classList.toggle("bd-batch-fill", !!isBatch);
-        this.fl2vUi?.root?.classList.toggle("hidden", !isFl2v);
-        this.fl2vTotalWrap?.classList.toggle("hidden", !isFl2v);
-        if (isFl2v) {
-            setR2vToolbar(this, false);
-            setFl2vToolbar(this, true);
-            setToolbarDisabledForBatch(this, false);
-            // Re-apply fl2v-specific disables after clearing batch disables.
-            setFl2vToolbar(this, true);
-        } else if (isR2v || isMixed) {
-            setFl2vToolbar(this, false);
-            setToolbarDisabledForBatch(this, false);
-            setR2vToolbar(this, true);
-            if (this.btnVideo) {
-                this.btnVideo.textContent = t("toolbar.uploadVideo");
-                this.btnVideo.setAttribute("data-i18n", "toolbar.uploadVideo");
-            }
-            updateFl2vToolbarBtns(this);
-        } else {
-            setFl2vToolbar(this, false);
-            setR2vToolbar(this, false);
-            setToolbarDisabledForBatch(this, isBatch);
-            if (this.btnVideo) {
-                this.btnVideo.textContent = t("toolbar.uploadVideo");
-                this.btnVideo.setAttribute("data-i18n", "toolbar.uploadVideo");
-            }
-            const del = this.root?.querySelector('[data-a="del"]');
-            if (del) {
-                if (showBatchTrack) {
-                    const externalLocked = !!(this.hasExternalI2vGroups?.() || this.hasExternalR2vGroups?.());
-                    if (externalLocked) {
-                        del.classList.add("hidden");
-                        del.disabled = true;
-                    } else {
-                        del.disabled = false;
-                        del.classList.remove("bd-disabled", "hidden");
-                        del.textContent = t("toolbar.deleteSelectedGroup");
-                        del.setAttribute("data-i18n", "toolbar.deleteSelectedGroup");
-                        del.setAttribute("data-i18n-title", "tooltip.deleteSelectedPromptGroup");
-                        del.title = t("tooltip.deleteSelectedPromptGroup");
-                    }
-                } else {
-                    del.textContent = t("toolbar.deleteSegment");
-                    del.setAttribute("data-i18n", "toolbar.deleteSegment");
-                    del.setAttribute("data-i18n-title", "tooltip.deleteSegment");
-                }
-            }
-            updateFl2vToolbarBtns(this);
-            updateR2vToolbarBtns(this);
+        this.root.querySelector(".bd-split")?.classList.add("hidden");
+        this.batchPanel?.classList.remove("hidden");
+        this.root?.classList.add("bd-batch-fill");
+        this.fl2vUi?.root?.classList.add("hidden");
+        this.fl2vTotalWrap?.classList.add("hidden");
+        setToolbarDisabledForBatch(this, false);
+        setR2vToolbar(this, true);
+        if (this.btnVideo) {
+            this.btnVideo.textContent = t("toolbar.uploadVideo");
+            this.btnVideo.setAttribute("data-i18n", "toolbar.uploadVideo");
         }
 
-        // Side ref panels stay hidden for batch modes (refs live in cards).
-        this.updateReferenceImageVisibility({
-            hideTimeline: isBatch || isGen,
-        });
+        this.updateReferenceImageVisibility({ hideTimeline: true });
+        this.genGlobalImg?.classList.add("hidden");
+        this.genSegImg?.classList.add("hidden");
+        this.genGlobalFcRow?.classList.add("hidden");
+        this.genSegFcRow?.classList.add("hidden");
 
-        const showGenImg = mode === "gen_image";
-        this.genGlobalImg?.classList.toggle("hidden", !showGenImg || !this.isGlobalMode());
-        this.genSegImg?.classList.toggle("hidden", !showGenImg || this.isGlobalMode());
-        this.genGlobalFcRow?.classList.toggle("hidden", !isGen || !this.isGlobalMode());
-        this.genSegFcRow?.classList.toggle("hidden", !isGen || this.isGlobalMode());
-
-        if (isBatch || isGen || isFl2v || NO_VIDEO_UPLOAD_TASKS.has(taskKey)) {
-            this.timeline.output = this.timeline.output || {};
-            this.timeline.output.mode = "fixed";
-            if (isBatch && !isVideoBatchTask(taskKey)) this.timeline.output.exportMode = "all";
-            if (!this.timeline.output.aspectRatio) this.timeline.output.aspectRatio = DEFAULT_ASPECT_RATIO;
-            else this.timeline.output.aspectRatio = normalizeAspectRatioLabel(this.timeline.output.aspectRatio);
-            if (this.timeline.output.megapixels == null) this.timeline.output.megapixels = DEFAULT_MEGAPIXELS;
-            if (this.timeline.output.multiple == null) this.timeline.output.multiple = MINIMAX_CANVAS_MULTIPLE;
-            if (isCustomAspectRatio(this.timeline.output.aspectRatio)) {
-                this.applyCustomResolution();
-            } else {
-                this.applyResolutionSelector();
-            }
-            this.updateOutputModeUI();
-        } else if (this.outMode) {
-            this.outMode.disabled = false;
-            // Video edit (v2v/rv2v): prefer long-edge so ultrawide sources are not
-            // center-cropped into a leftover 16:9 fixed canvas from batch modes.
-            this.timeline.output = this.timeline.output || {};
-            if (!this.timeline.output.mode || this.timeline.output.mode === "fixed") {
-                const fromBatchFixed = this._lastOutputWasBatchFixed;
-                if (fromBatchFixed || !this.timeline.output.mode) {
-                    this.timeline.output.mode = "long_edge";
-                    if (!this.timeline.output.longEdge) this.timeline.output.longEdge = 848;
-                }
-            }
-            this._lastOutputWasBatchFixed = false;
-            this.updateOutputModeUI();
-        }
-        if (isBatch || isGen || isFl2v) this._lastOutputWasBatchFixed = true;
+        this.timeline.output = this.timeline.output || {};
+        this.timeline.output.mode = "fixed";
+        if (!this.timeline.output.aspectRatio) this.timeline.output.aspectRatio = DEFAULT_ASPECT_RATIO;
+        else this.timeline.output.aspectRatio = normalizeAspectRatioLabel(this.timeline.output.aspectRatio);
+        if (this.timeline.output.megapixels == null) this.timeline.output.megapixels = DEFAULT_MEGAPIXELS;
+        if (this.timeline.output.multiple == null) this.timeline.output.multiple = MINIMAX_CANVAS_MULTIPLE;
+        if (isCustomAspectRatio(this.timeline.output.aspectRatio)) this.applyCustomResolution();
+        else this.applyResolutionSelector();
+        this.updateOutputModeUI();
+        this._lastOutputWasBatchFixed = true;
 
         if (this.outHint) {
-            const isVideoEdit = taskKey === "v2v" || taskKey === "rv2v";
-            const showHint = isGen || isBatch || isFl2v || isVideoEdit;
-            this.outHint.classList.toggle("hidden", !showHint);
-            this.outHint.textContent = showHint ? genLayoutHint(this.getTaskKey()) : "";
+            this.outHint.classList.remove("hidden");
+            this.outHint.textContent = genLayoutHint("mixed");
         }
         this.syncOutputAudioModeUI();
         this.syncExportSourceImagesUI();
         if (this.outExportMode) {
-            this.outExportMode.disabled = (isBatch || isFl2v) && !showBatchExport;
-            this.outExportMode.classList.toggle("hidden", (isBatch || isFl2v) && !showBatchExport);
-            this.outExportMode.previousElementSibling?.classList.toggle("hidden", (isBatch || isFl2v) && !showBatchExport);
+            this.outExportMode.disabled = false;
+            this.outExportMode.classList.remove("hidden");
+            this.outExportMode.previousElementSibling?.classList.remove("hidden");
         }
         if (this.outMaxFrames) {
-            this.outMaxFrames.disabled = (isBatch || isFl2v) && !showBatchExport;
-            this.outMaxFrames.classList.toggle("hidden", (isBatch || isFl2v) && !showBatchExport);
-            this.outMaxFrames.previousElementSibling?.classList.toggle("hidden", (isBatch || isFl2v) && !showBatchExport);
+            this.outMaxFrames.disabled = false;
+            this.outMaxFrames.classList.remove("hidden");
+            this.outMaxFrames.previousElementSibling?.classList.remove("hidden");
         }
 
-        if ((isGen || isBatch || isFl2v) && prev === "video") {
-            this.currentFrame = 0;
-        }
+        this.currentFrame = 0;
         this.updateVideoNameLabel();
-        if (isFl2v) {
-            this.timeline.editMode = "segment";
-            ensureFl2vTimeline(this);
-            this.updateSelectionUI();
-            updateFl2vDetailUI(this);
-            this.updateVideoNameLabel();
-        } else if (isBatch) {
-            this.timeline.editMode = "segment";
-            this.renderImageBatchGroups();
-            this.updateModeUI();
-            if (showBatchTrack) {
-                this.updateSelectionUI();
-                this._syncR2vCardSelection();
-            }
-        } else {
-            this.updateModeUI();
-            this.updateSelectionUI();
-        }
+        this.renderImageBatchGroups();
+        this.updateModeUI();
+        this.updateSelectionUI();
+        this._syncR2vCardSelection();
         this.updateDomWidgetHeight();
         this.syncOutputUIFromTimeline();
         this.seekBar.max = Math.max(0, this.getTotalFrames() - 1);
-        if (!isBatch || showBatchTrack) this.scheduleRender();
+        this.scheduleRender();
         this.scheduleTimelineSync();
         this.updateRunSelectUI();
     }
@@ -5692,25 +5162,6 @@ class MiniMaxH3DirectorEditor {
             cursor = end;
         }
         this.timeline.segments = newSegs;
-        this.commit();
-    }
-
-    genEqualSplit() {
-        const n = parseInt(this.equalCountInput?.value || "2", 10);
-        if (!n || n < 2) return;
-        const total = this.getTotalFrames();
-        const minFc = minFrameCount(this.getTaskKey());
-        const count = clamp(n, 2, Math.max(2, Math.floor(total / minFc)));
-        const base = Math.floor(total / count);
-        let rem = total - base * count;
-        this.timeline.segments = Array.from({ length: count }, () => {
-            const fc = base + (rem > 0 ? 1 : 0);
-            if (rem > 0) rem -= 1;
-            return {
-                id: uid(), frameCount: fc, length: fc, prompt: "", taskType: "", refs: [],
-                genImage: { imageFile: "" },
-            };
-        });
         this.commit();
     }
 
@@ -6364,8 +5815,8 @@ class MiniMaxH3DirectorEditor {
     }
 
     applyLocale() {
-        this.root?.classList.toggle("locale-en", getLocale() === "en");
-        this.root?.classList.toggle("locale-zh", getLocale() !== "en");
+        this.root?.classList.remove("locale-en");
+        this.root?.classList.add("locale-zh");
         applyI18nDom(this.root);
         applyDirectorWidgetLabels(this.node);
         this.populateTaskSelect(this.globalTask, this.taskTypeWidget?.value || this.globalTask?.value);
@@ -6381,8 +5832,6 @@ class MiniMaxH3DirectorEditor {
         this.updateLiveSamplePanel?.();
         this.syncTimelineZoomUI?.();
         this.syncExternalGroupsTimeline?.();
-        updateFl2vDetailUI?.(this);
-        updateFl2vToolbarBtns?.(this);
         updateR2vToolbarBtns?.(this);
         this.renderImageBatchGroups?.();
         this.syncRv2vRefLayoutClasses?.({
@@ -7099,7 +6548,12 @@ class MiniMaxH3DirectorEditor {
 
     syncFromWidgets() {
         this.timeline.global = this.timeline.global || { refs: [], referenceVideo: {}, continuousReference: false };
-        this.timeline.global.taskType = this.globalTask?.value || this.taskTypeWidget?.value || "";
+        const mixedValue = this.taskTypeWidget?.options?.values?.find(
+            (value) => resolveTaskKey(value) === "mixed",
+        ) || "mixed";
+        this.timeline.global.taskType = "mixed";
+        if (this.globalTask && !this._snapshotSelector) this.globalTask.value = mixedValue;
+        if (this.taskTypeWidget) this.taskTypeWidget.value = mixedValue;
         this.timeline.global.prompt = this.globalPrompt?.value ?? this.globalPromptWidget?.value ?? "";
         if (this.continuousRefCb) {
             this.timeline.global.continuousReference = !!this.continuousRefCb.checked;
@@ -7177,7 +6631,7 @@ class MiniMaxH3DirectorEditor {
         if (this.usesGlobalRefPanel() && taskUsesReferenceAudios(this.getTaskKey())) {
             this.renderRefAudioSlots();
         }
-        if (this.isImageBatch()) this.renderImageBatchGroups();
+        if (this.isImageBatch() || this.isFl2vMode()) this.renderImageBatchGroups();
         else this.updateSelectionUI();
     }
 
@@ -7187,7 +6641,7 @@ class MiniMaxH3DirectorEditor {
             return;
         }
         if (this.isFl2vMode()) {
-            normalizeFl2vSegments(this);
+            syncFl2vShotsFromSegments(this);
             const n = this.timeline.segments?.length || 0;
             this.selectedIndex = clamp(this.selectedIndex, 0, Math.max(0, n - 1));
             return;
@@ -8902,7 +8356,6 @@ class MiniMaxH3DirectorEditor {
     }
 
     syncTimelineZoomUI() {
-        this.zoomToggleBtn?.classList.toggle("active", !!this.zoomEnabled);
         this.zoomSlider?.classList.toggle("hidden", !this.zoomEnabled);
         if (this.zoomSlider && this.zoomEnabled) this.zoomSlider.value = String(this.zoom);
     }
@@ -9751,38 +9204,6 @@ class MiniMaxH3DirectorEditor {
         this.updateSplitPointUI();
     }
 
-    equalSplit() {
-        if (this.isGenMode()) {
-            this.genEqualSplit();
-            return;
-        }
-        const n = parseInt(this.equalCountInput?.value || "2", 10);
-        if (!n || n < 2) return;
-        const total = this.getTotalFrames();
-        if (total < MIN_SEG * 2) return;
-        const maxSeg = Math.floor(total / MIN_SEG);
-        const count = clamp(n, 2, Math.max(2, maxSeg || 2));
-        if (this.equalCountInput) this.equalCountInput.value = String(count);
-
-        const points = new Set([0, total]);
-        const clipBounds = this.getClipBoundaries();
-        for (const b of clipBounds) {
-            if (b > 0 && b < total) points.add(b);
-        }
-        for (let i = 1; i < count; i++) {
-            const p = Math.round((i * total) / count);
-            if (p > 0 && p < total) points.add(p);
-        }
-
-        const forced = new Set([0, total, ...clipBounds]);
-        const newSegs = this._buildSegmentsFromSplitPoints([...points], forced);
-        if (!newSegs?.length) return;
-        this.timeline.segments = newSegs;
-        this.selectedSplitFrame = null;
-        this.commit();
-        this.updateSplitPointUI();
-    }
-
     /** Logical ranges for each video clip on the timeline. */
     getClipLogicalRanges() {
         const clips = this.getVideoClips();
@@ -9908,107 +9329,7 @@ class MiniMaxH3DirectorEditor {
         this.commit();
         this.updateSelectionUI();
         this.updateSplitPointUI();
-        this.setSmartSplitMessage("");
         this.scheduleRender();
-    }
-
-    setSmartSplitMessage(text, { ok = false } = {}) {
-        const el = this.smartSplitMsgEl || this.root?.querySelector('[data-r="smart-split-msg"]');
-        if (!el) return;
-        const msg = String(text || "").trim();
-        if (!msg) {
-            el.textContent = "";
-            el.classList.add("hidden");
-            el.classList.remove("ok");
-            return;
-        }
-        el.textContent = msg;
-        el.classList.toggle("ok", !!ok);
-        el.classList.remove("hidden");
-    }
-
-    async smartSplit() {
-        if (this.isGenMode() || this.isImageBatch()) return;
-        if (!this.hasVideo()) {
-            this.setSmartSplitMessage(t("smartSplit.needVideo"));
-            return;
-        }
-        const total = this.getTotalFrames();
-        if (total < MIN_SEG * 2) {
-            this.setSmartSplitMessage(t("smartSplit.tooShort"));
-            return;
-        }
-        const ranges = this.getClipLogicalRanges();
-        if (!ranges.length) {
-            this.setSmartSplitMessage(t("smartSplit.noMaterial"));
-            return;
-        }
-        const btn = this.root?.querySelector('[data-a="smart-split"]');
-        const prevLabel = btn?.textContent;
-        if (btn) {
-            btn.disabled = true;
-            btn.textContent = t("common.analyzing");
-        }
-        this.setSmartSplitMessage(t("smartSplit.analyzing"));
-        try {
-            const clips = ranges.map((r) => ({
-                videoFile: r.clip.videoFile || r.clip.fileName,
-                subfolder: r.clip.subfolder || "",
-                type: r.clip.type || "input",
-                logicalStart: r.start,
-                logicalEnd: r.end,
-                nativeFps: r.clip.nativeFps || r.clip.native_fps || null,
-            }));
-            const resp = await api.fetchApi("/minimax/director/detect_shots", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    clips,
-                    frameRate: this.getFrameRate(),
-                    totalFrames: total,
-                    sensitivity: "medium",
-                    minShotFrames: Math.max(MIN_SEG, 12),
-                }),
-            });
-            if (!resp.ok) {
-                throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            }
-            const data = await resp.json();
-            const cutFrames = Array.isArray(data.cutFrames) ? data.cutFrames.map((n) => parseInt(n, 10) || 0) : [];
-            const points = new Set([0, total, ...cutFrames.filter((f) => f > 0 && f < total)]);
-            const clipBounds = this.getClipBoundaries();
-            for (const b of clipBounds) {
-                if (b > 0 && b < total) points.add(b);
-            }
-            const forced = new Set([0, total, ...clipBounds]);
-            const newSegs = this._buildSegmentsFromSplitPoints([...points], forced);
-            if (!newSegs?.length) {
-                this.setSmartSplitMessage(t("smartSplit.noSegments"));
-                return;
-            }
-            this.timeline.segments = newSegs;
-            this.selectedIndex = 0;
-            this.selectedSplitFrame = null;
-            this.commit();
-            this.updateSelectionUI();
-            this.updateSplitPointUI();
-            const shotCount = data.shotCount ?? Math.max(0, newSegs.length);
-            const warn = Array.isArray(data.warnings) && data.warnings.length
-                ? ` ${data.warnings[0]}`
-                : "";
-            this.setSmartSplitMessage(
-                t("smartSplit.done", { shots: shotCount, segs: newSegs.length }) + (warn || ""),
-                { ok: !warn },
-            );
-        } catch (err) {
-            console.error("[MiniMax H3 Director] smartSplit failed", err);
-            this.setSmartSplitMessage(t("smartSplit.failed", { err: err?.message || err }));
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = prevLabel || t("toolbar.smartSplit");
-            }
-        }
     }
 
     deleteSelectedSegment() {
@@ -11016,9 +10337,7 @@ class MiniMaxH3DirectorEditor {
         else if (this.globalTask) this.globalTask.value = this.timeline.global.taskType || "";
         if (this.globalPrompt) this.globalPrompt.value = this.timeline.global.prompt || "";
         this.syncNegativeFromWidget();
-        updateFl2vToolbarBtns(this);
         updateR2vToolbarBtns(this);
-        if (this.isFl2vMode()) updateFl2vDetailUI(this);
         this.renderGroupPreviewList?.();
         if (this.isImageBatch()) {
             const shown = this.batchList?.querySelector(".bd-batch-card");
@@ -12093,7 +11412,7 @@ class MiniMaxH3DirectorEditor {
 
     setRunProgress(detail) {
         if (!this.runStatusEl) return;
-        if (this.isImageBatch() && detail?.first_pass_cache) {
+        if ((this.isImageBatch() || this.isFl2vMode()) && detail?.first_pass_cache) {
             const target = Number(detail.timeline_segment ?? detail.segment ?? 1) - 1;
             for (const el of this.batchList?.querySelectorAll("[data-batch-pass-status]") || []) {
                 if (Number(el.getAttribute("data-batch-pass-index")) !== target) continue;
@@ -12142,7 +11461,7 @@ class MiniMaxH3DirectorEditor {
             this._runProgressSegKey = null;
             this._followRunSelection(timelineSeg);
             this.updateRunSelectUI();
-            if (this.isImageBatch()) {
+            if (this.isImageBatch() || this.isFl2vMode()) {
                 this.renderImageBatchGroups();
                 setTimeout(() => refreshBatchVideoFrames(this), 500);
                 // Re-rendering recreates the status buttons. Schedule the
@@ -12161,7 +11480,7 @@ class MiniMaxH3DirectorEditor {
         let title;
         if (detail.phase === "plan") {
             title = runTotal > 1 ? t("run.titlePlanning", { n: runTotal, phase: phaseLabel }) : phaseLabel;
-        } else if (this.isImageBatch()) {
+        } else if (this.isImageBatch() || this.isFl2vMode()) {
             // Partial run: show timeline card number (e.g. group 4), not compact run order.
             title = partialRun
                 ? t("run.titleBatchGroupPartial", {
@@ -12182,7 +11501,7 @@ class MiniMaxH3DirectorEditor {
         if (detail.task_key) parts.push(detail.task_key);
         parts.push(t("run.detailOverall", { pct: overallPct }));
         if (runTotal > 1) {
-            parts.push(this.isImageBatch()
+            parts.push((this.isImageBatch() || this.isFl2vMode())
                 ? t("run.detailRemainingGroups", { n: remain })
                 : t("run.detailRemainingSegments", { n: remain }));
         }
@@ -12198,7 +11517,7 @@ class MiniMaxH3DirectorEditor {
         const segKey = `${timelineSeg}|${detail.phase}|${runSeg}`;
         const segChanged = this._runProgressSegKey !== segKey;
         this._runProgressSegKey = segKey;
-        if (this.isImageBatch()) {
+        if (this.isImageBatch() || this.isFl2vMode()) {
             this._syncBatchRunHighlight();
             if (segChanged) healOversizedDirectorNode(this.node, this);
         } else if (segChanged) {
@@ -12217,7 +11536,7 @@ class MiniMaxH3DirectorEditor {
         this._runHighlightSeg = -1;
         this._runProgressSegKey = null;
         this.updateRunSelectUI();
-        if (this.isImageBatch()) this.renderImageBatchGroups();
+        if (this.isImageBatch() || this.isFl2vMode()) this.renderImageBatchGroups();
         else this.scheduleRender();
     }
 
@@ -12447,11 +11766,8 @@ function findDirectorNode(nodeId) {
     return null;
 }
 
-const EXTERNAL_GROUP_NODE_TYPES = new Set([
-    "MiniMaxH3DirectorGroupImageToVideo",
-    "MiniMaxH3DirectorGroupReferenceToVideo",
-]);
-const EXTERNAL_COMBINE_NODE_TYPE = "MiniMaxH3DirectorGroupsCombine";
+const EXTERNAL_GROUP_NODE_TYPES = new Set();
+const EXTERNAL_COMBINE_NODE_TYPE = "";
 
 function graphLinkRecord(graph, linkId) {
     if (linkId == null || !graph) return null;
@@ -12774,7 +12090,7 @@ function readExternalGroupSpec(node, graph = null) {
     let refImages = [];
     let refVideos = [];
     let refAudios = [];
-    if (cls === "MiniMaxH3DirectorGroupReferenceToVideo") {
+    if (EXTERNAL_GROUP_NODE_TYPES.has(cls)) {
         // Autogrow: ref_images.ref_image_0 / ref_videos.ref_video_0 / …
         refImages = collectAutogrowSlotRefs(
             g, node, "ref_image", resolveLinkedImageFile,
@@ -12938,7 +12254,7 @@ function collectExternalGroupNodes(editor) {
 function notifyDirectorsSyncExternalGroups() {
     const graph = app.graph ?? app.canvas?.graph;
     for (const node of graph?._nodes ?? graph?.nodes ?? []) {
-        if (!isMiniMaxH3DirectorNode(node)) continue;
+        if (!isH3_D_NEONode(node)) continue;
         node._minimaxEditor?.syncExternalGroupsTimeline?.();
     }
 }
@@ -12950,14 +12266,14 @@ function clearAllDirectorRunStatus() {
     }
 }
 
-function isMiniMaxH3DirectorNode(node) {
+function isH3_D_NEONode(node) {
     const cls = node?.comfyClass || node?.type || "";
-    return cls === "MiniMaxH3Director";
+    return cls === "H3_D_NEO";
 }
 
 function isDirectorNodeDef(nodeType, nodeData) {
     const cls = nodeType?.comfyClass || nodeData?.name || "";
-    return cls === "MiniMaxH3Director";
+    return cls === "H3_D_NEO";
 }
 
 /** Classic LiteGraph (not Nodes 2.0): Comfy mounts $$canvas-image-preview / video-preview under the node. */
@@ -13049,7 +12365,7 @@ function suppressDirectorClassicOutputPreview(node) {
 }
 
 app.registerExtension({
-    name: "ComfyUI.MiniMaxH3DirectorPlugin",
+    name: "ComfyUI.H3_D_NEOPlugin",
     async setup() {
         installDirectorClipboardGuard();
         const flushDirectors = () => {
@@ -13069,7 +12385,7 @@ app.registerExtension({
                 const graph = app.graph ?? app.canvas?.graph;
                 for (const node of graph?._nodes ?? graph?.nodes ?? []) {
                     const editor = node?._minimaxEditor;
-                    if (editor?.isImageBatch?.()) {
+                    if (editor?.isImageBatch?.() || editor?.isFl2vMode?.()) {
                         scheduleDirectorPassCacheRefresh(editor, 0, "selected");
                     }
                 }
@@ -13092,14 +12408,14 @@ app.registerExtension({
         api.addEventListener("executing", ({ detail }) => {
             if (detail == null) return;
             const node = findDirectorNode(detail);
-            if (node && isMiniMaxH3DirectorNode(node)) {
+            if (node && isH3_D_NEONode(node)) {
                 suppressDirectorClassicOutputPreview(node);
             }
             const editor = node?._minimaxEditor;
             if (!editor) return;
             editor.flushTimelineSync?.();
             editor.syncLiveSampleToSelection?.();
-            if (editor.isImageBatch?.()) {
+            if (editor.isImageBatch?.() || editor.isFl2vMode?.()) {
                 for (const seg of editor.timeline.segments || []) {
                     // Keep the last usable frame while a new run starts.  The
                     // progress event can arrive before the first preview event
@@ -13141,7 +12457,8 @@ app.registerExtension({
         setTimeout(patchDirectorDomWidgetLayout, 500);
     },
     async loadedGraphNode(node) {
-        if (!isMiniMaxH3DirectorNode(node)) return;
+        if (!isH3_D_NEONode(node)) return;
+        node.title = "H3_D_NEO";
         suppressDirectorClassicOutputPreview(node);
         pruneDirectorDomWidgets(node);
         if (!node._minimaxDomWidget) return;
@@ -13197,12 +12514,14 @@ app.registerExtension({
         }
 
         if (!isDirectorNodeDef(nodeType, nodeData)) return;
+    nodeData.python_module = "custom_nodes.H3_D_NEO";
         if (nodeType.prototype._minimaxDirectorPatched) return;
         nodeType.prototype._minimaxDirectorPatched = true;
 
         const onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onCreated?.apply(this, arguments);
+            this.title = "H3_D_NEO";
             suppressDirectorClassicOutputPreview(this);
             applyDirectorWidgetLabels(this);
             // ComfyUI may attach seed's control_after_generate combo after onNodeCreated.
@@ -13279,7 +12598,6 @@ app.registerExtension({
                 snapshotDirectorSampleWidgets(this);
             }
             lockDirectorSampleSnap(this, 400);
-            lockDirectorSigmasInput(this);
             const out = onConnectionsChange?.apply(this, args);
             this._minimaxEditor?.syncExternalGroupsTimeline?.();
             this._minimaxEditor?.refreshDirectorPromptSyncButton?.();
@@ -13360,13 +12678,7 @@ app.registerExtension({
                 ed.timeline = parseTimeline(ed.timelineWidget?.value, initTotal, H3_FPS);
                 ed._restoreUserLivePreviewSpeed?.();
                 ed._directorMode = ed.getDirectorMode();
-                if (ed._directorMode === "video") {
-                    ed.restoreVideoFromTimeline();
-                } else if (ed._directorMode === "prompt_batch" || ed._directorMode === "image_batch") {
-                    ensureImageBatchTimeline(ed);
-                } else {
-                    ed.ensureGenTimeline();
-                }
+                ensureImageBatchTimeline(ed);
                 ed.applyTaskLayout(ed._directorMode);
                 ed.lockH3FrameRate({ fromFps: storedFps });
                 ed.populateTaskSelect(ed.globalTask, ed.taskTypeWidget?.value);

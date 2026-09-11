@@ -6,11 +6,6 @@ const MIN_SEGMENT_FRAMES = 5;
 
 const STYLES = `
 .bd-group-video-timeline{display:flex;flex-direction:column;gap:7px;min-width:0;background:#0b0d0e;border:1px solid #293033;border-radius:8px;padding:8px;box-sizing:border-box}
-.bd-group-video-toolbar{display:none!important;align-items:center;gap:5px;flex-wrap:wrap}
-.bd-group-video-toolbar button{border:1px solid #3b4448;background:#171b1d;color:#c8ced1;border-radius:4px;padding:3px 7px;font-size:10px;line-height:1.35;cursor:pointer}
-.bd-group-video-toolbar button:hover{border-color:#66747a;color:#fff}
-.bd-group-video-toolbar button:disabled{opacity:.45;cursor:not-allowed}
-.bd-group-video-toolbar input{width:42px;background:#111518;border:1px solid #3b4448;border-radius:4px;color:#ddd;padding:3px 5px;font-size:10px}
 .bd-group-video-player{position:relative;width:100%;height:clamp(120px,22vw,260px);display:flex;align-items:center;justify-content:center;background:#050606;border-radius:6px;overflow:hidden;cursor:pointer}
 .bd-group-video-player video{width:100%;height:100%;object-fit:contain;background:#050606}
 .bd-group-video-seek{width:100%;height:14px;margin:0;accent-color:#69d99a;cursor:pointer}
@@ -191,7 +186,7 @@ function button(label, title = label) {
 
 export function mountGroupVideoTimeline(container, options) {
     injectStyles();
-    const { editor, seg, onUpload, onDropFile, onSplit, onRangeChange } = options;
+    const { editor, seg, onUpload, onDropFile, onRangeChange } = options;
     const model = sourceModel(seg);
     const logicalRanges = clipLogicalRanges(model);
     const videoLabel = t("slot.video", { n: 1 });
@@ -206,19 +201,6 @@ export function mountGroupVideoTimeline(container, options) {
     root.dataset.refScope = "group";
     root.title = sourceTitle;
     container.appendChild(root);
-
-    const toolbar = document.createElement("div");
-    toolbar.className = "bd-group-video-toolbar";
-    const split = button(t("toolbar.split").replace(/^\+\s*/, ""));
-    const equalCount = document.createElement("input");
-    equalCount.type = "number";
-    equalCount.min = "2";
-    equalCount.max = "64";
-    equalCount.value = "2";
-    const equal = button(t("toolbar.equalSplit"));
-    const smart = button(t("toolbar.smartSplit"));
-    toolbar.append(split, equalCount, equal, smart);
-    root.appendChild(toolbar);
 
     const playerWrap = document.createElement("div");
     playerWrap.className = "bd-group-video-player";
@@ -463,65 +445,6 @@ export function mountGroupVideoTimeline(container, options) {
         raf = requestAnimationFrame(animate);
     };
 
-    const splitAt = (points) => {
-        const valid = [...new Set(points.map((value) => Math.round(Number(value) || 0)))]
-            .filter((value) => value > rangeStart && value < rangeEnd)
-            .sort((a, b) => a - b);
-        if (!valid.length) return;
-        onSplit?.([0, ...valid.map((value) => value - rangeStart), rangeEnd - rangeStart]);
-    };
-
-    split.onclick = () => splitAt([currentFrame + 1]);
-    equal.onclick = () => {
-        const count = clamp(parseInt(equalCount.value || "2", 10) || 2, 2, 64);
-        const points = [];
-        const selectedFrames = rangeEnd - rangeStart;
-        for (let part = 1; part < count; part++) {
-            points.push(rangeStart + Math.round(selectedFrames * part / count));
-        }
-        splitAt(points);
-    };
-    smart.onclick = async () => {
-        const selectedFrames = rangeEnd - rangeStart;
-        if (selectedFrames < MIN_SEGMENT_FRAMES * 2) return;
-        smart.disabled = true;
-        setMessage(t("smartSplit.analyzing"));
-        try {
-            const clips = selectedRanges().map((range) => ({
-                videoFile: range.clip.videoFile || range.clip.fileName,
-                subfolder: range.clip.subfolder || "",
-                type: range.clip.type || "input",
-                logicalStart: range.start - rangeStart,
-                logicalEnd: range.end - rangeStart,
-                sourceFrameStart: logicalEntry(model, range.start).frame,
-                sourceFrameEnd: logicalEntry(model, range.end - 1).frame + 1,
-                nativeFps: range.clip.nativeFps || range.clip.native_fps || null,
-            }));
-            const response = await api.fetchApi("/minimax/director/detect_shots", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    clips,
-                    frameRate: Number(editor?.timeline?.frameRate) || 24,
-                    totalFrames: selectedFrames,
-                    sensitivity: "medium",
-                    minShotFrames: 12,
-                }),
-            });
-            if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
-            const result = await response.json();
-            const cuts = Array.isArray(result.cutFrames) ? result.cutFrames : [];
-            if (!cuts.length) {
-                setMessage(t("smartSplit.noSegments"));
-                return;
-            }
-            splitAt(cuts.map((value) => value + rangeStart));
-        } catch (error) {
-            setMessage(t("smartSplit.failed", { err: error?.message || error }), true);
-        } finally {
-            smart.disabled = false;
-        }
-    };
     play.onclick = () => {
         if (player.paused) {
             if (player.ended || currentFrame >= rangeEnd - 1) {
@@ -717,7 +640,7 @@ export function mountGroupVideoTimeline(container, options) {
     player.onloadedmetadata = () => syncPlayer();
 
     const hasVideo = model.totalFrames > 0 && model.clips.length > 0;
-    for (const control of [split, equal, smart, play, mute, exportRange]) {
+    for (const control of [play, mute, exportRange]) {
         control.disabled = !hasVideo;
     }
     if (hasVideo) {

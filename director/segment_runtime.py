@@ -20,7 +20,7 @@ def needs_source_video(task_key: str) -> bool:
 
 def is_gen_timeline_plan(plan: DirectorPlan) -> bool:
     mode = str((plan.raw or {}).get("timelineMode") or "").lower()
-    return mode in ("gen_blank", "gen_image", "prompt_batch", "image_batch", "fl2v")
+    return mode == "prompt_batch"
 
 
 def resolve_segment_raw_clip(plan: DirectorPlan, seg) -> torch.Tensor:

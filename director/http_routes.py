@@ -190,7 +190,7 @@ async def minimax_upload_video_chunk(request):
                 shutil.copyfileobj(src, out)
 
     shutil.rmtree(session_dir, ignore_errors=True)
-    subfolder = f"H3_D/{INPUT_UPLOADS_DIR_NAME}"
+    subfolder = f"H3_D_NEO/{INPUT_UPLOADS_DIR_NAME}"
     log.info("MiniMax H3 Director uploaded video to input/%s: %s", subfolder, filename)
     return web.json_response({"name": filename, "subfolder": subfolder, "type": "input"})
 
@@ -200,8 +200,8 @@ def _reference_audio_result(path: str, *, reused: bool, source_kind: str) -> dic
     return {
         "name": name,
         "fileName": name,
-        "relPath": f"H3_D/{INPUT_REFERENCES_DIR_NAME}/{name}",
-        "subfolder": f"H3_D/{INPUT_REFERENCES_DIR_NAME}",
+        "relPath": f"H3_D_NEO/{INPUT_REFERENCES_DIR_NAME}/{name}",
+        "subfolder": f"H3_D_NEO/{INPUT_REFERENCES_DIR_NAME}",
         "type": "input",
         "reused": bool(reused),
         "sourceKind": source_kind,
@@ -537,99 +537,6 @@ async def minimax_list_input_media(request):
     return web.json_response({"items": items})
 
 
-async def minimax_detect_shots(request):
-    """Detect shot boundaries with PySceneDetect; return logical cut frames."""
-    try:
-        body = await request.json()
-    except Exception as exc:
-        return web.Response(status=400, text=f"Invalid JSON: {exc}")
-
-    from ..lib.shot_detect import (
-        detect_timeline_shot_cuts,
-        scenedetect_available,
-        scenedetect_install_hint,
-    )
-
-    if not scenedetect_available():
-        return web.Response(
-            status=400,
-            text=(
-                "PySceneDetect is not installed in ComfyUI's Python "
-                f"({__import__('sys').executable}). "
-                f"Run: {scenedetect_install_hint()}"
-            ),
-        )
-
-    frame_rate = float(H3_FPS)
-    try:
-        total_frames = int(body.get("totalFrames") or body.get("total_frames") or 0)
-    except (TypeError, ValueError):
-        return web.Response(status=400, text="Invalid totalFrames.")
-
-    sensitivity = str(body.get("sensitivity") or "medium").strip().lower()
-    try:
-        min_shot_frames = int(body.get("minShotFrames") or body.get("min_shot_frames") or 12)
-    except (TypeError, ValueError):
-        min_shot_frames = 12
-
-    clips_in = body.get("clips")
-    clips: list[dict] = []
-    if isinstance(clips_in, list) and clips_in:
-        for item in clips_in:
-            if not isinstance(item, dict):
-                continue
-            video_file = str(item.get("videoFile") or item.get("video_file") or "").strip()
-            if not video_file:
-                continue
-            clips.append(
-                {
-                    "videoFile": video_file,
-                    "fileName": os.path.basename(video_file),
-                    "subfolder": str(item.get("subfolder") or "").strip(),
-                    "type": str(item.get("type") or "input").strip() or "input",
-                    "logicalStart": item.get("logicalStart", item.get("logical_start", 0)),
-                    "logicalEnd": item.get("logicalEnd", item.get("logical_end", total_frames)),
-                    "sourceFrameStart": item.get("sourceFrameStart", item.get("source_frame_start", 0)),
-                    "sourceFrameEnd": item.get("sourceFrameEnd", item.get("source_frame_end")),
-                    "nativeFps": item.get("nativeFps", item.get("native_fps")),
-                }
-            )
-    else:
-        video_file = str(body.get("videoFile") or body.get("video_file") or "").strip()
-        if not video_file:
-            return web.Response(status=400, text="Missing clips[] or videoFile.")
-        clips.append(
-            {
-                "videoFile": video_file,
-                "fileName": os.path.basename(video_file),
-                "subfolder": str(body.get("subfolder") or "").strip(),
-                "type": str(body.get("type") or "input").strip() or "input",
-                "logicalStart": 0,
-                "logicalEnd": total_frames,
-                "nativeFps": body.get("nativeFps", body.get("native_fps")),
-            }
-        )
-
-    if total_frames <= 0:
-        return web.Response(status=400, text="totalFrames must be > 0.")
-
-    try:
-        result = detect_timeline_shot_cuts(
-            clips,
-            frame_rate=frame_rate,
-            total_frames=total_frames,
-            sensitivity=sensitivity,
-            min_shot_frames=min_shot_frames,
-        )
-    except ImportError as exc:
-        return web.Response(status=400, text=str(exc))
-    except Exception as exc:
-        log.warning("MiniMax H3 Director shot detect failed: %s", exc)
-        return web.Response(status=400, text=str(exc))
-
-    return web.json_response(result)
-
-
 async def minimax_first_pass_cache_status(request):
     """Compare stored first-pass metadata with the Director's current inputs."""
     try:
@@ -790,7 +697,6 @@ def register_routes() -> bool:
     _register_route(routes, "POST", "/minimax/director/export_video_range", minimax_export_video_range)
     _register_route(routes, "GET", "/minimax/director/list_input_media", minimax_list_input_media)
     _register_route(routes, "GET", "/minimax/director/list_vae_approx", minimax_list_vae_approx)
-    _register_route(routes, "POST", "/minimax/director/detect_shots", minimax_detect_shots)
     _register_route(
         routes,
         "POST",
@@ -818,10 +724,12 @@ def register_routes() -> bool:
         minimax_rename_snapshot,
         minimax_restore_snapshot,
         minimax_save_snapshot,
+        minimax_update_snapshot,
     )
 
     _register_route(routes, "GET", "/minimax/director/snapshots", minimax_list_snapshots)
     _register_route(routes, "POST", "/minimax/director/snapshots/save", minimax_save_snapshot)
+    _register_route(routes, "POST", "/minimax/director/snapshots/update", minimax_update_snapshot)
     _register_route(routes, "GET", "/minimax/director/snapshots/export", minimax_export_snapshot)
     _register_route(routes, "POST", "/minimax/director/snapshots/import", minimax_import_snapshot)
     _register_route(routes, "POST", "/minimax/director/snapshots/restore", minimax_restore_snapshot)

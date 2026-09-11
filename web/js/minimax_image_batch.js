@@ -26,6 +26,8 @@ import {
     minDurationSec,
     minFrameCount,
     newBatchSegment,
+    normalizeSegmentSeed,
+    normalizeSegmentSeedMode,
     preferredDurationSecFromFrames,
     refAudioLabel,
     refImageLabel,
@@ -330,8 +332,6 @@ export const IMAGE_BATCH_STYLES = `
 .bd-btn.bd-disabled,.bd-btn:disabled{opacity:.38;cursor:not-allowed;pointer-events:none}
 .bd-mode button.bd-disabled,.bd-mode button:disabled{opacity:.38;cursor:not-allowed;pointer-events:none}
 .bd-batch{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}
-.bd-batch-i2v-notice{display:none;color:#ffb74d;background:#3a2a12;border:1px solid #a67c00;border-radius:6px;padding:8px 10px;font-size:11px;line-height:1.5}
-.bd-batch-i2v-notice.visible{display:block}
 .bd-batch-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .bd-batch-picker{display:none;flex-wrap:wrap;gap:6px;width:100%;box-sizing:border-box;padding:2px 0 6px;flex-shrink:0}
 .bd-batch-picker.visible{display:flex}
@@ -410,8 +410,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-exec-prompt{flex:1 1 auto;min-height:0;overflow:auto;background:#101010;border:1px solid #2e2e2e;border-radius:8px;padding:8px 10px;color:#c8c8c8;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
 .bd-exec-prompt:empty::before{content:attr(data-empty);color:#555}
 .bd-wrap:not(.bd-live-preview-on) .bd-preview-col{display:none!important}
-.bd-batch-plain .bd-batch-head,.bd-batch-source .bd-batch-head,.bd-batch-fl2v .bd-batch-head,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px}
-.bd-batch-plain .bd-batch-head b,.bd-batch-source .bd-batch-head b,.bd-batch-fl2v .bd-batch-head b,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
+.bd-batch-plain .bd-batch-head,.bd-batch-source .bd-batch-head,.bd-batch-fl2v .bd-batch-head,.bd-batch-v2v .bd-batch-head,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px}
 .bd-batch-plain .bd-batch-prompts,.bd-batch-source .bd-batch-prompts,.bd-batch-fl2v .bd-batch-prompts,.bd-batch-v2v .bd-batch-prompts,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts,.bd-batch-r2v .bd-batch-prompts{background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;gap:6px;height:100%;min-height:0;align-self:stretch;display:flex;flex-direction:column;overflow:hidden}
 .bd-batch-plain .bd-batch-prompts .bd-label,.bd-batch-source .bd-batch-prompts .bd-label,.bd-batch-fl2v .bd-batch-prompts .bd-label,.bd-batch-v2v .bd-batch-prompts .bd-label,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts .bd-label,.bd-batch-r2v .bd-batch-prompts .bd-label{color:#eaeaea;font-size:11px;font-weight:700;letter-spacing:.02em;flex-shrink:0}
 .bd-batch-plain .bd-batch-prompts textarea,.bd-batch-source .bd-batch-prompts textarea,.bd-batch-fl2v .bd-batch-prompts textarea,.bd-batch-v2v .bd-batch-prompts textarea,.bd-batch-refs:not(.bd-batch-r2v) .bd-batch-prompts textarea,.bd-batch-r2v .bd-batch-prompts textarea{background:#101010;border-color:#2e2e2e;border-radius:8px;padding:10px;font-size:12px;line-height:1.45}
@@ -429,9 +428,8 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-card.selected.run-on,.bd-batch-card.selected.run-on.done{border-color:#4fff8f;box-shadow:0 0 0 1px rgba(79,255,143,.4)}
 .bd-batch-head{grid-column:1/-1;display:flex;align-items:center;align-self:start;justify-content:flex-start;gap:8px;flex-wrap:nowrap;flex:0 0 auto;width:100%;min-width:0}
 .bd-batch-r2v .bd-batch-head{padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:2px;flex-shrink:0}
-.bd-batch-head b{color:#ccc;font-size:11px}
+.bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
 .bd-batch-head>b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bd-batch-r2v .bd-batch-head b{color:#f0f0f0;font-size:12px;font-weight:650}
 .bd-batch-collapse{appearance:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;background:transparent;color:#aaa;font-size:13px;line-height:1;cursor:pointer;flex-shrink:0}
 .bd-batch-collapse:hover,.bd-batch-collapse:focus-visible{color:#eee;background:#252525;border-radius:4px;outline:none}
 .bd-batch-title-input{min-width:100px;max-width:220px;height:24px;box-sizing:border-box;background:#181818;border:1px solid #4a7a5a;border-radius:4px;color:#eee;padding:2px 6px;font:inherit;font-size:12px}
@@ -440,6 +438,10 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-continuity input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#6ab0ff;flex-shrink:0}
 .bd-batch-continuity span{white-space:nowrap}
 .bd-batch-head-meta{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto}
+.bd-batch-seed{display:inline-flex;align-items:center;gap:4px;color:#aaa;font-size:11px;white-space:nowrap}
+.bd-batch-seed select,.bd-batch-seed input{box-sizing:border-box;height:25px;background:#181818;border:1px solid #444;border-radius:5px;color:#eee;padding:3px 6px;font-size:11px}
+.bd-batch-seed select{max-width:74px}
+.bd-batch-seed input{width:116px;font-variant-numeric:tabular-nums}
 .bd-batch-fc{display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px}
 .bd-batch-fc input{width:72px;background:#181818;border:1px solid #444;border-radius:5px;color:#eee;padding:5px 8px;font-size:13px}
 .bd-batch-pass{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
@@ -614,7 +616,7 @@ async function uploadImage(file) {
     const body = new FormData();
     body.append("image", uploadFile, uploadFile.name);
     body.append("type", "input");
-    body.append("subfolder", "H3_D/references");
+    body.append("subfolder", "H3_D_NEO/references");
     body.append("overwrite", "false");
     const resp = await api.fetchApi("/upload/image", { method: "POST", body });
     if (!resp.ok) throw new Error(await resp.text() || `Upload failed (${resp.status})`);
@@ -690,7 +692,6 @@ export function mountImageBatchPanel(root) {
             <button type="button" class="bd-btn" data-a="batch-detail-mode" data-i18n="toolbar.batchDetailSolo" data-i18n-title="tooltip.batchDetailSolo">单显模式</button>
             <span class="bd-meta" data-r="batch-hint" data-i18n="batch.hint.defaultImage">每组生成 1 张图片</span>
         </div>
-        <div class="bd-batch-i2v-notice" data-r="batch-i2v-notice"></div>
         <div class="bd-batch-picker" data-r="batch-picker"></div>
         <div class="bd-batch-list" data-r="batch-list"></div>`;
     root.appendChild(panel);
@@ -699,7 +700,6 @@ export function mountImageBatchPanel(root) {
         list: panel.querySelector('[data-r="batch-list"]'),
         picker: panel.querySelector('[data-r="batch-picker"]'),
         hint: panel.querySelector('[data-r="batch-hint"]'),
-        i2vNotice: panel.querySelector('[data-r="batch-i2v-notice"]'),
         addBtn: panel.querySelector('[data-a="batch-add"]'),
         runSelectBtn: panel.querySelector('[data-a="batch-run-select"]'),
         runSelectAllWrap: panel.querySelector('[data-r="batch-run-all-wrap"]'),
@@ -869,6 +869,8 @@ export function normalizeImageBatchSegments(editor) {
         seg.previewB64 = seg.previewB64 || "";
         seg.previewFrames = seg.previewFrames || [];
         seg.previewFps = seg.previewFps || parseFloat(editor.frameRateWidget?.value || 24);
+        seg.seedMode = normalizeSegmentSeedMode(seg.seedMode);
+        seg.seed = normalizeSegmentSeed(seg.seed);
         if (taskKey === "r2v") {
             seg.refImageSize = resolveSegmentRefImageSize(seg, editor.timeline?.output);
         }
@@ -1112,105 +1114,6 @@ function sourceVideoFrameMap(sourceVideo) {
     return frameMap.slice(start, alignedEnd);
 }
 
-function sourceVideoSlice(sourceVideo, start, end) {
-    const source = JSON.parse(JSON.stringify(sourceVideo || {}));
-    const frameMap = sourceVideoFrameMap(source).slice(start, end);
-    source.totalFrames = frameMap.length;
-    source.video = { ...(source.video || {}), frameMap, deletedSourceRanges: [] };
-    delete source.rangeStart;
-    delete source.rangeEnd;
-    return source;
-}
-
-function restoreSegSourceVideo(editor, seg) {
-    const source = seg.sourceVideo;
-    if (!source) return;
-    const video = source.video || source;
-    const clips = Array.isArray(source.videoClips) && source.videoClips.length
-        ? source.videoClips
-        : ((video.videoFile || video.fileName) ? [video] : []);
-    const totalFrames = clips.reduce(
-        (sum, clip) => sum + Math.max(0, Number(clip.sourceFrameCount) || 0),
-        0,
-    );
-    if (!totalFrames) return;
-    source.totalFrames = totalFrames;
-    source.video = { ...video, frameMap: [], deletedSourceRanges: [] };
-    const frameCount = floorMiniMaxFrameCount(totalFrames);
-    if (frameCount <= 0) return;
-    source.rangeStart = 0;
-    source.rangeEnd = frameCount;
-    if (frameCount !== totalFrames) {
-        console.warn(
-            `[MiniMax H3 Director] Restored source video aligned down: frames=${totalFrames} -> ${frameCount} `
-            + `(cropped ${totalFrames - frameCount} tail frame(s)).`,
-        );
-    }
-    seg.durationSec = preferredDurationSecFromFrames(frameCount, 24);
-    seg.frameCount = frameCount;
-    seg.length = frameCount;
-    seg._videoFrameCount = frameCount;
-    seg.previewB64 = "";
-    seg.previewFrames = [];
-    editor.renderImageBatchGroups();
-    editor.commit(false, { syncTimeline: true });
-    editor.updateVideoNameLabel?.();
-    editor.scheduleRender?.();
-}
-
-function splitSegSourceVideo(editor, index, points) {
-    const seg = editor.timeline.segments[index];
-    const total = sourceVideoFrameMap(seg?.sourceVideo).length;
-    if (!seg || total < 2) return;
-    const boundaries = [...new Set(points.map((value) => Math.round(Number(value) || 0)))]
-        .filter((value) => value >= 0 && value <= total)
-        .sort((a, b) => a - b);
-    if (boundaries[0] !== 0) boundaries.unshift(0);
-    if (boundaries[boundaries.length - 1] !== total) boundaries.push(total);
-    const ranges = boundaries.slice(0, -1)
-        .map((start, rangeIndex) => {
-            const rawEnd = boundaries[rangeIndex + 1];
-            const frameCount = floorMiniMaxFrameCount(rawEnd - start);
-            if (frameCount > 0 && frameCount !== rawEnd - start) {
-                console.warn(
-                    `[MiniMax H3 Director] Split source range aligned down: start=${start}, `
-                    + `frames=${rawEnd - start} -> ${frameCount} `
-                    + `(cropped ${rawEnd - start - frameCount} tail frame(s)).`,
-                );
-            }
-            return [start, start + frameCount];
-        })
-        .filter(([start, end]) => end - start >= 5);
-    if (ranges.length < 2) return;
-    const replacements = ranges.map(([start, end], rangeIndex) => {
-        const frameCount = end - start;
-        const common = {
-            taskType: seg.taskType,
-            durationSec: preferredDurationSecFromFrames(frameCount, 24),
-            sourceVideo: sourceVideoSlice(seg.sourceVideo, start, end),
-            videoResolution: seg.videoResolution === "source" ? "source" : "target",
-            passMode: seg.passMode,
-            continuityFromPrev: rangeIndex === 0 ? seg.continuityFromPrev : true,
-        };
-        if (rangeIndex === 0) {
-            return newBatchSegment({
-                ...seg,
-                ...common,
-                id: seg.id,
-                previewB64: "",
-                previewFrames: [],
-            });
-        }
-        return newBatchSegment(common);
-    });
-    editor.timeline.segments.splice(index, 1, ...replacements);
-    normalizeImageBatchSegments(editor);
-    editor.selectedIndex = index;
-    editor.renderImageBatchGroups();
-    editor.commit(false, { syncTimeline: true });
-    editor.updateVideoNameLabel?.();
-}
-
 function appendSourceVideoResolutionControl(container, editor, seg, { showTitle = true } = {}) {
     const head = document.createElement("div");
     head.className = "bd-batch-source-video-head";
@@ -1275,7 +1178,6 @@ function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader
         onDropFile: (file) => {
             if (isBatchVideoFile(file)) void assignSegSourceVideoFromFile(editor, index, file);
         },
-        onSplit: (points) => splitSegSourceVideo(editor, index, points),
         onRangeChange: (start, end) => {
             const source = seg.sourceVideo;
             if (!source) return;
@@ -1370,6 +1272,8 @@ function applyMixedGroupType(editor, index, nextKey) {
     const seg = editor.timeline.segments[index];
     if (!seg) return;
     seg.taskType = key;
+    delete seg.uiCardHeight;
+    seg.uiCollapsed = false;
     if (key === "fl2v" && !seg.startImage?.imageFile && seg.genImage?.imageFile) {
         seg.startImage = {
             imageFile: seg.genImage.imageFile,
@@ -3289,25 +3193,6 @@ export function renderImageBatchGroups(editor) {
             : t(isVideo ? "batch.hint.defaultVideo" : "batch.hint.defaultImage");
     }
     const externalLocked = !!(editor.hasExternalI2vGroups?.() || editor.hasExternalR2vGroups?.());
-    if (editor.batchI2vNotice) {
-        const needsRefs = key === "r2i" || key === "r2v" || (mixed && (editor.timeline.segments || []).some((s) => resolveMixedGroupKey(s) === "r2v"));
-        const hasAnyMedia = (editor.timeline.segments || []).some((s) => (
-            (s.refs || []).some((r) => r?.imageFile)
-            || (s.refAudios || []).some((r) => r?.audioFile || r?.fileName)
-            || (s.refVideos || []).some((r) => (
-                r?.videoFile || r?.fileName || r?.previewImageFile || r?.previewImageUrl || r?.linked
-            ))
-        ));
-        // External graph media may exist as tensors even when UI path sync failed —
-        // don't scare users with a false "will degrade to t2v" notice.
-        if (needsRefs && !hasAnyMedia && !externalLocked) {
-            editor.batchI2vNotice.textContent = t((key === "r2v" || mixed) ? "batch.notice.r2vNoRefs" : "batch.notice.r2iNoRefs");
-            editor.batchI2vNotice.classList.add("visible");
-        } else {
-            editor.batchI2vNotice.classList.remove("visible");
-            editor.batchI2vNotice.textContent = "";
-        }
-    }
     const addBtn = editor.batchPanel?.querySelector('[data-a="batch-add"]');
     if (addBtn) {
         // Video batch modes add from the shared top toolbar, matching mixed mode.
@@ -3430,7 +3315,9 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         const runSelectOn = !!(editor.isRunSelectEnabled?.() && editor.supportsRunSelect?.());
         const runEnabled = !runSelectOn || !!editor.isSegmentRunEnabled?.(index);
         // r2v / mixed: always show focus selected. t2v/i2v: only run-select participation chrome.
-        if ((isR2v || mixed) && index === editor.selectedIndex) card.classList.add("selected");
+        if ((isR2v || mixed) && index === editor.selectedIndex) {
+            card.classList.add("selected");
+        }
         if (index === runningIdx) card.classList.add("running");
         if (runSelectOn && runEnabled) card.classList.add("run-on");
         if (runSelectOn && !runEnabled) card.classList.add("run-skipped");
@@ -3570,6 +3457,48 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         if (continuityLabel) head.appendChild(continuityLabel);
         const meta = document.createElement("div");
         meta.className = "bd-batch-head-meta";
+        if (!externalLocked) {
+            const seedRow = document.createElement("label");
+            seedRow.className = "bd-batch-seed";
+            seedRow.title = t("tooltip.batchSeed");
+            const seedLabel = document.createElement("span");
+            seedLabel.textContent = t("batch.seed");
+            const seedMode = document.createElement("select");
+            seedMode.title = t("tooltip.batchSeedMode");
+            for (const mode of ["inherit", "random", "fixed"]) {
+                const option = document.createElement("option");
+                option.value = mode;
+                option.textContent = t(`batch.seedMode.${mode}`);
+                option.selected = mode === normalizeSegmentSeedMode(seg.seedMode);
+                seedMode.appendChild(option);
+            }
+            const seedInput = document.createElement("input");
+            seedInput.type = "text";
+            seedInput.inputMode = "numeric";
+            seedInput.pattern = "[0-9]*";
+            seedInput.value = normalizeSegmentSeed(seg.seed);
+            seedInput.title = t("tooltip.batchFixedSeed");
+            seedInput.hidden = seedMode.value !== "fixed";
+            const commitSeed = () => {
+                seg.seedMode = normalizeSegmentSeedMode(seedMode.value);
+                seg.seed = normalizeSegmentSeed(seedInput.value);
+                seedInput.value = seg.seed;
+                seedInput.hidden = seg.seedMode !== "fixed";
+                editor.commit?.(false, { syncTimeline: true });
+                editor.flushTimelineSync?.();
+                scheduleDirectorPassCacheRefresh(editor, 100, "selected");
+            };
+            seedMode.onchange = (event) => {
+                event.stopPropagation();
+                commitSeed();
+            };
+            seedInput.onchange = commitSeed;
+            seedInput.onblur = commitSeed;
+            seedMode.onclick = (event) => event.stopPropagation();
+            seedInput.onclick = (event) => event.stopPropagation();
+            seedRow.append(seedLabel, seedMode, seedInput);
+            meta.appendChild(seedRow);
+        }
         if (isVideo) {
             const secRow = document.createElement("label");
             secRow.className = "bd-batch-fc";
@@ -3586,7 +3515,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             seg.length = frames;
             seg._videoFrameCount = frames;
             const displayedSec = isVideoEdit && sourceFrames <= 0 ? 0 : seg.durationSec;
-            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="0" max="${maxDurationSec()}" step="0.01" value="${displayedSec}" title="${t("batch.durationTooltip", { frames, play: playSec })}">`;
+            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="0" max="${maxDurationSec()}" step="0.1" value="${displayedSec}" title="${t("batch.durationTooltip", { frames, play: playSec })}">`;
             const secInput = secRow.querySelector("input");
             // Do not rewrite value/title while focused: frame snapping would
             // bounce 20.7↔20.5 and interrupt typing. Normalize on blur.
@@ -3858,6 +3787,17 @@ const BATCH_TOOLBAR_H = 48;
 const BATCH_PANEL_CHROME = 28;
 const BATCH_COLLAPSED_ROW_H = 34;
 
+function elementOuterHeight(el) {
+    if (!el) return 0;
+    const h = Number(el.offsetHeight) || 0;
+    try {
+        const style = getComputedStyle(el);
+        return h + (Number.parseFloat(style.marginTop) || 0) + (Number.parseFloat(style.marginBottom) || 0);
+    } catch {
+        return h;
+    }
+}
+
 export function getImageBatchUiHeight(editor) {
     const solo = isBatchDetailSolo(editor);
     const segments = editor?.timeline?.segments || [];
@@ -3867,7 +3807,9 @@ export function getImageBatchUiHeight(editor) {
     const key = resolveTaskKey(editor?.getTaskKey?.() || editor?.taskTypeWidget?.value);
     const defaultRowHeight = (segment) => {
         const segmentKey = key === "mixed" ? resolveMixedGroupKey(segment) : key;
-        return segmentKey === "r2v" ? 490 : 195;
+        return segmentKey === "r2v" || segmentKey === "rv2v"
+            ? 490
+            : (segmentKey === "v2v" ? 360 : 195);
     };
     const showPicker = solo && segments.length > 1 && !editor?.usesBatchTimeline?.();
     const pickerH = showPicker ? 56 : 0;
@@ -3894,7 +3836,7 @@ export function getImageBatchUiHeight(editor) {
         ));
         if (children.length) {
             const childrenHeight = children.reduce((sum, child) => (
-                sum + (child === editor.batchList ? listRowsH : child.offsetHeight)
+                sum + (child === editor.batchList ? listRowsH : elementOuterHeight(child))
             ), 0);
             return Math.ceil(childrenHeight + Math.max(0, children.length - 1) * BATCH_LIST_GAP);
         }
@@ -4104,9 +4046,10 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         let topChrome = 0;
         for (const child of wrap.children) {
             if (child === main || child === status || child === live) continue;
+            if (child.tagName === "STYLE") continue;
             if (child.classList?.contains("hidden")) continue;
             if (getComputedStyle(child).display === "none") continue;
-            topChrome += child.offsetHeight + 6;
+            topChrome += elementOuterHeight(child) + 6;
         }
 
         // During restore LiteGraph can briefly expose the old widget height.
@@ -4138,9 +4081,10 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         if (main) {
             for (const child of main.children) {
                 if (child === panel) continue;
+                if (child.tagName === "STYLE") continue;
                 if (child.classList?.contains("hidden")) continue;
                 if (getComputedStyle(child).display === "none") continue;
-                used += child.offsetHeight;
+                used += elementOuterHeight(child);
                 visible += 1;
             }
         }
@@ -4158,13 +4102,11 @@ export function syncBatchPanelFillHeight(editor, opts = {}) {
         }
 
         const batchToolbar = panel.querySelector?.(".bd-batch-toolbar");
-        const notice = panel.querySelector?.(".bd-batch-i2v-notice");
         const picker = editor.batchPicker;
-        const noticeH = notice?.classList?.contains("visible") ? (notice.offsetHeight + 8) : 0;
         const pickerH = picker?.classList?.contains("visible") ? (picker.offsetHeight + 8) : 0;
         const listH = Math.max(
             0,
-            batchH - (batchToolbar?.offsetHeight || 0) - noticeH - pickerH - 10,
+            batchH - (batchToolbar?.offsetHeight || 0) - pickerH - 10,
         );
         const solo = (editor.timeline?.segments?.length || 0) <= 1 || isBatchDetailSolo(editor);
         list.style.flex = "0 0 auto";
@@ -4212,9 +4154,6 @@ export function setToolbarDisabledForBatch(editor, disabled) {
     const btns = [
         editor.btnVideo,
         editor.btnVideoAppend,
-        editor.root?.querySelector('[data-a="split"]'),
-        editor.root?.querySelector('[data-a="smart-split"]'),
-        editor.root?.querySelector('[data-a="equal"]'),
         editor.root?.querySelector('[data-a="del"]'),
         editor.root?.querySelector('[data-a="mode-global"]'),
         editor.root?.querySelector('[data-a="mode-segment"]'),
@@ -4226,12 +4165,6 @@ export function setToolbarDisabledForBatch(editor, disabled) {
         btn.disabled = disabled;
         btn.classList.toggle("bd-disabled", disabled);
     }
-    if (editor.equalCountInput) {
-        editor.equalCountInput.classList.toggle("hidden", disabled);
-        editor.equalCountInput.disabled = disabled;
-        editor.equalCountInput.classList.toggle("bd-disabled", disabled);
-    }
-    editor.root?.querySelector('[data-r="equal-n"]')?.classList.toggle("hidden", disabled);
     editor.root?.querySelector(".bd-mode")?.classList.toggle("hidden", disabled);
 }
 
@@ -4240,9 +4173,6 @@ export function setR2vToolbar(editor, enabled) {
     const hide = [
         editor.btnVideo,
         editor.btnVideoAppend,
-        editor.root?.querySelector('[data-a="split"]'),
-        editor.root?.querySelector('[data-a="smart-split"]'),
-        editor.root?.querySelector('[data-a="equal"]'),
         editor.root?.querySelector('[data-a="mode-global"]'),
         editor.root?.querySelector('[data-a="mode-segment"]'),
     ];
@@ -4252,12 +4182,6 @@ export function setR2vToolbar(editor, enabled) {
         btn.disabled = enabled;
         btn.classList.toggle("bd-disabled", enabled);
     }
-    if (editor.equalCountInput) {
-        editor.equalCountInput.classList.toggle("hidden", enabled);
-        editor.equalCountInput.disabled = enabled;
-        editor.equalCountInput.classList.toggle("bd-disabled", enabled);
-    }
-    editor.root?.querySelector('[data-r="equal-n"]')?.classList.toggle("hidden", enabled);
     editor.root?.querySelector(".bd-mode")?.classList.toggle("hidden", enabled);
 
     const externalLocked = !!(editor.hasExternalI2vGroups?.() || editor.hasExternalR2vGroups?.());

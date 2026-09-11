@@ -22,17 +22,12 @@ from ..director.refine_pack import (
     DEFAULT_UPSCALE_MEGAPIXELS,
     FOLLOW_DIRECTOR_ASPECT,
     MAX_REFINE_PASSES,
-    MMX_DIR_REFINE,
     REFINE_MODES,
     SEED_MODES,
     SIGMA_SPACINGS,
     TILE_AXES,
     UPSCALE_METHODS,
-    infer_upscale_target,
-    pack_refine,
 )
-
-_CATEGORY = "MiniMaxH3"
 
 
 def director_refine_widget_inputs() -> dict:
@@ -105,14 +100,14 @@ def director_refine_widget_inputs() -> dict:
                 "default": DEFAULT_REFINE_SAMPLE_STEPS,
                 "min": 1,
                 "max": 200,
-                "tooltip": "二采步数。接了 refine_sigmas 口后忽略。",
+                "tooltip": "二采步数。",
             },
         ),
         "refine_scheduler": (
             comfy.samplers.KSampler.SCHEDULERS,
             {
                 "default": DEFAULT_REFINE_SCHEDULER,
-                "tooltip": "二采调度器。接了 refine_sigmas 口后忽略。",
+                "tooltip": "二采调度器。",
             },
         ),
         "refine_denoise": (
@@ -122,7 +117,7 @@ def director_refine_widget_inputs() -> dict:
                 "min": 0.0,
                 "max": 1.0,
                 "step": 0.01,
-                "tooltip": "二采 denoise（BasicScheduler）。接了 refine_sigmas 口后忽略。",
+                "tooltip": "二采 denoise（BasicScheduler）。",
             },
         ),
         "refine_extra_steps": (
@@ -131,7 +126,7 @@ def director_refine_widget_inputs() -> dict:
                 "default": DEFAULT_REFINE_EXTRA_STEPS,
                 "min": 0,
                 "max": 15,
-                "tooltip": "低噪区间额外加步。0 = 关闭。接了 refine_sigmas 口后忽略。",
+                "tooltip": "低噪区间额外加步。0 = 关闭。",
             },
         ),
         "refine_start_at_sigma": (
@@ -274,353 +269,3 @@ def director_refine_widget_inputs() -> dict:
             },
         ),
     }
-
-
-class MiniMaxH3DirectorRefine:
-    """Pack refine/upscale settings. Connect ``refine`` to Director.refine.
-
-    ``refine``: same-resolution second sample.
-    ``upscale``: enlarge to target canvas then second-sample.
-    ``latent_upscale``: H3 latent enlarge only, no second sample.
-    Second sample uses SIGMAS from BasicScheduler / ManualSigmas.
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "mode": (
-                    list(REFINE_MODES),
-                    {
-                        "default": "refine",
-                        "tooltip": (
-                            "refine = 同分辨率二采（精修）。"
-                            "upscale = 先放大到目标画布再二采。"
-                            "latent_upscale = 只放大 H3 latent，不再二采。"
-                        ),
-                    },
-                ),
-                "upscale_method": (
-                    list(UPSCALE_METHODS),
-                    {
-                        "default": "h3_latent",
-                        "tooltip": (
-                            "仅 mode=upscale。"
-                            "h3_latent = 先按目标画布放大 H3 视频 latent，再二采"
-                            "（下方选 3D 权重）。"
-                             "放大后会按图一独立二采重建 I2V/FL2V keyframe；"
-                             "高清二采默认按空间分块以降低 DiT 显存。"
-                            "lanczos = 像素插值；可另接 upscale_model（RealESRGAN 等）。"
-                            "nvidia_rtx_vsr = NVIDIA RTX Video Super Resolution"
-                            "（需 nvidia-vfx + NVIDIA GPU）。"
-                        ),
-                    },
-                ),
-                "latent_upscale_model": (
-                    list_h3_latent_upscale_models(),
-                    {
-                        "tooltip": (
-                            "H3 3D latent 放大权重。"
-                            "放到 ComfyUI/models/latent_upscale_models/，"
-                            "文件名含 3d（如 minimax_h3_latent_upscaler_3d_*.safetensors）。"
-                            "mode=latent_upscale，或 upscale + h3_latent 时使用。"
-                        ),
-                    },
-                ),
-                "sampler": (
-                    comfy.samplers.KSampler.SAMPLERS,
-                    {
-                        "default": DEFAULT_REFINE_SIGMA_SAMPLER,
-                        "tooltip": (
-                            "二采采样器。海螺案例用 euler；"
-                            "BasicScheduler 高质量二采常用 res_multistep。"
-                        ),
-                    },
-                ),
-                "passes": (
-                    "INT",
-                    {
-                        "default": 1,
-                        "min": 1,
-                        "max": MAX_REFINE_PASSES,
-                        "tooltip": (
-                            "精修次数。1 = 一次二采。"
-                            "upscale 时只有第 1 次放大，之后都是同分辨率精修。"
-                            "latent_upscale 不二采，此值无效。"
-                        ),
-                    },
-                ),
-            },
-            "optional": {
-                "refine_model": (
-                    "MODEL",
-                    {
-                        "tooltip": (
-                            "Second-pass UNET (二采模型)。"
-                            "不接则用导演台主模型。"
-                            "适合一采挂 Turbo LoRA、二采卸掉或换另一套。"
-                        ),
-                    },
-                ),
-                "refine_model_r2v": (
-                    "MODEL",
-                    {
-                        "tooltip": (
-                            "r2v / v2v / rv2v 专用二采模型。"
-                            "连接时优先于 refine_model；未连接时使用共享二采模型。"
-                        ),
-                    },
-                ),
-                "sigmas": (
-                    "SIGMAS",
-                    {
-                        "forceInput": True,
-                        "tooltip": (
-                            "二采噪声表。接 Comfy 自带 BasicScheduler 或 ManualSigmas。"
-                            "mode=refine / upscale 时必须接线。"
-                            "BasicScheduler 请接和二采相同的 MODEL（导演台主模型或 refine_model）。"
-                            "H3 的 SigmaShift 仍由 Refine 内部套上。"
-                        ),
-                    },
-                ),
-                "upscale_model": (
-                    "UPSCALE_MODEL",
-                    {
-                        "tooltip": (
-                            "可选。用「加载放大模型」接入，例如 RealESRGAN_x2plus。"
-                            "仅 mode=upscale 且 upscale_method=lanczos 时使用。"
-                            "不接则纯 lanczos 插值。选 nvidia_rtx_vsr / h3_latent 时忽略此口。"
-                        ),
-                    },
-                ),
-                "seed_mode": (
-                    list(SEED_MODES),
-                    {
-                        "default": "inherit",
-                        "tooltip": "inherit = 用导演台 seed；offset = 每轮 seed+1、+2…。",
-                    },
-                ),
-                "aspect_ratio": (
-                    list(ASPECT_RATIO_CHOICES),
-                    {
-                        "default": FOLLOW_DIRECTOR_ASPECT,
-                        "tooltip": (
-                            "放大目标画布，算法同导演台「输出分辨率」。"
-                            "默认「跟随导演台」：比例与导演台输出一致，尺寸用下方百万像素。"
-                            "比例预设：忽略导演台比例，按所选比例 + 百万像素。"
-                            "自定义：直接填宽高（对齐 ×32）。"
-                        ),
-                    },
-                ),
-                "megapixels": (
-                    "FLOAT",
-                    {
-                        "default": DEFAULT_UPSCALE_MEGAPIXELS,
-                        "min": 0.0,
-                        "max": 16.0,
-                        "step": 0.1,
-                        "tooltip": (
-                            "百万像素，同导演台 ResolutionSelector。"
-                            "1.0 MP 在 16:9 约为 1376×768（对齐 32）。"
-                            "跟随导演台或比例预设时生效。"
-                        ),
-                    },
-                ),
-                "width": (
-                    "INT",
-                    {
-                        "default": 1280,
-                        "min": 0,
-                        "max": 8192,
-                        "step": 32,
-                        "tooltip": "自定义宽度（×32）。仅「自定义」时生效。",
-                    },
-                ),
-                "height": (
-                    "INT",
-                    {
-                        "default": 720,
-                        "min": 0,
-                        "max": 8192,
-                        "step": 32,
-                        "tooltip": "自定义高度（×32）。仅「自定义」时生效。",
-                    },
-                ),
-                "skip_fl2v": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "tooltip": (
-                            "跳过首尾帧（fl2v）镜头的二采/放大。"
-                            "二采会改画面，容易把钉死的首尾帧画飘；默认不跳过。"
-                            "打开后 fl2v 才跳过精修 / latent 放大。"
-                        ),
-                    },
-                ),
-                "n_tiles": (
-                    "INT",
-                    {
-                        "default": DEFAULT_N_TILES,
-                        "min": 1,
-                        "max": 8,
-                        "step": 1,
-                        "tooltip": (
-                            "高清二采空间分块数。1 = 整幅采样（旧行为）。"
-                            "默认 2：画布较大时切开采样再融合，降低 DiT 显存。"
-                            "音频完整透传；匹配画布的 I2V/FL2V 关键帧按块裁切。"
-                        ),
-                    },
-                ),
-                "tile_axis": (
-                    list(TILE_AXES),
-                    {
-                        "default": "auto",
-                        "tooltip": "分块轴。auto = 取 latent 较长边（H 或 W）。",
-                    },
-                ),
-                "tile_overlap": (
-                    "INT",
-                    {
-                        "default": DEFAULT_TILE_OVERLAP,
-                        "min": 0,
-                        "max": 32,
-                        "step": 1,
-                        "tooltip": (
-                            "相邻块在 latent 域的重叠宽度。"
-                            "1 ≈ 原图像素 16。建议 4~8；过大几乎等于整幅，省不了显存。"
-                        ),
-                    },
-                ),
-                "max_size_for_no_tile": (
-                    "INT",
-                    {
-                        "default": DEFAULT_MAX_SIZE_FOR_NO_TILE,
-                        "min": 8,
-                        "max": 256,
-                        "step": 1,
-                        "tooltip": (
-                            "目标轴 latent 边长 ≤ 此值时自动整幅采样。"
-                            "默认 64：约 480p 不分块，720p 及以上才切。"
-                        ),
-                    },
-                ),
-                "refine_seams": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "tooltip": (
-                            "逐步同步融合失败时的备用接缝精修。"
-                            "当前分块对所有采样器逐步同步并把 RoPE 对齐到整幅画布，此开关不会再跑第二轮。"
-                        ),
-                    },
-                ),
-                "refine_steps": (
-                    "INT",
-                    {
-                        "default": DEFAULT_SEAM_REFINE_STEPS,
-                        "min": 1,
-                        "max": 25,
-                        "step": 1,
-                        "tooltip": "接缝精修使用 SIGMAS 末尾这么多步。仅 refine_seams 开启时有效。",
-                    },
-                ),
-            },
-        }
-
-    RETURN_TYPES = (MMX_DIR_REFINE, "INT", "INT")
-    RETURN_NAMES = ("refine", "width", "height")
-    FUNCTION = "pack"
-    CATEGORY = _CATEGORY
-    DESCRIPTION = (
-        "MiniMax H3 Director Refine: connect to Director.refine. "
-        "Director.images is the refined / upscaled result; "
-        "Director.images_pre_refine is the first-pass video (before second sample). "
-        "Second sample uses SIGMAS from BasicScheduler / ManualSigmas. "
-        "Upscale / latent_upscale canvas uses the same aspect + megapixels / custom W×H as Director. "
-        "Director first-pass stays at its own resolution; Refine target is the enlarge size. "
-        "width / height are the resolved target canvas (×32). "
-        "Does not sample by itself — no IMAGE output. "
-        "Per-group 一采/二采 is on the Director timeline cards. "
-        "HD second sample can spatially tile (n_tiles); audio is not split."
-    )
-
-    def pack(
-        self,
-        mode="refine",
-        upscale_method="h3_latent",
-        sampler="",
-        passes=1,
-        seed_mode="inherit",
-        aspect_ratio=FOLLOW_DIRECTOR_ASPECT,
-        megapixels=DEFAULT_UPSCALE_MEGAPIXELS,
-        width=1280,
-        height=720,
-        skip_fl2v=False,
-        n_tiles=DEFAULT_N_TILES,
-        tile_axis="auto",
-        tile_overlap=DEFAULT_TILE_OVERLAP,
-        max_size_for_no_tile=DEFAULT_MAX_SIZE_FOR_NO_TILE,
-        refine_seams=True,
-        refine_steps=DEFAULT_SEAM_REFINE_STEPS,
-        latent_upscale_model=None,
-        upscale_model=None,
-        h3_latent_model="",
-        sigmas=None,
-        refine_model=None,
-        refine_model_r2v=None,
-        model=None,
-        **kwargs,
-    ):
-        del kwargs
-        try:
-            mp = float(megapixels)
-        except (TypeError, ValueError):
-            mp = DEFAULT_UPSCALE_MEGAPIXELS
-        if mp < 0.1:
-            mp = DEFAULT_UPSCALE_MEGAPIXELS
-        try:
-            w = int(width or 0)
-        except (TypeError, ValueError):
-            w = 1280
-        try:
-            h = int(height or 0)
-        except (TypeError, ValueError):
-            h = 720
-        if w < 32:
-            w = 1280
-        if h < 32:
-            h = 720
-        try:
-            n_passes = int(passes or 1)
-        except (TypeError, ValueError):
-            n_passes = 1
-        if n_passes < 1:
-            n_passes = 1
-        pack = pack_refine(
-            mode=mode,
-            passes=n_passes,
-            seed_mode=seed_mode,
-            aspect_ratio=aspect_ratio,
-            megapixels=mp,
-            width=w,
-            height=h,
-            skip_fl2v=skip_fl2v,
-            n_tiles=n_tiles,
-            tile_axis=tile_axis,
-            tile_overlap=tile_overlap,
-            max_size_for_no_tile=max_size_for_no_tile,
-            refine_seams=refine_seams,
-            refine_steps=refine_steps,
-            upscale_method=upscale_method,
-            sample_model=refine_model if refine_model is not None else model,
-            sample_model_r2v=refine_model_r2v,
-            latent_upscale_model=latent_upscale_model if latent_upscale_model is not None else h3_latent_model,
-            upscale_model=upscale_model,
-            sampler=sampler,
-            sigmas=sigmas,
-        )
-        out_w = int(pack.get("target_width") or 0)
-        out_h = int(pack.get("target_height") or 0)
-        if out_w <= 0 or out_h <= 0:
-            out_w, out_h = infer_upscale_target(0, 0)
-        return (pack, int(out_w), int(out_h))

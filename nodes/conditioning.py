@@ -2,40 +2,8 @@
 
 from __future__ import annotations
 
-from ..lib.ref_images import MAX_REFERENCE_IMAGES, REF_IMAGE_KEY_PREFIX, flatten_reference_kwargs
+from ..lib.ref_images import REF_IMAGE_KEY_PREFIX, flatten_reference_kwargs
 from ..lib.task_modes import TASK_DESCRIPTIONS, infer_task
-
-
-def _shared_optional_inputs() -> dict:
-    return {
-        "first_frame": (
-            "IMAGE",
-            {"tooltip": "Optional first keyframe (i2v / fl2v)."},
-        ),
-        "last_frame": (
-            "IMAGE",
-            {"tooltip": "Optional last keyframe (fl2v)."},
-        ),
-        **{
-            f"{REF_IMAGE_KEY_PREFIX}{index}": (
-                "IMAGE",
-                {
-                    "tooltip": (
-                        f"Reference image for <Picture {index + 1}> in prompt (r2v). "
-                        "Native aspect; H3 ref_image_size applies at encode time."
-                    ),
-                },
-            )
-            for index in range(MAX_REFERENCE_IMAGES)
-        },
-        "ref_image_size": (
-            ["match", "max"],
-            {
-                "default": "match",
-                "tooltip": "Reference image sizing for MiniMaxH3ReferenceToVideo.",
-            },
-        ),
-    }
 
 
 def _load_minimax_nodes():
@@ -46,7 +14,7 @@ def _load_minimax_nodes():
         )
     except ImportError as exc:
         raise RuntimeError(
-            "MiniMaxH3Director requires ComfyUI official MiniMax H3 nodes "
+            "H3_D_NEO requires ComfyUI official MiniMax H3 nodes "
             "(comfy_extras.nodes_minimax_h3). Upgrade to ComfyUI with PR #15224 merged."
         ) from exc
     return MiniMaxH3ImageToVideo, MiniMaxH3ReferenceToVideo
@@ -161,75 +129,3 @@ def run_minimax_conditioning(
     positive, latent = _unpack_positive_latent(out)
     hint = _task_hint(task_key, ref_images, ref_videos)
     return positive, [], latent, hint
-
-
-class MiniMaxH3DirectorConditioning:
-    """Thin wrapper around official MiniMax H3 conditioning (positive + latent)."""
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "clip": ("CLIP",),
-                "vae": ("VAE",),
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "width": ("INT", {"default": 864, "min": 32, "max": 8192, "step": 32}),
-                "height": ("INT", {"default": 480, "min": 32, "max": 8192, "step": 32}),
-                "length": ("INT", {"default": 124, "min": 5, "max": 3600, "step": 17}),
-            },
-            "optional": {
-                "audio_vae": ("VAE", {"tooltip": "Required for r2v / v2v / rv2v / reference video+audio."}),
-                **_shared_optional_inputs(),
-            },
-        }
-
-    RETURN_TYPES = ("CONDITIONING", "LATENT")
-    RETURN_NAMES = ("positive", "latent")
-    FUNCTION = "apply"
-    CATEGORY = "MiniMaxH3"
-
-    def apply(self, clip, vae, prompt, width, height, length, audio_vae=None, **kwargs):
-        positive, _, latent, _ = run_minimax_conditioning(
-            clip=clip,
-            vae=vae,
-            audio_vae=audio_vae,
-            prompt=prompt,
-            width=width,
-            height=height,
-            length=length,
-            task_key="r2v" if kwargs.get("ref_images") or any(
-                k.startswith(REF_IMAGE_KEY_PREFIX) for k in kwargs
-            ) else "t2v",
-            **kwargs,
-        )
-        return positive, latent
-
-
-class MiniMaxH3DirectorPlannerConditioning:
-    """Official MiniMax H3 conditioning plus task_mode string for planning UIs."""
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        base = MiniMaxH3DirectorConditioning.INPUT_TYPES()
-        return base
-
-    RETURN_TYPES = ("CONDITIONING", "LATENT", "STRING")
-    RETURN_NAMES = ("positive", "latent", "task_mode")
-    FUNCTION = "apply"
-    CATEGORY = "MiniMaxH3"
-
-    def apply(self, clip, vae, prompt, width, height, length, audio_vae=None, **kwargs):
-        positive, _, latent, hint = run_minimax_conditioning(
-            clip=clip,
-            vae=vae,
-            audio_vae=audio_vae,
-            prompt=prompt,
-            width=width,
-            height=height,
-            length=length,
-            task_key="r2v" if kwargs.get("ref_images") or any(
-                k.startswith(REF_IMAGE_KEY_PREFIX) for k in kwargs
-            ) else "t2v",
-            **kwargs,
-        )
-        return positive, latent, hint

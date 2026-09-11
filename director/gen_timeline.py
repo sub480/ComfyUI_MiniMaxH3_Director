@@ -24,9 +24,6 @@ GEN_IMAGE_KEYS = frozenset({"i2v"})
 FL2V_KEYS = frozenset({"fl2v"})
 MIXED_KEY = "mixed"
 MIXED_GROUP_KEYS = frozenset({"t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"})
-GEN_TASK_KEYS = GEN_BLANK_KEYS | GEN_IMAGE_KEYS | FL2V_KEYS | {MIXED_KEY}
-PROMPT_BATCH_KEYS = frozenset({"t2v", "i2v", "r2v", "fl2v", MIXED_KEY})
-VIDEO_BATCH_KEYS = frozenset({"t2v", "i2v", "r2v", "fl2v", MIXED_KEY})
 IMAGE_BATCH_KEYS = frozenset()
 
 MIN_GEN_FRAMES = 1
@@ -34,26 +31,17 @@ MIN_GEN_VIDEO_FRAMES = 4
 
 
 def is_gen_task_key(task_key: str) -> bool:
-    return task_key in GEN_TASK_KEYS
+    return task_key == MIXED_KEY
 
 
 def is_gen_timeline(timeline: dict, task_key: str) -> bool:
     mode = str(timeline.get("timelineMode") or "").lower()
-    if mode in ("gen_blank", "gen_image", "image_batch", "prompt_batch", "fl2v"):
-        return True
-    if mode == "video":
-        return False
-    return is_gen_task_key(task_key)
+    return mode == "prompt_batch" and task_key == MIXED_KEY
 
 
 def is_prompt_batch_timeline(timeline: dict, task_key: str) -> bool:
     mode = str(timeline.get("timelineMode") or "").lower()
-    if mode in ("image_batch", "prompt_batch"):
-        return True
-    # fl2v is a separate strip UI but still exports like a video prompt-batch.
-    if mode == "fl2v" or task_key == "fl2v":
-        return True
-    return task_key in PROMPT_BATCH_KEYS
+    return mode == "prompt_batch" and task_key == MIXED_KEY
 
 
 def is_image_batch_timeline(timeline: dict, task_key: str) -> bool:
@@ -61,7 +49,7 @@ def is_image_batch_timeline(timeline: dict, task_key: str) -> bool:
 
 
 def is_video_batch_task_key(task_key: str) -> bool:
-    return task_key in VIDEO_BATCH_KEYS
+    return task_key == MIXED_KEY
 
 
 def is_mixed_task_key(task_key: str) -> bool:
@@ -80,11 +68,7 @@ def resolve_mixed_segment_task_key(seg_data: dict | None, global_key: str) -> st
 
 
 def gen_submode(timeline: dict, task_key: str) -> str:
-    mode = str(timeline.get("timelineMode") or "").lower()
-    if mode == "gen_image" or task_key in GEN_IMAGE_KEYS:
-        return "gen_image"
-    if mode == "gen_blank" or task_key in GEN_BLANK_KEYS or task_key == MIXED_KEY:
-        return "gen_blank"
+    del timeline, task_key
     return "gen_blank"
 
 
@@ -469,22 +453,16 @@ def build_gen_director_plan(
         _resolve_export_mode,
         resolve_ref_image_size,
         resolve_segment_pass_mode,
+        segment_seed_settings_from_data,
         segment_ref_audios_for_context,
         segment_refs_for_context,
     )
     from ..lib.video_io import load_timeline_segment
 
     global_block = timeline.get("global") or {}
-    edit_mode = timeline.get("editMode") or "global"
-    if is_prompt_batch_timeline(timeline, resolve_task_key(global_block.get("taskType") or global_task_type or "")):
-        edit_mode = "segment"
-    elif edit_mode not in ("global", "segment"):
-        edit_mode = "global"
-
-    task_type = global_block.get("taskType") or global_task_type or "t2v 鈥?鏂囩敓瑙嗛(Text to Video)"
-    task_key = resolve_task_key(task_type)
-    if not is_gen_task_key(task_key):
-        raise ValueError(f"Task {task_key} is not supported on the generation timeline.")
+    edit_mode = "segment"
+    task_type = "mixed"
+    task_key = MIXED_KEY
 
     submode = gen_submode(timeline, task_key)
     prompt = global_block.get("prompt") or global_prompt or ""
@@ -585,6 +563,7 @@ def build_gen_director_plan(
 
     segments: list[SegmentPlan] = []
     for idx, (start, end, seg_data) in enumerate(segment_ranges):
+        seg_seed_mode, seg_seed = segment_seed_settings_from_data(seg_data)
         is_selected = run_indices is None or idx in run_indices
         if edit_mode == "global":
             seg_prompt = prompt
@@ -761,18 +740,19 @@ def build_gen_director_plan(
                 pass_mode=resolve_segment_pass_mode(
                     seg_data if isinstance(seg_data, dict) else {},
                 ),
+                seed_mode=seg_seed_mode,
+                seed=seg_seed,
             )
         )
 
     total = int(segment_ranges[-1][1]) if segment_ranges else int(source_video.shape[0])
-    if is_prompt_batch_timeline(timeline, task_key):
-        timeline_mode = "prompt_batch"
-    else:
-        timeline_mode = "gen_image" if submode == "gen_image" else "gen_blank"
-
     raw = dict(timeline)
     raw["frameRate"] = H3_FPS
-    raw["timelineMode"] = timeline_mode
+    raw["timelineMode"] = "prompt_batch"
+    raw["editMode"] = "segment"
+    raw_global = dict(raw.get("global") or {})
+    raw_global["taskType"] = MIXED_KEY
+    raw["global"] = raw_global
     src_w, src_h = _resolve_gen_image_source_dims(segment_ranges, global_block, output_block)
 
     from .segment_continuity import (

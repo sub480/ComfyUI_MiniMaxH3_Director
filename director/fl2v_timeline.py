@@ -1,12 +1,4 @@
-"""First/last-frame (fl2v) timeline → DirectorPlan.
-
-Schema: timeline.shots[] — each shot is one sampling group:
-  - startImage (optional): image0 first keyframe
-  - endImage (optional): image1 last keyframe; official FL2VA allows last-only
-  - neither start nor end: text-to-video on the same fl2va path (prompt only;
-    with「段间引导」+「引用上段」the previous tail is pinned as motion context)
-    - durationSec: per-shot length; totalFrames ≈ sum of shot frames
-"""
+"""First/last-frame helpers shared by mixed Director groups."""
 
 from __future__ import annotations
 
@@ -15,28 +7,20 @@ from typing import Any
 
 import torch
 
-from ..lib.image_prep import assert_minimax_canvas, fit_canvas, fit_video_long_edge, resolve_output_dimensions
-from ..lib.task_prompts import resolve_task_key, task_type_option_label, TASK_PROMPT_BY_KEY
-from .frame_align import H3_FPS, minimax_align_frame_count
+from ..lib.image_prep import fit_canvas, fit_video_long_edge
+from .frame_align import minimax_align_frame_count
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.fl2v")
 
 MIN_FL2V_FRAMES = 5
-DEFAULT_FL2V_FRAMES = 124
-DEFAULT_TOTAL_FRAMES = 240
 DEFAULT_FL2V_DURATION_SEC = 5.0
 # Match node ``negative_prompt`` default in director_common / director.py.
 DEFAULT_FL2V_NEGATIVE = "bad video"
 
 
-def _duration_to_minimax_frames(seconds: float, fps: float = H3_FPS) -> int:
-    """Official MiniMax formula: max(5, round(a*24)) then snap to 17k+5."""
-    del fps
-    a = max(0.1, float(seconds or 0.1))
-    rate = float(H3_FPS)
-    n = max(5, int(round(a * rate)))
-    rem = (5 - (n % 17)) % 17
-    return n + rem
+def _duration_to_minimax_frames(seconds: float, fps: float) -> int:
+    frame_count = max(MIN_FL2V_FRAMES, int(round(max(0.1, float(seconds)) * float(fps))))
+    return minimax_align_frame_count(frame_count)
 
 
 def _image_ref_from_raw(raw: Any) -> dict[str, Any] | None:
@@ -57,67 +41,6 @@ def _image_ref_from_raw(raw: Any) -> dict[str, Any] | None:
         "width": int(raw.get("width") or 0),
         "height": int(raw.get("height") or 0),
     }
-
-
-def _normalize_shots(raw_shots: list | None, *, frame_rate: float = H3_FPS) -> list[dict[str, Any]]:
-    """Normalize explicit shots[]. Empty start+end is kept as a text-to-video shot."""
-    out: list[dict[str, Any]] = []
-    if not raw_shots:
-        return out
-    cursor = 0
-    for i, item in enumerate(raw_shots):
-        if not isinstance(item, dict):
-            continue
-        start = _image_ref_from_raw(item.get("startImage"))
-        end = _image_ref_from_raw(item.get("endImage"))
-        try:
-            dur = float(item.get("durationSec") or DEFAULT_FL2V_DURATION_SEC)
-        except (TypeError, ValueError):
-            dur = DEFAULT_FL2V_DURATION_SEC
-        dur = max(0.1, dur)
-        fc = max(MIN_FL2V_FRAMES, _duration_to_minimax_frames(dur, frame_rate))
-        dim_src = start or end
-        row = {
-            "source_index": i,
-            "start": (
-                {
-                    "imageFile": start["imageFile"],
-                    "imageB64": start["imageB64"],
-                    "width": start["width"],
-                    "height": start["height"],
-                    "start": cursor,
-                    "length": fc,
-                    "frameCount": fc,
-                }
-                if start is not None
-                else None
-            ),
-            "end": (
-                {
-                    "imageFile": end["imageFile"],
-                    "imageB64": end["imageB64"],
-                    "width": end["width"],
-                    "height": end["height"],
-                }
-                if end is not None
-                else None
-            ),
-            "frameCount": fc,
-            "timeline_start": cursor,
-            "width": int((dim_src or {}).get("width") or 0),
-            "height": int((dim_src or {}).get("height") or 0),
-            "prompt": (item.get("prompt") or "").strip(),
-            "negativePrompt": (
-                item.get("negativePrompt")
-                or DEFAULT_FL2V_NEGATIVE
-            ).strip()
-            or DEFAULT_FL2V_NEGATIVE,
-        }
-        if "continuityFromPrev" in item:
-            row["continuityFromPrev"] = item.get("continuityFromPrev")
-        out.append(row)
-        cursor += fc
-    return out
 
 
 # Hard locks for every fl2v shot (re-applied after PE). Community cue words:
@@ -241,16 +164,6 @@ def reinforce_fl2v_prompt(
     return f"{prefix}{suffix}"
 
 
-def is_fl2v_timeline(timeline: dict, task_key: str = "") -> bool:
-    mode = str(timeline.get("timelineMode") or "").lower()
-    if mode == "fl2v":
-        return True
-    key = task_key or resolve_task_key(
-        (timeline.get("global") or {}).get("taskType") or ""
-    )
-    return key == "fl2v"
-
-
 def _load_image_ref(ref: dict) -> torch.Tensor:
     from .gen_timeline import _load_gen_image_tensor
 
@@ -371,258 +284,3 @@ def _unify_fl2v_pair_canvas(
     if int(end_img.shape[1]) != h or int(end_img.shape[2]) != w:
         end_img = fit_canvas(end_img[:1], w, h)
     return start_img, end_img
-
-
-def _as_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
-def count_fl2v_runnable_shots(timeline: dict) -> int:
-    fps = float(H3_FPS)
-    shots = _normalize_shots(timeline.get("shots"), frame_rate=fps)
-    return max(1, len(shots))
-
-
-def build_fl2v_director_plan(
-    timeline: dict,
-    *,
-    global_task_type: str,
-    global_prompt: str,
-    total_frames: int,
-    frame_rate: float,
-    width: int,
-    height: int,
-    ref_max_size: int,
-):
-    from .plan import (
-        DirectorPlan,
-        SegmentPlan,
-        SegmentRef,
-        _parse_run_selection,
-        _resolve_export_mode,
-        resolve_segment_pass_mode,
-    )
-
-    global_block = timeline.get("global") or {}
-    task_type = global_block.get("taskType") or global_task_type or task_type_option_label(
-        TASK_PROMPT_BY_KEY["fl2v"]
-    )
-    task_key = resolve_task_key(task_type)
-    if task_key != "fl2v":
-        raise ValueError(f"fl2v plan builder received task_key={task_key}")
-
-    fps = float(H3_FPS)
-    shots = _normalize_shots(timeline.get("shots"), frame_rate=fps)
-    if not shots:
-        raise ValueError(
-            "fl2v: 请至少添加一组。每组可只写提示词（文生），或上传首帧和/或尾帧。"
-        )
-
-    # Keep full shot list for continuity neighbors; honor selection via run_indices.
-    run_count = len(timeline.get("shots") or [])
-    run_sel = _parse_run_selection(timeline, max(1, run_count))
-    if run_sel is not None:
-        if not any(int(s["source_index"]) in run_sel for s in shots):
-            raise ValueError(
-                "MiniMax H3 Director: 「选择运行」已开启，但未勾选任何首尾帧组。"
-                "请勾选至少一组再执行。"
-            )
-
-    output_block = timeline.get("output") or {}
-    out_mode = str(output_block.get("mode") or "long_edge").lower()
-    if out_mode not in ("fixed", "long_edge"):
-        out_mode = "long_edge"
-    dim_shot = next(
-        (s for s in shots if (s.get("start") or s.get("end") or s.get("width"))),
-        shots[0],
-    )
-    dim_src = dim_shot.get("start") or dim_shot.get("end") or dim_shot
-    src_w = int(dim_src.get("width") or dim_shot.get("width") or 0)
-    src_h = int(dim_src.get("height") or dim_shot.get("height") or 0)
-    out_w, out_h, ref_max, out_mode = resolve_output_dimensions(
-        src_w or int(width or 832),
-        src_h or int(height or 480),
-        mode=out_mode,
-        long_edge=int(
-            output_block.get("longEdge")
-            or ref_max_size
-            or 848
-        ),
-        fixed_width=int(output_block.get("width") or timeline.get("width") or width),
-        fixed_height=int(output_block.get("height") or timeline.get("height") or height),
-    )
-    assert_minimax_canvas(out_w, out_h)
-
-    export_mode = _resolve_export_mode(output_block)
-    fallback_prompt = (global_block.get("prompt") or global_prompt or "").strip()
-    fallback_negative = (
-        global_block.get("negativePrompt")
-        or ""
-    ).strip()
-    content_total = sum(max(MIN_FL2V_FRAMES, int(s["frameCount"])) for s in shots) or DEFAULT_FL2V_FRAMES
-    timeline_total = max(
-        MIN_FL2V_FRAMES,
-        int(timeline.get("totalFrames") or total_frames or content_total or DEFAULT_TOTAL_FRAMES),
-    )
-    # Prefer content sum when explicit shots define per-group durations.
-    timeline_total = max(MIN_FL2V_FRAMES, content_total)
-
-    from .segment_continuity import resolve_segment_continuity_from_prev
-
-    segments: list[SegmentPlan] = []
-    source_clips: list[torch.Tensor] = []
-    selected_plan_indices: list[int] = []
-    plan_index = 0
-    for shot in shots:
-        start_kf = shot.get("start")
-        end_kf = shot.get("end")
-        start_f = int(shot.get("timeline_start") or 0)
-        fc = max(MIN_FL2V_FRAMES, int(shot["frameCount"]))
-        user_prompt = (shot.get("prompt") or "").strip() or fallback_prompt
-        full_prompt = reinforce_fl2v_prompt(
-            user_prompt,
-            has_end_frame=end_kf is not None,
-            has_start_frame=start_kf is not None,
-        )
-        shot_negative = (
-            (shot.get("negativePrompt") or "").strip()
-            or fallback_negative
-            or DEFAULT_FL2V_NEGATIVE
-        )
-
-        start_img = None
-        if start_kf is not None:
-            start_ref = {
-                "imageFile": start_kf.get("imageFile") or "",
-                "imageB64": start_kf.get("imageB64") or "",
-            }
-            start_img = _fit_image(
-                _load_image_ref(start_ref),
-                width=out_w,
-                height=out_h,
-                output_mode=out_mode,
-                ref_max_size=ref_max,
-            )
-
-        end_img = None
-        if end_kf is not None:
-            end_ref = {
-                "imageFile": end_kf.get("imageFile") or "",
-                "imageB64": end_kf.get("imageB64") or "",
-            }
-            end_img = _fit_image(
-                _load_image_ref(end_ref),
-                width=out_w,
-                height=out_h,
-                output_mode=out_mode,
-                ref_max_size=ref_max,
-            )
-        start_img, end_img = _unify_fl2v_pair_canvas(start_img, end_img)
-        refs: list[SegmentRef] = []
-        if start_img is not None:
-            refs.append(SegmentRef(index=0, tensor=start_img[:1].clone()))
-        if end_img is not None:
-            refs.append(SegmentRef(index=1, tensor=end_img[:1].clone()))
-
-        # Start+end: encode endpoints on a held clip (last lives on the tail).
-        # Start-only / last-only / empty: no full held source — a start-held
-        # clip would make the executor treat the tail as last_frame (loop-back
-        # to the first frame); a last-held clip would be read as first_frame.
-        if start_img is not None and end_img is not None:
-            source_clip = _build_fl2v_endpoint_source(start_img, end_img, fc)
-            source_clips.append(source_clip[:1].clone())
-        elif start_img is not None:
-            source_clip = None
-            source_clips.append(start_img[:1].clone())
-        elif end_img is not None:
-            source_clip = None
-            source_clips.append(end_img[:1].clone())
-        else:
-            source_clip = None
-            source_clips.append(torch.full((1, 16, 16, 3), 0.5, dtype=torch.float32))
-
-        end_f = start_f + fc
-        if run_sel is None or int(shot["source_index"]) in run_sel:
-            selected_plan_indices.append(plan_index)
-        segments.append(
-            SegmentPlan(
-                index=plan_index,
-                start_frame=start_f,
-                end_frame=end_f,
-                prompt=full_prompt,
-                task_type=task_type,
-                task_key="fl2v",
-                use_global=False,
-                refs=refs,
-                negative_prompt=shot_negative,
-                source_clip=source_clip,
-                continuity_from_prev=resolve_segment_continuity_from_prev(
-                    shot if isinstance(shot, dict) else {},
-                    segment_index=plan_index,
-                ),
-                pass_mode=resolve_segment_pass_mode(
-                    shot if isinstance(shot, dict) else {},
-                ),
-            )
-        )
-        plan_index += 1
-
-    if not segments:
-        raise ValueError(
-            "fl2v: 没有可运行的组。请添加一组（可只写提示词，或上传首帧/尾帧）。"
-        )
-    if run_sel is not None and not selected_plan_indices:
-        raise ValueError(
-            "MiniMax H3 Director: 「选择运行」已开启，但未勾选任何首尾帧组。"
-            "请勾选至少一组再执行。"
-        )
-
-    source_video = torch.full((len(segments), 16, 16, 3), 0.5, dtype=torch.float32)
-    raw = dict(timeline)
-    raw["frameRate"] = H3_FPS
-    raw["timelineMode"] = "fl2v"
-    raw["totalFrames"] = timeline_total
-
-    from .segment_continuity import (
-        resolve_continuity_keep_tail,
-        resolve_continuity_mode,
-        resolve_continuity_redraw,
-        resolve_continuity_settings,
-    )
-
-    continuity_enabled, continuity_overlap = resolve_continuity_settings(
-        timeline, segment_count=len(segments)
-    )
-    run_indices = (
-        frozenset(selected_plan_indices) if run_sel is not None else None
-    )
-
-    return DirectorPlan(
-        frame_rate=fps,
-        total_frames=timeline_total,
-        width=out_w,
-        height=out_h,
-        ref_max_size=ref_max,
-        output_mode=out_mode,
-        source_width=int(src_w or out_w),
-        source_height=int(src_h or out_h),
-        global_task_type=task_type,
-        global_task_key="fl2v",
-        global_prompt=fallback_prompt,
-        global_refs=[],
-        source_video=source_video,
-        segments=segments,
-        edit_mode="segment",
-        raw=raw,
-        export_mode=export_mode,
-        run_indices=run_indices,
-        continuity_enabled=continuity_enabled,
-        continuity_overlap_frames=continuity_overlap,
-        continuity_mode=resolve_continuity_mode(timeline),
-        continuity_redraw=resolve_continuity_redraw(timeline),
-        continuity_keep_tail=resolve_continuity_keep_tail(timeline),
-    )
