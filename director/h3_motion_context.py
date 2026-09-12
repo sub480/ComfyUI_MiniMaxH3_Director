@@ -78,6 +78,11 @@ def step_offsets(latent_t: int) -> list[int]:
 
 def _streams_from_latent(latent: dict) -> list[torch.Tensor]:
     samples = latent["samples"]
+    if torch.is_tensor(samples):
+        raise ValueError(
+            "Director continuity: expected MiniMax H3 AV NestedTensor, "
+            f"got packed tensor {tuple(samples.shape)}"
+        )
     if hasattr(samples, "unbind"):
         parts = list(samples.unbind())
     elif isinstance(samples, (tuple, list)):
@@ -91,6 +96,24 @@ def _streams_from_latent(latent: dict) -> list[torch.Tensor]:
     return parts
 
 
+def _repack_av_streams(streams: list, template=None):
+    """Rebuild H3 AV samples as a NestedTensor without flattening streams."""
+    samples = template.get("samples") if isinstance(template, dict) else template
+    try:
+        import comfy.nested_tensor
+
+        return comfy.nested_tensor.NestedTensor(tuple(streams))
+    except Exception:
+        pass
+    cls = type(samples) if samples is not None and not torch.is_tensor(samples) else None
+    if cls is not None:
+        try:
+            return cls(tuple(streams))
+        except Exception:
+            pass
+    raise ValueError("Director continuity: could not pack AV streams as NestedTensor.")
+
+
 def video_from_latent(latent: dict) -> torch.Tensor:
     video = _streams_from_latent(latent)[0]
     if video.ndim == 4:
@@ -100,6 +123,62 @@ def video_from_latent(latent: dict) -> torch.Tensor:
             f"Director continuity: expected video latent [B,C,T,H,W], got {tuple(video.shape)}"
         )
     return video
+
+
+def av_pixel_size(latent: dict | None) -> tuple[int, int] | None:
+    """Return the H3 video latent canvas in pixels."""
+    if not isinstance(latent, dict) or "samples" not in latent:
+        return None
+    try:
+        video = video_from_latent(latent)
+    except Exception:
+        return None
+    return int(video.shape[4]) * 16, int(video.shape[3]) * 16
+
+
+def select_continuity_pin_latent(target_latent, first_pass_av, final_av):
+    """Prefer the previous first pass when Refine changed the final canvas."""
+    target_size = av_pixel_size(target_latent)
+    first_size = av_pixel_size(first_pass_av)
+    final_size = av_pixel_size(final_av)
+    if target_size is not None and first_size == target_size and final_size != target_size:
+        log.info(
+            "Director continuity: pin from previous first-pass latent %dx%d "
+            "(refined canvas was %s).",
+            first_size[0],
+            first_size[1],
+            f"{final_size[0]}x{final_size[1]}" if final_size else "missing",
+        )
+        return first_pass_av
+    return final_av
+
+
+def slice_av_prefix(latent: dict, n_frames: int) -> dict:
+    """Keep the first ``n_frames`` on the H3 temporal grid."""
+    frames = int(n_frames)
+    steps = steps_for_frames(frames)
+    if steps is None:
+        raise ValueError(
+            f"Director continuity: cannot slice a {frames}-frame AV prefix "
+            f"(use {', '.join(str(x) for x in CONTEXT_FRAME_CHOICES)})."
+        )
+    streams = list(_streams_from_latent(latent))
+    video = streams[0]
+    squeezed = False
+    if video.ndim == 4:
+        video = video.unsqueeze(0)
+        squeezed = True
+    if int(video.shape[2]) < steps:
+        raise ValueError(
+            f"Director continuity: latent has {int(video.shape[2])} steps, "
+            f"need {steps} for a {frames}-frame prefix."
+        )
+    head = video[:, :, :steps].contiguous()
+    streams[0] = head.squeeze(0) if squeezed else head
+    out = dict(latent)
+    out.pop("noise_mask", None)
+    out["samples"] = _repack_av_streams(streams, latent)
+    return out
 
 
 def _resize_frames(image: torch.Tensor, width: int, height: int) -> torch.Tensor:
@@ -185,6 +264,53 @@ def _video_tail_blocks(
         )
     blocks = [video[:1, :, start + k : start + k + 1].clone() for k in range(steps)]
     return blocks, step_offsets(steps), covered, pin_end_px, gap
+
+
+def copy_av_tail_into_prefix(
+    target: dict,
+    source: dict,
+    n_frames: int,
+    *,
+    end_frame: int | None = None,
+) -> dict:
+    """Overwrite the target head with the same-size source tail."""
+    frames = int(n_frames)
+    blocks, _offsets, _covered, _pin_end, _gap = _video_tail_blocks(
+        source, frames, end_frame=end_frame
+    )
+    streams = list(_streams_from_latent(target))
+    video = streams[0]
+    squeezed = False
+    if video.ndim == 4:
+        video = video.unsqueeze(0)
+        squeezed = True
+    if int(video.shape[2]) < len(blocks):
+        raise ValueError(
+            f"Director continuity: target has {int(video.shape[2])} steps, "
+            f"need {len(blocks)} to paste a {frames}-frame prefix."
+        )
+    reference = blocks[0]
+    if reference.ndim == 4:
+        reference = reference.unsqueeze(0)
+    if tuple(video.shape[3:]) != tuple(reference.shape[3:]) or int(video.shape[1]) != int(reference.shape[1]):
+        raise ValueError(
+            "Director continuity: cannot paste prefix - spatial/channel mismatch "
+            f"(target {tuple(video.shape)} vs source block {tuple(reference.shape)})."
+        )
+    video = video.clone()
+    for index, block in enumerate(blocks):
+        piece = block.unsqueeze(0) if block.ndim == 4 else block
+        video[:, :, index : index + 1] = piece.to(device=video.device, dtype=video.dtype)
+    streams[0] = video.squeeze(0).contiguous() if squeezed else video.contiguous()
+    out = dict(target)
+    out.pop("noise_mask", None)
+    out["samples"] = _repack_av_streams(streams, target)
+    log.info(
+        "Director continuity: pasted %d-frame tail into current prefix (%d steps).",
+        frames,
+        len(blocks),
+    )
+    return out
 
 
 def _audio_tail_from_latent(

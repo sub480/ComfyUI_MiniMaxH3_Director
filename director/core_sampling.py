@@ -33,6 +33,31 @@ def _use_basic_guider(cfg: float, negative) -> bool:
     return abs(float(cfg) - 1.0) < 1e-6
 
 
+class ShiftedModelCache:
+    """Reuse one SigmaShift clone per parent model for one Director execution."""
+
+    def __init__(self) -> None:
+        self._items: dict[tuple[int, float, float], Any] = {}
+
+    def get(self, model, shift_video: float, shift_audio: float):
+        key = (id(model), float(shift_video), float(shift_audio))
+        cached = self._items.get(key)
+        if cached is not None:
+            return cached
+        from comfy_extras.nodes_minimax_h3 import MiniMaxH3SigmaShift
+
+        shifted = MiniMaxH3SigmaShift.execute(model, float(shift_video), float(shift_audio))
+        model_use = _unpack_node_output(shifted)[0]
+        self._items[key] = model_use
+        return model_use
+
+    def holds(self, model) -> bool:
+        return any(item is model for item in self._items.values())
+
+    def clear(self) -> None:
+        self._items.clear()
+
+
 def sample_single_stage(
     *,
     model,
@@ -55,6 +80,7 @@ def sample_single_stage(
     apply_shift: bool = True,
     tile=None,
     after_shift=None,
+    shift_cache: ShiftedModelCache | None = None,
 ):
     import torch
     from comfy_extras.nodes_custom_sampler import (
@@ -74,8 +100,11 @@ def sample_single_stage(
     notify(phase_name, 0)
     model_use = model
     if apply_shift:
-        shifted = MiniMaxH3SigmaShift.execute(model, float(shift_video), float(shift_audio))
-        model_use = _unpack_node_output(shifted)[0]
+        if shift_cache is not None:
+            model_use = shift_cache.get(model, shift_video, shift_audio)
+        else:
+            shifted = MiniMaxH3SigmaShift.execute(model, float(shift_video), float(shift_audio))
+            model_use = _unpack_node_output(shifted)[0]
 
     if sigmas is not None:
         if torch.is_tensor(sigmas):
@@ -105,11 +134,20 @@ def sample_single_stage(
             CFGGuider.execute(model_use, positive, neg, float(cfg))
         )[0]
 
+    def _run_official() -> dict:
+        sampled = SamplerCustomAdvanced.execute(
+            noise_obj, guider, sampler_obj, sigma_t, latent
+        )
+        return _unpack_node_output(sampled)[0]
+
     tile_cfg = tile if isinstance(tile, dict) and int(tile.get("n_tiles") or 1) > 1 else None
-    if tile_cfg:
+
+    def _run_sample() -> dict:
+        if not tile_cfg:
+            return _run_official()
         from .h3_tiled_sampler import sample_h3_tiled
 
-        out = sample_h3_tiled(
+        return sample_h3_tiled(
             noise=noise_obj,
             guider=guider,
             sampler=sampler_obj,
@@ -124,19 +162,9 @@ def sample_single_stage(
             on_step_preview=on_step_preview,
             preview_every=preview_every,
         )
-        notify(phase_name, 1)
-        return out
 
-    def _run_official() -> dict:
-        sampled = SamplerCustomAdvanced.execute(
-            noise_obj, guider, sampler_obj, sigma_t, latent
-        )
-        return _unpack_node_output(sampled)[0]
-
-    if on_step_preview is None:
-        out = _run_official()
-    else:
-        orig_sample = guider.sample
+    orig_sample = guider.sample if on_step_preview is not None and not tile_cfg else None
+    if orig_sample is not None:
         every = max(1, int(preview_every))
 
         def sample_wrapped(noise, latent_image, sampler, sigmas_in, **kwargs):
@@ -163,10 +191,23 @@ def sample_single_stage(
             return orig_sample(noise, latent_image, sampler, sigmas_in, **kwargs)
 
         guider.sample = sample_wrapped
-        try:
-            out = _run_official()
-        finally:
+    try:
+        out = _run_sample()
+    finally:
+        if orig_sample is not None:
             guider.sample = orig_sample
+        if callable(after_shift):
+            try:
+                from .h3_latent_continue import uninstall_continue_prefix_remask
+
+                uninstall_continue_prefix_remask(model_use)
+            except Exception as exc:
+                log.debug("Prefix remask uninstall skipped: %s", exc)
+        guider = None
+        noise_obj = None
+        sampler_obj = None
+        if model_use is not model and (shift_cache is None or not shift_cache.holds(model_use)):
+            model_use = None
 
     notify(phase_name, 1)
     return out

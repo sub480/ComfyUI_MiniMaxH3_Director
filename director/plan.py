@@ -74,11 +74,59 @@ MIN_CONTINUITY_OVERLAP = 5
 MAX_CONTINUITY_OVERLAP = 56
 REF_IMAGE_SIZE_MATCH = "match"
 REF_IMAGE_SIZE_MAX = "max"
+REF_IMAGE_LONG_PRESETS = (1024, 1280, 1536)
+REF_IMAGE_SIZE_CHOICES = (
+    REF_IMAGE_SIZE_MATCH,
+    *(str(px) for px in REF_IMAGE_LONG_PRESETS),
+    REF_IMAGE_SIZE_MAX,
+)
 
 
 def normalize_ref_image_size(value) -> str:
     raw = str(value or "").strip().lower()
-    return REF_IMAGE_SIZE_MAX if raw == REF_IMAGE_SIZE_MAX else REF_IMAGE_SIZE_MATCH
+    if raw == REF_IMAGE_SIZE_MAX:
+        return REF_IMAGE_SIZE_MAX
+    digits = raw.replace("long", "").replace("edge", "").replace("px", "")
+    digits = digits.replace("_", "").replace(":", "").strip()
+    try:
+        size = int(digits)
+    except (TypeError, ValueError):
+        return REF_IMAGE_SIZE_MATCH
+    return str(size) if size in REF_IMAGE_LONG_PRESETS else REF_IMAGE_SIZE_MATCH
+
+
+def official_ref_image_size(value) -> str:
+    """Map Director presets to the official node's match/max enum."""
+    return (
+        REF_IMAGE_SIZE_MATCH
+        if normalize_ref_image_size(value) == REF_IMAGE_SIZE_MATCH
+        else REF_IMAGE_SIZE_MAX
+    )
+
+
+def ref_image_long_preset_px(value) -> int | None:
+    mode = normalize_ref_image_size(value)
+    return int(mode) if mode in {str(px) for px in REF_IMAGE_LONG_PRESETS} else None
+
+
+def _migrate_ref_image_size(raw, extra=None) -> str:
+    mode = normalize_ref_image_size(raw)
+    source = extra if isinstance(extra, dict) else {}
+    if mode != REF_IMAGE_SIZE_MAX:
+        return mode
+    edge = str(
+        source.get("refImageLimitEdge") or source.get("ref_image_limit_edge") or ""
+    ).lower()
+    px_raw = source.get("refImageLimitPx")
+    if px_raw is None:
+        px_raw = source.get("ref_image_limit_px")
+    try:
+        size = int(px_raw)
+    except (TypeError, ValueError):
+        return mode
+    if edge in {"long", "longest", "long_edge", "longedge"} and size in REF_IMAGE_LONG_PRESETS:
+        return str(size)
+    return mode
 
 
 def _timeline_dict(plan_or_timeline) -> dict:
@@ -108,15 +156,28 @@ def resolve_segment_pass_mode(seg_or_data=None) -> str:
 
 def resolve_ref_image_size(seg_or_data=None, plan_or_timeline=None) -> str:
     """Return the per-segment MiniMax ``ref_image_size`` setting."""
-    del plan_or_timeline
     raw = None
+    extra = None
     if isinstance(seg_or_data, dict):
-        if "refImageSize" in seg_or_data:
+        extra = seg_or_data
+        if "refImageSize" in seg_or_data or "ref_image_size" in seg_or_data:
             raw = seg_or_data.get("refImageSize")
+            if raw is None:
+                raw = seg_or_data.get("ref_image_size")
     elif seg_or_data is not None:
         raw = getattr(seg_or_data, "ref_image_size", None)
+        extra = {
+            "refImageLimitEdge": getattr(seg_or_data, "ref_image_limit_edge", None),
+            "refImageLimitPx": getattr(seg_or_data, "ref_image_limit_px", None),
+        }
     if raw is not None and str(raw).strip() != "":
-        return normalize_ref_image_size(raw)
+        return _migrate_ref_image_size(raw, extra)
+    timeline = plan_or_timeline.raw if hasattr(plan_or_timeline, "raw") else plan_or_timeline
+    output = timeline.get("output") if isinstance(timeline, dict) else None
+    if isinstance(output, dict):
+        legacy = output.get("refImageSize", output.get("ref_image_size"))
+        if legacy is not None and str(legacy).strip() != "":
+            return _migrate_ref_image_size(legacy, output)
     return REF_IMAGE_SIZE_MATCH
 
 
@@ -343,7 +404,7 @@ class DirectorPlan:
     continuity_enabled: bool = False
     continuity_overlap_frames: int = 0
     continuity_mode: str = "guide"
-    continuity_redraw: float = 0.65
+    continuity_redraw: float = 0.10
     continuity_keep_tail: bool = False
     global_ref_audios: list[SegmentRefAudio] = field(default_factory=list)
     # Full source-video PCM reused only during this Director execution.

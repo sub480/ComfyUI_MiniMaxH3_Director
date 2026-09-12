@@ -258,7 +258,7 @@ def director_prompt_to_timeline(
             "continuityEnabled": bool(settings.get("continuityEnabled", True)),
             "continuityOverlapFrames": context_frames,
             "continuityMode": continuity_mode,
-            "continuityRedraw": float(settings.get("continuityRedraw", 0.65)),
+            "continuityRedraw": float(settings.get("continuityRedraw", 0.10)),
             "continuityKeepTail": bool(settings.get("continuityKeepTail", False)),
             "audioMode": str(settings.get("audioMode") or output.get("audioMode") or "generate"),
         }

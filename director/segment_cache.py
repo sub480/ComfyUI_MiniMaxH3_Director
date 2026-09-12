@@ -150,13 +150,23 @@ def _segment_uses_motion_context(seg: SegmentPlan, plan: DirectorPlan) -> bool:
 def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Identity that affects first-pass sampling (no Refine settings)."""
     prompt = str(getattr(seg, "prompt", "") or "")
+    task_key = str(getattr(seg, "task_key", "") or "")
     used_images = _prompt_ref_slots(prompt, "image")
     used_videos = _prompt_ref_slots(prompt, "video")
     used_audios = _prompt_ref_slots(prompt, "audio")
+    # Prompt-batch FL2V loads start/end keyframes through
+    # ``load_fl2v_segment_media``.  Those temporary SegmentRef objects carry
+    # the pixel tensors but intentionally have no ``image_file``; treating
+    # them as ordinary ``<Picture N>`` references stamps values such as
+    # ``img0:`` into the execution cache.  The cache-status path does not
+    # decode keyframes and therefore sees no ordinary refs, producing a false
+    # ``参考图片`` mismatch after every successful run.  FL2V endpoint
+    # identity is already covered by ``source_media`` below.
     ref_files = sorted(
         f"img{ref.index}:{(getattr(ref, 'image_file', '') or '')}"
         for ref in seg.refs
         if int(getattr(ref, "index", -1)) in used_images
+        and task_key != "fl2v"
     )
     ref_audio_files = sorted(
         f"aud{getattr(a, 'index', i)}:{(getattr(a, 'audio_file', '') or '')}"
@@ -176,10 +186,12 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
     uses_mc = _segment_uses_motion_context(seg, plan)
     continuity_mode = str(getattr(plan, "continuity_mode", "guide") or "guide")
     if uses_mc and continuity_mode == "continue":
-        from .h3_latent_continue import CONTINUE_PIPELINE_ID
+        from .h3_latent_continue import CONTINUE_PIPELINE_ID, clamp_seam_min_mask
 
         continuity_pipeline = CONTINUE_PIPELINE_ID
-        continuity_redraw = round(float(getattr(plan, "continuity_redraw", 0.65) or 0.65), 2)
+        continuity_redraw = round(
+            clamp_seam_min_mask(getattr(plan, "continuity_redraw", 0.10)), 2
+        )
     else:
         continuity_pipeline = CONTINUITY_PIPELINE_ID
         continuity_redraw = 0
@@ -190,7 +202,7 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         "prompt": seg.prompt,
         "lora_trigger_words": resolve_lora_trigger_words(plan, seg.task_key),
         "negative": seg.negative_prompt,
-        "task_key": seg.task_key,
+        "task_key": task_key,
         "width": plan.width,
         "height": plan.height,
         "frame_rate": float(getattr(plan, "frame_rate", 24) or 24),
@@ -640,6 +652,42 @@ def _av_latent_to_cpu(av_latent: dict) -> dict:
         else:
             out[key] = value
     return out
+
+
+def load_first_pass_av_latent(
+    node_id: str | None,
+    seg: SegmentPlan,
+    plan: DirectorPlan,
+    *,
+    allow_stale: bool = False,
+) -> dict | None:
+    """Load the cached first-pass AV latent while still rejecting source drift."""
+    if not node_id:
+        return None
+    root = _cache_root(node_id)
+    if root is None:
+        return None
+    idx = seg.index
+    meta_path = root / f"seg_{idx:04d}.pre.meta.json"
+    latent_path = root / f"seg_{idx:04d}.pre.av.pt"
+    if not latent_path.is_file():
+        return None
+    try:
+        if meta_path.is_file():
+            stored = json.loads(meta_path.read_text(encoding="utf-8"))
+            expected = first_pass_cache_fingerprint(seg, plan)
+            if not _cache_fingerprint_matches(stored, expected):
+                if _reject_source_stale(stored, expected, seg_index=idx, quiet=True):
+                    return None
+                if not allow_stale:
+                    return None
+        payload = torch.load(latent_path, map_location="cpu", weights_only=False)
+        if not isinstance(payload, dict) or "samples" not in payload:
+            return None
+        return payload
+    except Exception as exc:
+        log.debug("Segment %d first-pass AV latent skipped: %s", idx + 1, exc)
+        return None
 
 
 def load_segment_av_latent(

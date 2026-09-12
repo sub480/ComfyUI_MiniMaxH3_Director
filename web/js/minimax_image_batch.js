@@ -32,6 +32,7 @@ import {
     refAudioLabel,
     refImageLabel,
     refVideoLabel,
+    REF_IMAGE_SIZE_OPTIONS,
     resolveMixedGroupKey,
     resolveSegmentRefImageSize,
     resolveSegmentPassMode,
@@ -461,7 +462,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-pass-clear:hover{background:#3a1515}
 .bd-batch-pass-pop{position:fixed;z-index:10000;max-width:300px;padding:8px 10px;background:#1a1a1a;border:1px solid #444;border-radius:8px;color:#ddd;font:12px/1.45 sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.45);white-space:pre-wrap;word-break:break-word}
 .bd-batch-refsize{display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px;white-space:nowrap}
-.bd-batch-refsize select{background:#161616;border:1px solid #3a3a3a;border-radius:6px;color:#eee;padding:5px 6px;font-size:12px;max-width:88px}
+.bd-batch-refsize select{background:#161616;border:1px solid #3a3a3a;border-radius:6px;color:#eee;padding:5px 6px;font-size:12px;max-width:132px}
 .bd-batch-del{background:transparent;border:1px solid #553;color:#f88;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer}
 .bd-batch-del:disabled{border-color:#3a3a3a;color:#777;opacity:.55;cursor:not-allowed}
 .bd-batch-del:not(:disabled):hover{background:#3a1515}
@@ -483,7 +484,7 @@ export const IMAGE_BATCH_STYLES = `
 .bd-r2v-section-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .bd-r2v-section-count{font-size:11px;color:#7d7d7d;font-variant-numeric:tabular-nums;letter-spacing:.02em}
 .bd-r2v-section-actions .bd-batch-refsize{font-size:11px;gap:4px}
-.bd-r2v-section-actions .bd-batch-refsize select{padding:2px 5px;font-size:11px;max-width:76px}
+.bd-r2v-section-actions .bd-batch-refsize select{padding:2px 5px;font-size:11px;max-width:132px}
 
 .bd-batch-src{position:relative;width:88px;height:88px;border:1px dashed #555;border-radius:4px;background:#111;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;color:#666;font-size:9px;text-align:center;padding:4px;box-sizing:border-box}
 .bd-batch-src .x{position:absolute;top:1px;right:1px;width:18px;height:18px;border-radius:4px;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.78);color:#ff8a8a;font-size:14px;font-weight:700;z-index:3;line-height:1}
@@ -1935,7 +1936,7 @@ function appendR2vMediaSections(
     sizeSelect.className = "bd-select";
     const currentSize = resolveSegmentRefImageSize(seg, editor.timeline?.output);
     seg.refImageSize = currentSize;
-    for (const optionKey of ["match", "max"]) {
+    for (const optionKey of REF_IMAGE_SIZE_OPTIONS) {
         const option = document.createElement("option");
         option.value = optionKey;
         option.setAttribute("data-i18n", `output.refImageSize.${optionKey}`);

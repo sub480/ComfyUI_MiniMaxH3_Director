@@ -102,6 +102,9 @@ CONTINUITY_SPIKE_WEIGHT = 0.0
 CONTINUITY_SPIKE_LAND_WEIGHT = 0.0
 CONTINUITY_SPIKE_SCAN = 5
 CONTINUITY_HOLD_POP_ON_TAIL = False
+CONTINUITY_EXPORT_GRADE_FRAMES = 12
+CONTINUITY_EXPORT_GRADE_WEIGHT = 0.70
+CONTINUITY_EXPORT_GRADE_BLUR = 64
 
 
 def _truthy_continuity_flag(value) -> bool:
@@ -115,7 +118,7 @@ def _truthy_continuity_flag(value) -> bool:
 
 CONTINUITY_MODE_GUIDE = "guide"
 CONTINUITY_MODE_CONTINUE = "continue"
-DEFAULT_CONTINUITY_REDRAW = 0.65
+DEFAULT_CONTINUITY_REDRAW = 0.10
 
 
 def resolve_continuity_mode(timeline: dict | None) -> str:
@@ -652,6 +655,44 @@ def _lowfreq_appearance_pull(
     b_guide = _blur_hwc(g, blur)
     out = src.float() + w * (b_guide - b_src)
     return out.clamp(0.0, 1.0).to(dtype=src.dtype)
+
+
+def match_export_opening_grade(
+    body: torch.Tensor,
+    guide: torch.Tensor,
+    *,
+    frames: int = CONTINUITY_EXPORT_GRADE_FRAMES,
+    weight0: float = CONTINUITY_EXPORT_GRADE_WEIGHT,
+    blur: int = CONTINUITY_EXPORT_GRADE_BLUR,
+) -> torch.Tensor:
+    """Match an exported clip's opening grade without copying pose edges."""
+    if (
+        body is None
+        or guide is None
+        or int(body.shape[0]) < 1
+        or int(guide.shape[0]) < 1
+        or int(frames) < 1
+        or float(weight0) <= 0
+        or int(blur) < 3
+    ):
+        return body
+    count = min(int(frames), int(body.shape[0]))
+    previous_last = guide[-1]
+    out = body.clone()
+    for index in range(count):
+        weight = float(weight0) * (1.0 - float(index) / float(count))
+        if weight <= 1e-4:
+            break
+        out[index] = _lowfreq_appearance_pull(
+            out[index], previous_last, weight=weight, blur=int(blur)
+        )
+    log.info(
+        "Segment continuity: export opening grade %df weight=%.2f blur=%d",
+        count,
+        float(weight0),
+        int(blur),
+    )
+    return out
 
 
 def _soften_body0_toward_prev(

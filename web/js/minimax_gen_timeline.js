@@ -377,20 +377,32 @@ export function isSegmentContinuityFromPrev(segOrShot, index) {
     return false;
 }
 
-/** Official MiniMaxH3ReferenceToVideo combo: match | max. Default match. */
-export function normalizeRefImageSize(value) {
+export const REF_IMAGE_LONG_PRESETS = [1024, 1280, 1536];
+export const REF_IMAGE_SIZE_OPTIONS = ["match", ...REF_IMAGE_LONG_PRESETS.map(String), "max"];
+
+/** Director presets; the backend maps numeric values to official max mode. */
+export function normalizeRefImageSize(value, extra = null) {
     const raw = String(value || "match").trim().toLowerCase();
-    return raw === "max" ? "max" : "match";
+    if (raw === "max") {
+        const edge = String(extra?.refImageLimitEdge ?? extra?.ref_image_limit_edge ?? "").toLowerCase();
+        const px = Number(extra?.refImageLimitPx ?? extra?.ref_image_limit_px);
+        if (["long", "longest", "long_edge"].includes(edge) && REF_IMAGE_LONG_PRESETS.includes(px)) {
+            return String(px);
+        }
+        return "max";
+    }
+    const size = Number(raw.replace(/[^\d]/g, ""));
+    return REF_IMAGE_LONG_PRESETS.includes(size) ? String(size) : "match";
 }
 
 /** Per-group/segment first; `fallback` may be a string or output object. */
 export function resolveSegmentRefImageSize(seg, fallback) {
-    const fromSeg = seg?.refImageSize;
+    const fromSeg = seg?.refImageSize ?? seg?.ref_image_size;
     if (fromSeg != null && String(fromSeg).trim() !== "") {
-        return normalizeRefImageSize(fromSeg);
+        return normalizeRefImageSize(fromSeg, seg);
     }
     if (fallback && typeof fallback === "object") {
-        return normalizeRefImageSize(fallback.refImageSize);
+        return normalizeRefImageSize(fallback.refImageSize ?? fallback.ref_image_size, fallback);
     }
     return normalizeRefImageSize(fallback);
 }
@@ -444,6 +456,7 @@ export function newBatchSegment(overrides = {}) {
     }
     const refImageSize = normalizeRefImageSize(
         overrides.refImageSize,
+        overrides,
     );
     const seedMode = normalizeSegmentSeedMode(overrides.seedMode);
     const seed = normalizeSegmentSeed(overrides.seed);

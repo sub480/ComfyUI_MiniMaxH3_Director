@@ -187,8 +187,8 @@ function normalizeAudioMode(value) {
 const CONTINUITY_FRAME_CHOICES = [5, 22, 39, 56];
 /** Official Motion Context baseline recommendation. */
 const DEFAULT_CONTINUITY_FRAMES = 22;
-const DEFAULT_CONTINUITY_MODE = "continue";
-const DEFAULT_CONTINUITY_REDRAW = 0.65;
+const DEFAULT_CONTINUITY_MODE = "guide";
+const DEFAULT_CONTINUITY_REDRAW = 0.10;
 const CONTINUITY_TASKS = new Set(["t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v", "mixed"]);
 
 function normalizeContinuityMode(raw) {
@@ -202,7 +202,7 @@ function normalizeContinuityMode(raw) {
 function snapContinuityRedraw(raw) {
     const parsed = Number(raw);
     const value = Number.isFinite(parsed) ? parsed : DEFAULT_CONTINUITY_REDRAW;
-    return Math.round(Math.min(0.95, Math.max(0.4, value)) * 100) / 100;
+    return Math.round(Math.min(0.95, Math.max(0, value)) * 100) / 100;
 }
 
 function isContinuityKeepTail(output) {
@@ -1163,7 +1163,7 @@ const STYLES = `
 .bd-seg-head{display:flex;align-items:center;justify-content:flex-start;gap:10px;flex-wrap:wrap;min-width:0}
 .bd-seg-head>b{flex-shrink:0;margin:0}
 .bd-seg-refsize{display:inline-flex;align-items:center;gap:6px;color:#c8c8c8;font-size:11px;white-space:nowrap;margin-left:auto;flex-shrink:0}
-.bd-seg-refsize select{max-width:88px}
+.bd-seg-refsize select{max-width:132px}
 .bd-seg-continuity{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#9ab;cursor:pointer;user-select:none;flex-shrink:0}
 .bd-seg-continuity input{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#6ab0ff}
 .bd-seg-head .bd-meta,.bd-panel.bd-v2v-panel .bd-seg-head .bd-meta,.bd-panel.bd-rv2v-panel .bd-seg-head .bd-meta{color:#8a8a8a;font-size:11px;line-height:1.45;padding:0;min-width:0}
@@ -2135,6 +2135,11 @@ function parseTimeline(raw, totalFrames, fps) {
             refImageSize: normalizeRefImageSize(data.output?.refImageSize),
             continuityEnabled: data.output?.continuityEnabled,
             continuityOverlapFrames: data.output?.continuityOverlapFrames,
+            // Keep guide/continue across reload and director_prompt import.
+            // Omitting these lets normalizeContinuityMode fall back to the default.
+            continuityMode: data.output?.continuityMode,
+            continuityRedraw: data.output?.continuityRedraw,
+            continuityKeepTail: data.output?.continuityKeepTail,
         });
         if (!data.output.aspectRatio) data.output.aspectRatio = DEFAULT_ASPECT_RATIO;
         if (data.output.megapixels == null) data.output.megapixels = DEFAULT_MEGAPIXELS;
@@ -3059,9 +3064,9 @@ class H3_D_NEOEditor {
                     <option value="continue" data-i18n="output.continuityMode.continue">引导+重绘</option>
                 </select>
             </label>
-            <label class="bd-refine-field hidden" data-r="segment-continuity-redraw-wrap" hidden>
+            <label class="bd-refine-field hidden" data-r="segment-continuity-redraw-wrap" hidden data-i18n-title="tooltip.continuityRedraw">
                 <span data-i18n="output.continuityRedraw">重绘幅度</span>
-                <input type="number" class="bd-num" data-r="segment-continuity-redraw" min="0.40" max="0.95" step="0.05" value="0.65">
+                <input type="number" class="bd-num" data-r="segment-continuity-redraw" min="0" max="0.95" step="0.05" value="0.10">
             </label>
             <label class="bd-refine-field row" data-i18n-title="tooltip.continuityKeepTail">
                 <input type="checkbox" data-r="segment-continuity-keep-tail">
@@ -3179,6 +3184,9 @@ class H3_D_NEOEditor {
                         <span data-i18n="output.refImageSize.label">参考图尺寸</span>
                         <select class="bd-select" data-r="seg-ref-image-size">
                             <option value="match" data-i18n="output.refImageSize.match">match</option>
+                            <option value="1024" data-i18n="output.refImageSize.1024">最长边 1024</option>
+                            <option value="1280" data-i18n="output.refImageSize.1280">最长边 1280</option>
+                            <option value="1536" data-i18n="output.refImageSize.1536">最长边 1536</option>
                             <option value="max" data-i18n="output.refImageSize.max">max</option>
                         </select>
                     </label>
