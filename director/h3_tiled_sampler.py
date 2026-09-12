@@ -563,6 +563,50 @@ def _crop_noise_mask(mask, tile_axis, start, end, video_hw):
     return _h3_reconstruct(_crop_spatial(video, tile_axis, start, end), audio, fmt)
 
 
+def _preview_x0(x0, shapes=None):
+    """Video stream for Director TAE. Packed AV latents unpack with ``shapes``."""
+    try:
+        if hasattr(x0, "is_nested") and getattr(x0, "is_nested", False):
+            parts = list(x0.unbind())
+            for part in parts:
+                if isinstance(part, torch.Tensor) and part.dim() == 5:
+                    return part
+            return parts[0] if parts else x0
+        if isinstance(x0, torch.Tensor) and shapes and len(shapes) > 1:
+            import comfy.utils
+
+            streams = list(comfy.utils.unpack_latents(x0, shapes))
+            if streams:
+                return streams[0]
+        video, _audio, _fmt = _h3_extract(x0, False)
+        return video if video is not None else x0
+    except Exception as exc:
+        log.debug("tiled preview x0 unpack skipped: %s", exc)
+        return x0
+
+
+def _chain_step_preview(comfy_cb, on_step_preview, shapes=None, preview_every=1):
+    if on_step_preview is None and comfy_cb is None:
+        return None
+    every = max(1, int(preview_every or 1))
+
+    def callback(step, x0, x, total_steps):
+        if on_step_preview is not None:
+            try:
+                last = max(0, int(total_steps) - 1)
+                if int(step) % every == 0 or int(step) >= last:
+                    on_step_preview(int(step), int(total_steps), _preview_x0(x0, shapes))
+            except Exception as exc:
+                log.debug("tiled step preview skipped: %s", exc)
+        if comfy_cb is not None:
+            try:
+                comfy_cb(step, x0, x, total_steps)
+            except Exception as exc:
+                log.debug("tiled comfy preview skipped: %s", exc)
+
+    return callback
+
+
 def _preview_callback(guider, sigmas):
     try:
         import comfy.utils
@@ -613,6 +657,8 @@ def _single_pass(
     fmt_info,
     contexts,
     debug=False,
+    on_step_preview=None,
+    preview_every=1,
 ):
     import comfy.model_management
     import comfy.sample
@@ -629,7 +675,11 @@ def _single_pass(
     except Exception:
         pass
     work["samples"] = latent_for_sample
-    callback, disable_pbar = _preview_callback(guider, sigmas)
+    comfy_cb, disable_pbar = _preview_callback(guider, sigmas)
+    shapes = [tuple(video_tensor.shape)]
+    if audio_tensor is not None:
+        shapes.append(tuple(audio_tensor.shape))
+    callback = _chain_step_preview(comfy_cb, on_step_preview, shapes, preview_every)
     noise_mask = work.get("noise_mask")
     _apply_minimax_region(contexts, "H", 0, int(video_tensor.shape[-2]), debug)
     _clean_minimax_layout(guider)
@@ -812,6 +862,8 @@ def _sample_step_synchronized(
     tile_axis,
     contexts,
     debug=False,
+    on_step_preview=None,
+    preview_every=1,
 ):
     import comfy.model_management
     import comfy.samplers
@@ -822,7 +874,8 @@ def _sample_step_synchronized(
     if audio_tensor is not None:
         full_shapes.append(tuple(audio_tensor.shape))
     full_hw = (int(video_tensor.shape[-2]), int(video_tensor.shape[-1]))
-    callback, disable_pbar = _preview_callback(guider, sigmas)
+    comfy_cb, disable_pbar = _preview_callback(guider, sigmas)
+    callback = _chain_step_preview(comfy_cb, on_step_preview, full_shapes, preview_every)
     _clean_minimax_layout(guider)
     cropper = _TileCondCrop(guider, full_hw)
     original_extra = dict(getattr(sampler, "extra_options", {}) or {})
@@ -1030,6 +1083,8 @@ def sample_h3_tiled(
     refine_seams: bool = True,
     refine_steps: int = 8,
     debug: bool = False,
+    on_step_preview=None,
+    preview_every: int = 1,
 ) -> dict:
     """Sample an H3 AV latent, spatially tiling video when the canvas is large."""
     import comfy.model_management
@@ -1062,6 +1117,8 @@ def sample_h3_tiled(
         return _single_pass(
             noise, guider, sampler, sigmas, work,
             video_tensor, audio_tensor, fmt_info, contexts, debug,
+            on_step_preview=on_step_preview,
+            preview_every=preview_every,
         )
 
     device = comfy.model_management.get_torch_device()
@@ -1096,4 +1153,6 @@ def sample_h3_tiled(
         work, noise, guider, sampler, sigmas,
         video_tensor, audio_tensor, fmt_info,
         full_noise, regions, axis, contexts, debug,
+        on_step_preview=on_step_preview,
+        preview_every=preview_every,
     )

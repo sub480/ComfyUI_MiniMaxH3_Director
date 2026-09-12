@@ -105,24 +105,29 @@ def sample_single_stage(
             CFGGuider.execute(model_use, positive, neg, float(cfg))
         )[0]
 
-    def _run_official() -> dict:
-        tile_cfg = tile if isinstance(tile, dict) and int(tile.get("n_tiles") or 1) > 1 else None
-        if tile_cfg:
-            from .h3_tiled_sampler import sample_h3_tiled
+    tile_cfg = tile if isinstance(tile, dict) and int(tile.get("n_tiles") or 1) > 1 else None
+    if tile_cfg:
+        from .h3_tiled_sampler import sample_h3_tiled
 
-            return sample_h3_tiled(
-                noise=noise_obj,
-                guider=guider,
-                sampler=sampler_obj,
-                sigmas=sigma_t,
-                latent=latent,
-                n_tiles=int(tile_cfg.get("n_tiles") or 2),
-                tile_axis=str(tile_cfg.get("tile_axis") or "auto"),
-                tile_overlap=int(tile_cfg.get("tile_overlap") or 8),
-                max_size_for_no_tile=int(tile_cfg.get("max_size_for_no_tile") or 64),
-                refine_seams=bool(tile_cfg.get("refine_seams", True)),
-                refine_steps=int(tile_cfg.get("refine_steps") or 8),
-            )
+        out = sample_h3_tiled(
+            noise=noise_obj,
+            guider=guider,
+            sampler=sampler_obj,
+            sigmas=sigma_t,
+            latent=latent,
+            n_tiles=int(tile_cfg.get("n_tiles") or 2),
+            tile_axis=str(tile_cfg.get("tile_axis") or "auto"),
+            tile_overlap=int(tile_cfg.get("tile_overlap") or 8),
+            max_size_for_no_tile=int(tile_cfg.get("max_size_for_no_tile") or 64),
+            refine_seams=bool(tile_cfg.get("refine_seams", True)),
+            refine_steps=int(tile_cfg.get("refine_steps") or 8),
+            on_step_preview=on_step_preview,
+            preview_every=preview_every,
+        )
+        notify(phase_name, 1)
+        return out
+
+    def _run_official() -> dict:
         sampled = SamplerCustomAdvanced.execute(
             noise_obj, guider, sampler_obj, sigma_t, latent
         )
@@ -149,7 +154,10 @@ def sample_single_stage(
                 except Exception as exc:
                     log.debug("Step preview callback skipped: %s", exc)
                 if inner_cb is not None:
-                    inner_cb(step, x0, x, total_steps)
+                    try:
+                        inner_cb(step, x0, x, total_steps)
+                    except Exception as exc:
+                        log.debug("Comfy preview callback skipped: %s", exc)
 
             kwargs["callback"] = callback
             return orig_sample(noise, latent_image, sampler, sigmas_in, **kwargs)

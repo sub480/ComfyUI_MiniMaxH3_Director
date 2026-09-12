@@ -37,6 +37,7 @@ import {
     resolveTaskKey,
     resolveSegmentRefImageSize,
     resolveSegmentPassMode,
+    directorPromptGroupName,
     normalizeRefImageSize,
     snapResolutionDim,
     sumFrameCounts,
@@ -965,6 +966,8 @@ const STYLES = `
 .bd-modal-title{color:#e0e0e0;font-size:12px;font-weight:600;line-height:1.35}
 .bd-modal-body{color:#aaa;font-size:11px;line-height:1.5;white-space:pre-wrap}
 .bd-modal-body.hidden{display:none}
+.bd-modal-text{width:100%;min-height:220px;resize:vertical;box-sizing:border-box;background:#151515;border:1px solid #3b3b3b;border-radius:4px;padding:8px;color:#ddd;font:11px/1.45 Consolas,monospace;white-space:pre;overflow:auto}
+.bd-modal-text.hidden{display:none}
 .bd-modal-list{flex:1;min-height:140px;max-height:240px;overflow:auto;background:#181818;border:1px solid #333;border-radius:6px;padding:4px;display:flex;flex-direction:column;gap:2px}
 .bd-modal-list.hidden{display:none}
 .bd-modal-item{padding:7px 8px;border-radius:4px;cursor:pointer;color:#ccc;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid transparent}
@@ -2370,6 +2373,54 @@ class H3_D_NEOEditor {
         }
     }
 
+    async exportDirectorPrompt() {
+        this.flushTimelineSync();
+        const timeline = this.buildTimelinePayload();
+        const groups = timeline.segments.map((segment, index) => {
+            const prompt = String(segment.prompt || "").trim();
+            if (!prompt) {
+                throw new Error(t("promptExport.emptyPrompt", { i: index + 1 }));
+            }
+            const durationSec = Number(
+                segment.durationSec ?? preferredDurationSecFromFrames(segment.frameCount, 24),
+            );
+            return {
+                id: String(segment.id || `prompt-${index + 1}`),
+                name: directorPromptGroupName(segment),
+                prompt,
+                negativePrompt: String(segment.negativePrompt || "").trim(),
+                taskType: resolveTaskKey(segment.taskType || "t2v"),
+                durationSec: Math.round(durationSec),
+                continuityFromPrev: isSegmentContinuityFromPrev(segment, index),
+                passMode: resolveSegmentPassMode(segment),
+            };
+        });
+        const output = timeline.output || {};
+        const aspectRatio = isCustomAspectRatio(output.aspectRatio)
+            ? null
+            : normalizeAspectRatioLabel(output.aspectRatio || DEFAULT_ASPECT_RATIO).split(" ")[0];
+        const directorPrompt = JSON.stringify({
+            schema: "minimax-h3-director-prompt/v1",
+            groups,
+            settings: {
+                ...(aspectRatio ? { aspectRatio } : {}),
+                continuityEnabled: isContinuityMasterEnabled(output),
+                continuityOverlapFrames: output.continuityOverlapFrames ?? DEFAULT_CONTINUITY_FRAMES,
+                continuityMode: normalizeContinuityMode(output.continuityMode),
+                continuityRedraw: snapContinuityRedraw(output.continuityRedraw),
+                continuityKeepTail: !!output.continuityKeepTail,
+                exportMode: output.exportMode === "segments" ? "segments" : "all",
+                audioMode: normalizeAudioMode(output.audioMode),
+            },
+        }, null, 2);
+        await this.showBdDialog({
+            title: t("promptExport.title"),
+            textValue: directorPrompt,
+            confirmText: t("dialog.confirm"),
+            cancelText: null,
+        });
+    }
+
     hasExternalI2vGroups() {
         return this._inputLinkConnected("i2v_groups");
     }
@@ -2857,6 +2908,7 @@ class H3_D_NEOEditor {
                         <input type="range" class="bd-tl-zoom-slider hidden" data-r="zoom" min="1" max="10" step="any" value="1" data-i18n-title="tooltip.timelineZoom">
                     </div>
                     <button type="button" class="bd-btn" data-a="prompt-sync" data-i18n="toolbar.promptSync" data-i18n-title="tooltip.promptSync" disabled>同步</button>
+                    <button type="button" class="bd-btn" data-a="prompt-export" data-i18n="toolbar.promptExport" data-i18n-title="tooltip.promptExport">导出</button>
                     <div class="bd-bounds" data-r="bounds">起点: 0.00 | 终点: -</div>
                     <div class="bd-timecode" data-r="timecode">0.00s</div>
                 </div>
@@ -3387,6 +3439,11 @@ class H3_D_NEOEditor {
             void this.openSnapshots();
         });
         bind('[data-a="prompt-sync"]', () => { void this.syncDirectorPrompt(); });
+        bind('[data-a="prompt-export"]', () => {
+            void this.exportDirectorPrompt().catch((error) => (
+                this.showBdMessage(t("promptExport.title"), error?.message || String(error))
+            ));
+        });
         bind('[data-a="play"]', () => this.togglePlay());
         bind('[data-a="loop"]', () => this.toggleLoop());
         bind('[data-a="segment-continuity-panel"]', () => this.toggleSegmentContinuityPanel());
@@ -3914,6 +3971,9 @@ class H3_D_NEOEditor {
             const w = this.widget(name);
             if (w) w.value = widgets[name];
         }
+        // The first-pass settings panel is a separate DOM view. Keep an open
+        // panel in sync when snapshot reset/restore writes widget values.
+        this.syncSamplePanelFromWidgets?.();
         const out = data.output && typeof data.output === "object" ? data.output : {};
         if (this.widthWidget && out.width) this.widthWidget.value = out.width;
         if (this.heightWidget && out.height) this.heightWidget.value = out.height;
@@ -6022,7 +6082,10 @@ class H3_D_NEOEditor {
             this.segmentContinuityMode.value = mode;
             this.timeline.output.continuityMode = mode;
             const redrawVisible = isContinuityEnabled(this.timeline.output) && mode === "continue";
-            if (this.segmentContinuityRedrawWrap) this.segmentContinuityRedrawWrap.hidden = !redrawVisible;
+            if (this.segmentContinuityRedrawWrap) {
+                this.segmentContinuityRedrawWrap.classList.toggle("hidden", !redrawVisible);
+                this.segmentContinuityRedrawWrap.hidden = !redrawVisible;
+            }
         }
         if (this.segmentContinuityRedraw && this.timeline?.output) {
             const redraw = snapContinuityRedraw(this.timeline.output.continuityRedraw);
@@ -7326,7 +7389,7 @@ class H3_D_NEOEditor {
     }
 
     showBdDialog(opts = {}) {
-        const { title, message, items } = opts;
+        const { title, message, items, textValue } = opts;
         const confirmText = opts.confirmText ?? t("dialog.confirm");
         const cancelText = Object.prototype.hasOwnProperty.call(opts, "cancelText")
             ? opts.cancelText
@@ -7341,12 +7404,14 @@ class H3_D_NEOEditor {
             panel.innerHTML = `
                 <div class="bd-modal-title"></div>
                 <div class="bd-modal-body hidden"></div>
+                <textarea class="bd-modal-text hidden" readonly spellcheck="false"></textarea>
                 <div class="bd-modal-list hidden"></div>
                 <div class="bd-modal-actions"></div>`;
 
             panel.querySelector(".bd-modal-title").textContent = title || "";
 
             const bodyEl = panel.querySelector(".bd-modal-body");
+            const textEl = panel.querySelector(".bd-modal-text");
             const listEl = panel.querySelector(".bd-modal-list");
             const actionsEl = panel.querySelector(".bd-modal-actions");
 
@@ -7360,6 +7425,11 @@ class H3_D_NEOEditor {
             if (message) {
                 bodyEl.textContent = message;
                 bodyEl.classList.remove("hidden");
+            }
+
+            if (typeof textValue === "string") {
+                textEl.value = textValue;
+                textEl.classList.remove("hidden");
             }
 
             if (items?.length) {
@@ -7418,7 +7488,12 @@ class H3_D_NEOEditor {
             overlay.appendChild(panel);
             this.root.appendChild(overlay);
             this._modalEl = overlay;
-            okBtn.focus();
+            if (typeof textValue === "string") {
+                textEl.focus();
+                textEl.select();
+            } else {
+                okBtn.focus();
+            }
         });
     }
 
@@ -11184,7 +11259,7 @@ class H3_D_NEOEditor {
             if (!cell) {
                 cell = document.createElement("div");
                 cell.className = "bd-group-preview-cell";
-                cell.innerHTML = `<div class="bd-group-preview-label"></div><div class="bd-group-preview-prompt"></div><div class="bd-group-preview-side"><span class="bd-label">${t("liveSample.title")}</span><div class="bd-group-preview-body"></div></div>`;
+                cell.innerHTML = `<div class="bd-group-preview-label"></div><div class="bd-group-preview-prompt"></div><div class="bd-group-preview-side"><span class="bd-label"></span><div class="bd-group-preview-body"></div></div>`;
                 cell.addEventListener("click", () => {
                     if (this.selectedIndex === i) return;
                     this.selectedIndex = i;
@@ -11199,6 +11274,12 @@ class H3_D_NEOEditor {
             if (label) label.textContent = t("liveSample.segmentHint", { unit, n: i + 1 });
             const promptEl = cell.querySelector(".bd-group-preview-prompt");
             if (promptEl) promptEl.textContent = String(seg.prompt || "").trim() || t("placeholder.segmentPrompt");
+            const previewLabel = cell.querySelector(".bd-group-preview-side .bd-label");
+            if (previewLabel) {
+                previewLabel.textContent = seg.previewPass === "second"
+                    ? t("liveSample.secondPass")
+                    : t("liveSample.firstPass");
+            }
             patchGroupLivePreview(
                 cell.querySelector(".bd-group-preview-body"),
                 seg,
@@ -11275,6 +11356,7 @@ class H3_D_NEOEditor {
             live: !!seg.previewLive,
             step: seg.previewStep ?? null,
             total_steps: seg.previewTotalSteps ?? null,
+            pass: seg.previewPass || "first",
         });
     }
 
@@ -11290,6 +11372,7 @@ class H3_D_NEOEditor {
         const rec = this._ensureLiveSampleCache().get(Number(idx));
         const unit = this._liveSampleUnit();
         const n = Number(idx) + 1;
+        const title = this.liveSampleEl?.querySelector?.(".bd-live-sample-title b");
         if (!rec?.b64) {
             this._stopLiveSampleAnim();
             this._liveSampleB64 = "";
@@ -11313,6 +11396,7 @@ class H3_D_NEOEditor {
                     ? t("liveSample.segmentHint", { unit, n })
                     : t("liveSample.idleHint");
             }
+            if (title) title.textContent = t("liveSample.title");
             return;
         }
         this._liveSampleB64 = rec.b64;
@@ -11331,8 +11415,12 @@ class H3_D_NEOEditor {
         }
         if (this.liveSampleMeta) {
             const segLabel = t("liveSample.segmentHint", { unit, n });
+            const passLabel = rec.pass === "second"
+                ? t("liveSample.secondPass")
+                : t("liveSample.firstPass");
+            if (title) title.textContent = passLabel;
             this.liveSampleMeta.textContent = rec.live
-                ? (segLabel || t("liveSample.sampling"))
+                ? `${passLabel} · ${segLabel || t("liveSample.sampling")}`
                 : (segLabel || t("liveSample.done"));
         }
     }
@@ -11368,6 +11456,7 @@ class H3_D_NEOEditor {
             live: !!detail.live,
             step: detail.step ?? null,
             total_steps: detail.total_steps ?? detail.totalSteps ?? null,
+            pass: detail.pass || "first",
         };
         if (this.isImageBatch?.()) {
             setImageBatchPreview(this, Number.isFinite(idx) ? idx : 0, b64, extra);
@@ -11385,6 +11474,7 @@ class H3_D_NEOEditor {
                 seg.previewFps = extra.fps;
             }
             seg.previewLive = extra.live;
+            if (extra.pass) seg.previewPass = extra.pass;
             if (extra.step != null) seg.previewStep = extra.step;
             if (extra.total_steps != null) seg.previewTotalSteps = extra.total_steps;
         }

@@ -1028,6 +1028,17 @@ async function uploadSegSource(editor, index) {
     });
 }
 
+function clearSegSourceImage(editor, index) {
+    const seg = editor.timeline.segments[index];
+    if (!seg) return;
+    if (seg.genImage) seg.genImage = { imageFile: "" };
+    seg.imageFile = "";
+    editor.renderImageBatchGroups();
+    editor.updateOutputPreview?.();
+    editor.commit(false, { syncTimeline: true });
+    editor.scheduleRender?.();
+}
+
 async function assignSegSourceVideoFromFile(editor, index, file) {
     if (!isBatchVideoFile(file)) return false;
     const key = groupSlotKey(editor, index, "source-video", 0);
@@ -2572,6 +2583,12 @@ function fillExecPrompt(el, editor, seg) {
     el.dataset.empty = t("batch.execPromptEmpty");
 }
 
+function samplingPreviewLabel(seg) {
+    return seg?.previewPass === "second"
+        ? t("liveSample.secondPass")
+        : t("liveSample.firstPass");
+}
+
 function wrapPreviewColumn(preview, editor, seg) {
     const col = document.createElement("div");
     col.className = "bd-preview-col";
@@ -2583,8 +2600,8 @@ function wrapPreviewColumn(preview, editor, seg) {
     sampleBtn.type = "button";
     sampleBtn.className = "bd-preview-tab" + (promptOpen ? "" : " active");
     sampleBtn.setAttribute("data-r", "preview-tab-sample");
-    sampleBtn.setAttribute("data-i18n", "liveSample.title");
-    sampleBtn.textContent = t("liveSample.title");
+    sampleBtn.setAttribute("data-i18n", seg?.previewPass === "second" ? "liveSample.secondPass" : "liveSample.firstPass");
+    sampleBtn.textContent = samplingPreviewLabel(seg);
     const promptBtn = document.createElement("button");
     promptBtn.type = "button";
     promptBtn.className = "bd-preview-tab" + (promptOpen ? " active" : "");
@@ -3613,6 +3630,17 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 const file = files.find(isBatchImageFile);
                 if (file) void assignSegSourceFromFile(editor, index, file);
             });
+            if (file) {
+                const x = document.createElement("span");
+                x.className = "x";
+                x.textContent = "×";
+                x.title = t("common.delete");
+                x.onclick = (e) => {
+                    e.stopPropagation();
+                    clearSegSourceImage(editor, index);
+                };
+                src.appendChild(x);
+            }
             media.appendChild(src);
             card.appendChild(media);
         }
@@ -3709,9 +3737,15 @@ function appendBatchCard(list, editor, seg, index, ctx) {
 export function setImageBatchPreview(editor, segmentIndex, imageB64, extra = {}) {
     const seg = editor.timeline.segments[segmentIndex];
     if (!seg) return;
+    const incomingPass = extra.pass || "first";
+    if (seg.previewPass && seg.previewPass !== incomingPass) {
+        // Never let the first-pass animation survive into second-pass sampling.
+        seg.previewFrames = [];
+    }
     seg.previewB64 = imageB64 || "";
     if (extra.step != null) seg.previewStep = extra.step;
     if (extra.total_steps != null) seg.previewTotalSteps = extra.total_steps;
+    seg.previewPass = incomingPass;
     if (Array.isArray(extra.frames) && extra.frames.length) {
         seg.previewFrames = extra.frames;
         seg.previewFps = extra.fps || seg.previewFps || 16;
@@ -3734,6 +3768,15 @@ export function setImageBatchPreview(editor, segmentIndex, imageB64, extra = {})
         const card = batchCardEl(editor, segmentIndex);
         const preview = card?.querySelector?.(".bd-batch-preview");
         if (preview) {
+            const label = preview.parentElement?.querySelector?.(".bd-label");
+            if (label) {
+                label.textContent = samplingPreviewLabel(seg);
+            }
+            const tab = preview.parentElement?.querySelector?.('[data-r="preview-tab-sample"]');
+            if (tab) {
+                tab.textContent = samplingPreviewLabel(seg);
+                tab.setAttribute("data-i18n", seg.previewPass === "second" ? "liveSample.secondPass" : "liveSample.firstPass");
+            }
             const step = seg.previewStep;
             const total = seg.previewTotalSteps;
             const badgeText = (step && total)

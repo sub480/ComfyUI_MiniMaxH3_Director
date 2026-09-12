@@ -395,6 +395,14 @@ export function resolveSegmentRefImageSize(seg, fallback) {
     return normalizeRefImageSize(fallback);
 }
 
+const DIRECTOR_PROMPT_DEFAULT_NAME_RE = /^(?:组|提示词组|素材组|group|prompt group|asset group)\s*\d+$/i;
+
+/** Custom card title for director_prompt JSON. Empty keeps auto「组 N」. */
+export function directorPromptGroupName(seg) {
+    const name = String(seg?.uiGroupName || "").trim();
+    return name && !DIRECTOR_PROMPT_DEFAULT_NAME_RE.test(name) ? name : "";
+}
+
 /** Per-group 一采 / 二采. Missing field defaults to second pass. */
 export function resolveSegmentPassMode(seg) {
     const raw = String(seg?.passMode ?? "").trim().toLowerCase();

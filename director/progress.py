@@ -125,6 +125,7 @@ def report_director_segment_preview(
     live: bool = False,
     step: int | None = None,
     total_steps: int | None = None,
+    pass_name: str | None = None,
 ) -> None:
     if not node_id or not image_b64:
         return
@@ -143,6 +144,8 @@ def report_director_segment_preview(
         payload["step"] = int(step)
     if total_steps is not None:
         payload["total_steps"] = int(total_steps)
+    if pass_name:
+        payload["pass"] = str(pass_name)
     try:
         from server import PromptServer
 

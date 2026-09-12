@@ -1,6 +1,6 @@
 import { api } from "../../scripts/api.js";
 import { t } from "./minimax_i18n.js";
-import { patchGroupLivePreview } from "./minimax_image_batch.js";
+import { setImageBatchPreview } from "./minimax_image_batch.js";
 
 export const FL2V_STYLES = `
 .bd-fl2v-slots{display:grid;grid-template-columns:1fr 1fr;gap:6px}
@@ -78,27 +78,9 @@ export function stripFl2vPromptBody(text) {
 }
 
 export function setFl2vShotPreview(editor, index, imageB64, extra = {}) {
-    const segment = editor?.timeline?.segments?.[index];
-    if (!segment) return;
-    segment.previewB64 = imageB64 || segment.previewB64 || "";
-    if (extra.step != null) segment.previewStep = extra.step;
-    if (extra.total_steps != null) segment.previewTotalSteps = extra.total_steps;
-    if (Array.isArray(extra.frames) && extra.frames.length) {
-        segment.previewFrames = extra.frames;
-        segment.previewFps = extra.fps || segment.previewFps || 16;
-        segment.previewLive = !!extra.live;
-    } else if (imageB64) {
-        segment.previewFrames = extra.live && segment.previewFrames?.length > 1
-            ? segment.previewFrames
-            : [imageB64];
-        segment.previewLive = !!extra.live;
-    }
-    const card = editor.batchList?.querySelector(`[data-batch-index="${index}"]`);
-    patchGroupLivePreview(
-        card?.querySelector(".bd-batch-preview"),
-        segment,
-        t("batch.previewVideoAfterRun"),
-    );
+    // FL2V uses the same segment/card preview state and renderer as every
+    // other video batch mode. Its start/end-frame editor remains FL2V-specific.
+    setImageBatchPreview(editor, index, imageB64, extra);
 }
 
 export function drawFl2vSegmentThumbnails(editor, ctx, segment, startX, width, y, height) {

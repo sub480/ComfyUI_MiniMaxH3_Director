@@ -29,7 +29,6 @@ from .audio_export import (
 from .segment_runtime import (
     frames_label,
     resolve_segment_raw_clip,
-    tensor_frame_to_jpeg_b64,
 )
 from .plan import (
     DirectorPlan,
@@ -377,6 +376,7 @@ def execute_director_plan_core(
     shift_video: float = 12.0,
     shift_audio: float = 3.0,
     clear_vram_between_segments: bool = True,
+    _first_pass_phase: bool = False,
 ) -> tuple[
     torch.Tensor,
     list[torch.Tensor],
@@ -414,6 +414,45 @@ def execute_director_plan_core(
         if segment.index in run_indices:
             resolve_segment_seed(segment, plan.sample_seed, randomize=True)
 
+    second_pass_segments = [
+        segment
+        for segment in all_segments
+        if all((
+            segment.index in run_indices,
+            resolve_segment_pass_mode(segment) == "second",
+            refine_will_sample(plan, segment),
+        ))
+    ]
+    if second_pass_segments and not _first_pass_phase:
+        original_pass_modes = {
+            segment.index: segment.pass_mode for segment in all_segments
+        }
+        try:
+            for segment in all_segments:
+                if segment.index in run_indices:
+                    segment.pass_mode = "first"
+            execute_director_plan_core(
+                plan,
+                node_id=node_id,
+                model=model,
+                model_r2v=model_r2v,
+                vae=vae,
+                audio_vae=audio_vae,
+                clip=clip,
+                cfg=cfg,
+                seed=seed,
+                steps=steps,
+                sampler=sampler,
+                scheduler=scheduler,
+                shift_video=shift_video,
+                shift_audio=shift_audio,
+                clear_vram_between_segments=clear_vram_between_segments,
+                _first_pass_phase=True,
+            )
+        finally:
+            for segment in all_segments:
+                segment.pass_mode = original_pass_modes[segment.index]
+
     run_list = sorted(run_indices)
     seg_total = len(run_list)
     progress_pos = {idx: pos for pos, idx in enumerate(run_list)}
@@ -437,7 +476,7 @@ def execute_director_plan_core(
     segment_pre_refine: list[torch.Tensor] = []
     segment_audios: list[dict[str, Any]] = []
     # One timestamp folder per execute so all segments of this run stay together.
-    mp4_run_dir = new_segment_mp4_run_dir(plan)
+    mp4_run_dir = None if _first_pass_phase else new_segment_mp4_run_dir(plan)
 
     completed_outputs: dict[int, torch.Tensor] = {}
     completed_pre_refine: dict[int, torch.Tensor] = {}
@@ -898,7 +937,13 @@ def execute_director_plan_core(
                 phase=phase, phase_value=value, phase_max=1, **meta,
             )
 
-        def _report_step_preview(step: int, total_steps: int, x0) -> None:
+        def _report_step_preview(
+            step: int,
+            total_steps: int,
+            x0,
+            *,
+            pass_name: str = "first",
+        ) -> None:
             # KJ-style live clip: TAE-decode a temporal strip and loop it in-node.
             try:
                 from .tae_preview import (
@@ -933,6 +978,7 @@ def execute_director_plan_core(
                     live=True,
                     step=step + 1,
                     total_steps=total_steps,
+                    pass_name=pass_name,
                 )
             except Exception as exc:
                 log.debug("Live TAE preview skipped: %s", exc)
@@ -948,31 +994,28 @@ def execute_director_plan_core(
                 cached_frames = pre_cache.get("frames")
                 if isinstance(cached_frames, torch.Tensor) and cached_frames.numel() > 0:
                     try:
-                        from .tae_preview import LIVE_PREVIEW_FPS, LIVE_PREVIEW_MAX_FRAMES
+                        from .tae_preview import (
+                            LIVE_PREVIEW_FPS,
+                            pixel_frames_to_preview_jpegs,
+                        )
 
-                        n = int(cached_frames.shape[0])
-                        k = max(1, min(int(LIVE_PREVIEW_MAX_FRAMES), n))
-                        picks = (
-                            list(range(n))
-                            if k >= n
-                            else torch.linspace(0, n - 1, k).round().long().tolist()
-                        )
-                        frames_b64 = [tensor_frame_to_jpeg_b64(cached_frames[i]) for i in picks]
-                        report_director_segment_preview(
-                            node_id,
-                            segment_index=ui_idx,
-                            image_b64=frames_b64[0],
-                            width=int(cached_frames.shape[2]),
-                            height=int(cached_frames.shape[1]),
-                            frames=frames_b64,
-                            fps=float(LIVE_PREVIEW_FPS),
-                            live=True,
-                        )
+                        frames_b64 = pixel_frames_to_preview_jpegs(cached_frames)
+                        if frames_b64:
+                            report_director_segment_preview(
+                                node_id,
+                                segment_index=ui_idx,
+                                image_b64=frames_b64[0],
+                                width=int(cached_frames.shape[2]),
+                                height=int(cached_frames.shape[1]),
+                                frames=frames_b64,
+                                fps=float(LIVE_PREVIEW_FPS),
+                                live=True,
+                            )
                     except Exception as exc:
                         log.debug("Cached first-pass preview skipped: %s", exc)
                 else:
                     x0 = samples.get("samples") if isinstance(samples, dict) else samples
-                    _report_step_preview(0, 1, x0)
+                    _report_step_preview(0, 1, x0, pass_name="first")
         else:
             samples = sample_single_stage(
                 model=seg_model,
@@ -1110,7 +1153,13 @@ def execute_director_plan_core(
                 shift_video=shift_video,
                 shift_audio=shift_audio,
                 on_phase=_report_sample_phase,
-                on_step_preview=_report_step_preview if live_tae_preview else None,
+                on_step_preview=(
+                    (lambda step, total_steps, x0: _report_step_preview(
+                        step, total_steps, x0, pass_name="second"
+                    ))
+                    if live_tae_preview
+                    else None
+                ),
                 first_pass_images=upscale_frames,
                 trim_frames=trim_frames,
                 on_pass=_export_refine_pass if mp4_run_dir is not None else None,
@@ -1230,20 +1279,21 @@ def execute_director_plan_core(
             and decoded.shape[0] >= 1
         ):
             try:
-                frames_b64 = [
-                    tensor_frame_to_jpeg_b64(decoded[i])
-                    for i in range(int(decoded.shape[0]))
-                ]
-                h, w = int(decoded.shape[1]), int(decoded.shape[2])
-                report_director_segment_preview(
-                    node_id,
-                    segment_index=ui_idx,
-                    image_b64=frames_b64[0],
-                    width=w,
-                    height=h,
-                    frames=frames_b64,
-                    fps=float(plan.frame_rate or 24),
-                )
+                from .tae_preview import LIVE_PREVIEW_FPS, pixel_frames_to_preview_jpegs
+
+                frames_b64 = pixel_frames_to_preview_jpegs(decoded)
+                if frames_b64:
+                    h, w = int(decoded.shape[1]), int(decoded.shape[2])
+                    report_director_segment_preview(
+                        node_id,
+                        segment_index=ui_idx,
+                        image_b64=frames_b64[0],
+                        width=w,
+                        height=h,
+                        frames=frames_b64,
+                        fps=float(LIVE_PREVIEW_FPS),
+                        pass_name="second" if run_refine else "first",
+                    )
             except Exception as exc:
                 log.debug("Segment video preview skipped: %s", exc)
 
@@ -1320,7 +1370,8 @@ def execute_director_plan_core(
     if not output_chunks and not segment_outputs:
         raise ValueError("Director plan produced no segments.")
 
-    report_director_finish(node_id, seg_total)
+    if not _first_pass_phase:
+        report_director_finish(node_id, seg_total)
     export_chunks = output_chunks if output_chunks else segment_outputs
     export_pre_chunks = output_pre_chunks if output_pre_chunks else segment_pre_refine
     export_segments = (

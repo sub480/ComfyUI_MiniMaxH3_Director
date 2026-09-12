@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 
 
 SCHEMA_ID = "minimax-h3-director-prompt/v1"
@@ -38,11 +39,69 @@ _MEDIA_KEYS = (
     "refImageSize",
 )
 _CONTEXT_CHOICES = (5, 22, 39, 56)
+_ASPECT_RATIOS = {
+    "1:1": (1, 1),
+    "2:3": (2, 3),
+    "3:2": (3, 2),
+    "3:4": (3, 4),
+    "4:3": (4, 3),
+    "9:16": (9, 16),
+    "16:9": (16, 9),
+    "21:9": (21, 9),
+}
+_DEFAULT_MEGAPIXELS = 0.4
+_DEFAULT_CANVAS_MULTIPLE = 32
+_DEFAULT_GROUP_NAME = re.compile(
+    r"^(?:组|提示词组|素材组|group|prompt group|asset group)\s*\d+$",
+    re.IGNORECASE,
+)
 
 
 def _aligned_frames(duration_seconds: int) -> int:
     frames = max(5, int(math.ceil(duration_seconds * 24.0)))
     return frames + ((5 - frames) % 17)
+
+
+def _aspect_resolution(
+    raw_aspect_ratio: object,
+    megapixels: object,
+    multiple: object,
+) -> tuple[str, int, int, float, int]:
+    aspect_ratio = str(raw_aspect_ratio or "").strip().split(" ", 1)[0]
+    ratio = _ASPECT_RATIOS.get(aspect_ratio)
+    if ratio is None:
+        supported = ", ".join(_ASPECT_RATIOS)
+        raise ValueError(
+            f"director_prompt settings.aspectRatio must be one of {supported}."
+        )
+    try:
+        resolved_megapixels = float(megapixels)
+    except (TypeError, ValueError):
+        resolved_megapixels = _DEFAULT_MEGAPIXELS
+    if not math.isfinite(resolved_megapixels) or resolved_megapixels <= 0:
+        resolved_megapixels = _DEFAULT_MEGAPIXELS
+    try:
+        resolved_multiple = max(8, int(multiple))
+    except (TypeError, ValueError):
+        resolved_multiple = _DEFAULT_CANVAS_MULTIPLE
+    width_ratio, height_ratio = ratio
+    scale = math.sqrt(
+        resolved_megapixels * 1024 * 1024 / (width_ratio * height_ratio)
+    )
+    width_steps = math.floor(width_ratio * scale / resolved_multiple + 0.5)
+    height_steps = math.floor(height_ratio * scale / resolved_multiple + 0.5)
+    width = max(resolved_multiple, width_steps * resolved_multiple)
+    height = max(resolved_multiple, height_steps * resolved_multiple)
+    return aspect_ratio, width, height, resolved_megapixels, resolved_multiple
+
+
+def _group_ui_name(raw: object) -> str:
+    if not isinstance(raw, str):
+        return ""
+    name = raw.strip()
+    if not name or _DEFAULT_GROUP_NAME.fullmatch(name):
+        return ""
+    return name
 
 
 def _task_key(raw: object, group_number: int) -> str:
@@ -94,7 +153,8 @@ def director_prompt_to_timeline(
     """Validate a v1 prompt payload and return canonical timeline JSON.
 
     Existing media assignments are retained by group index. The incoming
-    contract controls prompts, task types, durations, pass mode and continuity.
+    contract controls prompts, task types, durations, group names, aspect
+    ratio, pass mode and continuity.
     """
     try:
         payload = json.loads(str(director_prompt or ""))
@@ -142,6 +202,7 @@ def director_prompt_to_timeline(
             "taskType": task,
             "continuityFromPrev": bool(group.get("continuityFromPrev", index > 0)),
             "passMode": "first" if group.get("passMode") == "first" else "second",
+            "uiGroupName": _group_ui_name(group.get("name")),
         }
         for key in _MEDIA_KEYS:
             if key in existing:
@@ -168,14 +229,30 @@ def director_prompt_to_timeline(
     if export_mode not in {"all", "segments"}:
         raise ValueError("director_prompt settings.exportMode must be all or segments.")
 
+    aspect_ratio = None
+    output_width = int(base_output.get("width") or default_width)
+    output_height = int(base_output.get("height") or default_height)
+    output_megapixels = base_output.get("megapixels", _DEFAULT_MEGAPIXELS)
+    output_multiple = base_output.get("multiple", _DEFAULT_CANVAS_MULTIPLE)
+    if settings.get("aspectRatio") is not None:
+        (
+            aspect_ratio,
+            output_width,
+            output_height,
+            output_megapixels,
+            output_multiple,
+        ) = _aspect_resolution(
+            settings.get("aspectRatio"), output_megapixels, output_multiple
+        )
+
     timeline = copy.deepcopy(base)
     run_select_enabled, run_selection = _base_run_selection(base, len(segments))
     output = timeline.get("output") if isinstance(timeline.get("output"), dict) else {}
     output.update(
         {
             "mode": output.get("mode") or "fixed",
-            "width": int(output.get("width") or default_width),
-            "height": int(output.get("height") or default_height),
+            "width": output_width,
+            "height": output_height,
             "longEdge": int(output.get("longEdge") or default_ref_max_size),
             "exportMode": export_mode,
             "continuityEnabled": bool(settings.get("continuityEnabled", True)),
@@ -186,6 +263,10 @@ def director_prompt_to_timeline(
             "audioMode": str(settings.get("audioMode") or output.get("audioMode") or "generate"),
         }
     )
+    if aspect_ratio is not None:
+        output["aspectRatio"] = aspect_ratio
+        output["megapixels"] = output_megapixels
+        output["multiple"] = output_multiple
     global_block = timeline.get("global") if isinstance(timeline.get("global"), dict) else {}
     global_block["taskType"] = "mixed"
     global_block["prompt"] = ""

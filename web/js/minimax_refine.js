@@ -493,6 +493,7 @@ export function mountDirectorSamplePanel(editor) {
     editor.sampleBarEl = wrap;
     editor.samplePanelEl = panel;
     editor.sampleCfgBtn = wrap.querySelector('[data-r="sample-cfg"]');
+    editor.syncSamplePanelFromWidgets = () => syncSamplePanelFromWidgets(editor);
 
     editor.sampleCfgBtn.addEventListener("click", () => {
         const next = !editor._mmxSamplePanelOpen;
@@ -503,17 +504,34 @@ export function mountDirectorSamplePanel(editor) {
         if (next) syncSamplePanelFromWidgets(editor);
         editor.resizeNodeForContentMinChange?.();
     });
-    panel.addEventListener("change", (e) => {
+    const onSamplePanelEdit = (e) => {
         const el = e.target?.closest?.("[data-w]");
         if (!el) return;
         const name = el.getAttribute("data-w");
         const value = el.type === "number" ? Number(el.value) : el.value;
         writeRefineWidget(node, name, value);
-        if (name === "seed" || name === "steps" || name === "sampler" || name === "scheduler") {
-            node._mmxSampleSnap = node._mmxSampleSnap || {};
-            node._mmxSampleSnap[name] = value;
+        if (
+            name === "seed"
+            || name === "steps"
+            || name === "sampler"
+            || name === "scheduler"
+            || name === "shift_video"
+            || name === "shift_audio"
+        ) {
+            // Keep the same snapshot that the configure/settle restore path
+            // reads.  `_mmxSampleSnap` was never consumed there, so changing
+            // the custom panel could be overwritten by the previous value
+            // when the node was queued or reconfigured.
+            node._mmxSampleWidgetSnap = node._mmxSampleWidgetSnap || {};
+            node._mmxSampleWidgetSnap[name] = value;
         }
-    });
+        // Custom panel writes `widget.value` without the Comfy callback that
+        // `hookDirectorSampleWidgetSnapshots` uses, so the snapshot dirty
+        // check never saw first-pass edits and 更新/重置 stayed dim.
+        editor._snapshotSelector?.notifyChanged?.();
+    };
+    panel.addEventListener("change", onSamplePanelEdit);
+    panel.addEventListener("input", onSamplePanelEdit);
     panel.addEventListener("keydown", (e) => e.stopPropagation());
     syncSamplePanelFromWidgets(editor);
 }

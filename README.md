@@ -20,7 +20,7 @@
 - **原生音频**：生成声音 / 使用原声 / 静音。`v2v` / `rv2v` 原声与时间轴预览同一套 24 fps 墙钟截取。
 - **快照**：保存、还原、导入、导出、重命名、复制、删除当前导演台配置。
 - **预览与导出**：实时 TAE 预览、分段 MP4、全部导出；可选把源画面打到独立的 `source_images` 口。
-- **Director Prompt 同步**：可选口接入 `minimax-h3-director-prompt/v1` JSON，工具栏「同步」刷新分组。
+- **Director Prompt 同步**：可选口接入 `minimax-h3-director-prompt/v1` JSON，工具栏「同步」刷新分组；每组 `name` 写入卡片标题，导出时带回自定义组名。
 - **界面语言**：工具栏可在中 / 英之间切换。
 
 ## 任务类型
@@ -57,7 +57,7 @@ CLIP Loader 的 type 必须选 **`minimax`**（Qwen3-VL）。`audio_vae` 对 `r2
 | 端口 | 作用 |
 |------|------|
 | `model_r2v` | 混合模式中 `r2v` / `v2v` / `rv2v` 组使用的 ref2va UNET；不接则回退 `model` |
-| `director_prompt` | 接收 `minimax-h3-director-prompt/v1` JSON。工具栏「同步」读取上游 STRING 并刷新分组；未连接时完全使用现有时间轴，连接后保留同序号组的已有素材槽位。执行仍以导演台时间轴为准 |
+| `director_prompt` | 接收 `minimax-h3-director-prompt/v1` JSON。工具栏「同步」读取上游 STRING 并刷新分组；支持每组 `durationSec`、`name`（组卡片标题）和 `settings.aspectRatio` 标准画幅，连接后保留同序号组的已有素材槽位。未连接时完全使用现有时间轴，执行仍以导演台时间轴为准 |
 | `lora_trigger_words` | LoRA 触发词。`r2v` 追加到文末独立块 `style_tags:`；其它模式拼到每组提示词最前面 |
 | `lora_trigger_words_r2v` | 仅供 `r2v` / `v2v` / `rv2v`；连接时覆盖 `lora_trigger_words`，未连接则回退 |
 | `refine_model` | 二采 UNET；不接则用该段一采模型 |
@@ -70,7 +70,7 @@ CLIP Loader 的 type 必须选 **`minimax`**（Qwen3-VL）。`audio_vae` 对 `r2
 ### 输出
 
 ```text
-images → audio → frame_count → source_images → images_pre_refine
+images → audio → frame_count → source_images → images_pre_refine → refine_enabled
 ```
 
 | 输出 | 说明 |
@@ -80,6 +80,7 @@ images → audio → frame_count → source_images → images_pre_refine
 | `frame_count` | 成片帧数 |
 | `source_images` | 可选的源视频画面；需打开「输出原片」，且不会替换 `images`。解码失败时输出灰色占位 |
 | `images_pre_refine` | 二采或放大前的一采画面 |
+| `refine_enabled` | 二采勾选状态。勾选为 `true`，未勾选为 `false` |
 
 没有 `fps`、`report` 输出口。帧率锁定 **24 fps**。
 

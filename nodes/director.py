@@ -222,7 +222,7 @@ class H3_D_NEO:
                 "steps": (
                     "INT",
                     {
-                        "default": 8,
+                        "default": 25,
                         "min": 1,
                         "max": 200,
                         "tooltip": "一采步数（官方模板 25）。",
@@ -300,9 +300,9 @@ class H3_D_NEO:
         pre_cache_signature = first_pass_cache_disk_signature(unique_id)
         return _director_input_signature(kwargs, pre_cache_signature)
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("images", "audio", "frame_count", "source_images", "images_pre_refine")
-    OUTPUT_IS_LIST = (True, True, False, True, True)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "IMAGE", "IMAGE", "BOOLEAN")
+    RETURN_NAMES = ("images", "audio", "frame_count", "source_images", "images_pre_refine", "refine_enabled")
+    OUTPUT_IS_LIST = (True, True, False, True, True, False)
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
@@ -311,6 +311,7 @@ class H3_D_NEO:
         "Supports t2v / i2v / fl2v / mixed / r2v / v2v / rv2v. "
         "Built-in 二采 group runs a second sample / upscale. "
         "images_pre_refine is the first-pass video before refine. "
+        "refine_enabled is the 二采 checkbox. "
         "Defaults: 0.4MP 16:9 (864×480), 5s / 124 frames @ 24 fps."
     )
 
@@ -347,8 +348,9 @@ class H3_D_NEO:
         live_tae_vae="auto",
         **kwargs,
     ):
+        refine_enabled = bool(kwargs.get("refine_enable", False))
         refine = pack_director_builtin_refine(
-            enabled=kwargs.get("refine_enable", False),
+            enabled=refine_enabled,
             refine_model=refine_model,
             refine_model_r2v=refine_model_r2v,
             upscale_model=upscale_model,
@@ -397,15 +399,18 @@ class H3_D_NEO:
                 )
             )
 
-            return finalize_director_outputs(
-                plan,
-                combined,
-                segment_outputs,
-                export_source_images=export_source_images,
-                segment_audios=segment_audios,
-                segment_frame_counts=export_frame_counts,
-                pre_refine_combined=pre_combined,
-                pre_refine_segments=pre_segments,
+            return (
+                *finalize_director_outputs(
+                    plan,
+                    combined,
+                    segment_outputs,
+                    export_source_images=export_source_images,
+                    segment_audios=segment_audios,
+                    segment_frame_counts=export_frame_counts,
+                    pre_refine_combined=pre_combined,
+                    pre_refine_segments=pre_segments,
+                ),
+                refine_enabled,
             )
         finally:
             # Full source/reference PCM is execution-scoped.

@@ -225,15 +225,18 @@ def get_tae_decoder(name: str | None = None):
 
 
 def _video_latent_from_x0(x0: Any) -> torch.Tensor | None:
-    """Return video stream as [B,C,T,H,W] from NestedTensor / plain tensor."""
+    """Return video stream as [B,C,T,H,W] from NestedTensor / packed / plain tensor."""
     try:
-        # NestedTensor has unbind(); plain torch.Tensor also has unbind — do not use that.
-        if not isinstance(x0, torch.Tensor) and hasattr(x0, "unbind"):
-            parts = x0.unbind()
-            if parts:
-                x0 = parts[0]
+        if isinstance(x0, dict) and x0.get("samples") is not None:
+            x0 = x0["samples"]
+        if hasattr(x0, "is_nested") and getattr(x0, "is_nested", False):
+            parts = list(x0.unbind())
+            x0 = next((p for p in parts if isinstance(p, torch.Tensor) and p.ndim >= 4), None)
+        elif not isinstance(x0, torch.Tensor) and hasattr(x0, "unbind"):
+            parts = list(x0.unbind())
+            x0 = next((p for p in parts if isinstance(p, torch.Tensor) and p.ndim >= 4), parts[0] if parts else None)
         elif isinstance(x0, (tuple, list)) and x0:
-            x0 = x0[0]
+            x0 = next((p for p in x0 if isinstance(p, torch.Tensor) and p.ndim >= 4), x0[0])
         if not isinstance(x0, torch.Tensor):
             return None
         if x0.ndim == 5:
@@ -347,6 +350,42 @@ def x0_to_preview_pils(
         if pil is None:
             continue
         out.append(_finish_preview_pil(pil, max_side=max_side))
+    return out
+
+
+def pixel_frames_to_preview_jpegs(
+    frames: torch.Tensor,
+    *,
+    max_frames: int = LIVE_PREVIEW_MAX_FRAMES,
+    max_side: int = 512,
+    quality: int = 80,
+) -> list[str]:
+    """Subsample and shrink decoded [T,H,W,C] (or [T,C,H,W]) frames for websocket preview."""
+    if not isinstance(frames, torch.Tensor) or frames.numel() == 0:
+        return []
+    video = frames.detach()
+    if video.ndim == 5:
+        video = video[0]
+    if video.ndim != 4:
+        return []
+    if video.shape[-1] not in (1, 3, 4) and int(video.shape[1]) in (1, 3, 4):
+        video = video.movedim(1, -1)
+    n = int(video.shape[0])
+    k = max(1, min(int(max_frames or 1), n))
+    picks = (
+        list(range(n))
+        if k >= n
+        else torch.linspace(0, n - 1, k).round().long().tolist()
+    )
+    out: list[str] = []
+    for idx in picks:
+        frame = video[int(idx)].detach().cpu().float().clamp(0, 1)
+        arr = (frame.numpy() * 255.0).clip(0, 255).astype(np.uint8)
+        if arr.ndim == 2:
+            pil = Image.fromarray(arr, mode="L").convert("RGB")
+        else:
+            pil = Image.fromarray(arr[..., :3], mode="RGB")
+        out.append(pil_to_jpeg_b64(_finish_preview_pil(pil, max_side=max_side), quality=quality))
     return out
 
 
